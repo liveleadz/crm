@@ -1,0 +1,23 @@
+{
+  "name": "leadpilot",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "db:types": "supabase gen types typescript --project-id $SUPABASE_PROJECT_REF --schema public > packages/db/src/types.gen.ts",
+    "db:push": "supabase db push",
+    "db:reset": "supabase db reset",
+    "supabase:link": "supabase link --project-ref $SUPABASE_PROJECT_REF"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "prettier-plugin-tailwindcss": "^0.6.8",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

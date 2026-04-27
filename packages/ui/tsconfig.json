@@ -1,0 +1,7 @@
+{
+  "extends": "@leadpilot/config/tsconfig.lib.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src"]
+}
