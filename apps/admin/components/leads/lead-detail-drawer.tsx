@@ -3,8 +3,11 @@
 import { useEffect, useState, useTransition } from 'react';
 import {
   getLeadDetail,
+  logCall,
   setLeadConsent,
   updateLeadNotes,
+  type CallDirection,
+  type CallDisposition,
 } from '@/app/actions/leads';
 import type { LeadDetail, LeadStage, TimelineEntry } from '@/lib/leads';
 
@@ -79,7 +82,13 @@ export function LeadDetailDrawer({
   const [loading, setLoading] = useState(false);
   const [notes, setNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
   const [, startTransition] = useTransition();
+
+  async function refreshDetail(id: string) {
+    const res = await getLeadDetail(id);
+    if (res) setData(res);
+  }
 
   useEffect(() => {
     if (!leadId) {
@@ -229,6 +238,31 @@ export function LeadDetailDrawer({
             </section>
 
             <section className="border-b border-line p-5">
+              <div className="mb-3 flex items-center justify-between">
+                <h4 className="text-[11px] font-semibold uppercase tracking-wide text-txt-3">
+                  Call log
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setLogOpen((v) => !v)}
+                  className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-medium text-txt-2 hover:bg-surface-2"
+                >
+                  {logOpen ? 'Cancel' : 'Log call'}
+                </button>
+              </div>
+              {logOpen && (
+                <LogCallForm
+                  leadId={lead.id}
+                  onCancel={() => setLogOpen(false)}
+                  onLogged={async () => {
+                    setLogOpen(false);
+                    await refreshDetail(lead.id);
+                  }}
+                />
+              )}
+            </section>
+
+            <section className="border-b border-line p-5">
               <div className="mb-3 flex items-baseline justify-between">
                 <h4 className="text-[11px] font-semibold uppercase tracking-wide text-txt-3">
                   Notes
@@ -344,5 +378,162 @@ function TimelineRow({ entry }: { entry: TimelineEntry }) {
         </div>
       </div>
     </li>
+  );
+}
+
+const DISPOSITION_OPTIONS: { value: CallDisposition; label: string }[] = [
+  { value: 'connected', label: 'Connected' },
+  { value: 'voicemail', label: 'Voicemail' },
+  { value: 'no_answer', label: 'No answer' },
+  { value: 'busy', label: 'Busy' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'wrong_number', label: 'Wrong number' },
+  { value: 'do_not_call', label: 'DNC' },
+  { value: 'callback', label: 'Callback' },
+  { value: 'sale', label: 'Sale' },
+  { value: 'not_interested', label: 'Not interested' },
+];
+
+function LogCallForm({
+  leadId,
+  onCancel,
+  onLogged,
+}: {
+  leadId: string;
+  onCancel: () => void;
+  onLogged: () => void | Promise<void>;
+}) {
+  const [direction, setDirection] = useState<CallDirection>('outbound');
+  const [disposition, setDisposition] = useState<CallDisposition>('connected');
+  const [minutes, setMinutes] = useState('');
+  const [seconds, setSeconds] = useState('');
+  const [callNotes, setCallNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setError(null);
+    const m = minutes === '' ? 0 : Number(minutes);
+    const s = seconds === '' ? 0 : Number(seconds);
+    if (Number.isNaN(m) || Number.isNaN(s) || m < 0 || s < 0) {
+      setError('Duration must be a positive number.');
+      return;
+    }
+    const total = m * 60 + s;
+    setSaving(true);
+    const res = await logCall({
+      leadId,
+      direction,
+      disposition,
+      durationSec: total > 0 ? total : null,
+      notes: callNotes.trim() || null,
+    });
+    setSaving(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    await onLogged();
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-line bg-canvas p-3">
+      <div>
+        <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+          Direction
+        </div>
+        <div className="flex gap-1.5">
+          {(['outbound', 'inbound'] as CallDirection[]).map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => setDirection(d)}
+              className={`flex-1 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium capitalize ${
+                direction === d
+                  ? 'border-teal/60 bg-teal/10 text-teal'
+                  : 'border-line text-txt-2 hover:bg-surface-2'
+              }`}
+            >
+              {d}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+          Disposition
+        </div>
+        <select
+          value={disposition}
+          onChange={(e) => setDisposition(e.target.value as CallDisposition)}
+          className="w-full rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+        >
+          {DISPOSITION_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+          Duration
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            inputMode="numeric"
+            placeholder="0"
+            value={minutes}
+            onChange={(e) => setMinutes(e.target.value)}
+            className="w-16 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-center font-mono text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+          />
+          <span className="text-[11.5px] text-txt-3">min</span>
+          <input
+            type="number"
+            min={0}
+            max={59}
+            inputMode="numeric"
+            placeholder="0"
+            value={seconds}
+            onChange={(e) => setSeconds(e.target.value)}
+            className="w-16 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-center font-mono text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+          />
+          <span className="text-[11.5px] text-txt-3">sec</span>
+        </div>
+      </div>
+      <div>
+        <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+          Notes <span className="text-txt-3 normal-case">(optional)</span>
+        </div>
+        <textarea
+          value={callNotes}
+          onChange={(e) => setCallNotes(e.target.value)}
+          rows={3}
+          placeholder="What was discussed?"
+          className="w-full resize-none rounded-lg border border-line bg-surface p-2.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+        />
+      </div>
+      {error && <div className="text-[11.5px] text-hp">{error}</div>}
+      <div className="flex justify-end gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="rounded-lg border border-line px-3 py-1.5 text-[12px] font-medium text-txt-2 hover:bg-surface-2 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={saving}
+          className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save call'}
+        </button>
+      </div>
+    </div>
   );
 }
