@@ -82,7 +82,7 @@ export function KanbanBoard({
   }
 
   return (
-    <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+    <DndContext id="kanban-board" sensors={sensors} onDragEnd={onDragEnd}>
       <div className="flex min-w-max gap-3 p-4">
         {stages.map((s) => (
           <StageColumn
