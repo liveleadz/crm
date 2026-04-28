@@ -12,6 +12,7 @@ import {
 } from '@dnd-kit/core';
 import { moveLeadStage } from '@/app/actions/leads';
 import type { LeadCard, LeadStage } from '@/lib/leads';
+import { LeadDetailDrawer } from './lead-detail-drawer';
 
 const STAGE_DOT: Record<string, string> = {
   teal: 'bg-teal',
@@ -56,6 +57,7 @@ export function KanbanBoard({
   leads: LeadCard[];
 }) {
   const [leads, setLeads] = useState(initialLeads);
+  const [openLeadId, setOpenLeadId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -82,21 +84,37 @@ export function KanbanBoard({
   }
 
   return (
-    <DndContext id="kanban-board" sensors={sensors} onDragEnd={onDragEnd}>
-      <div className="flex min-w-max gap-3 p-4">
-        {stages.map((s) => (
-          <StageColumn
-            key={s.id}
-            stage={s}
-            leads={leads.filter((l) => l.stageId === s.id)}
-          />
-        ))}
-      </div>
-    </DndContext>
+    <>
+      <DndContext id="kanban-board" sensors={sensors} onDragEnd={onDragEnd}>
+        <div className="flex min-w-max gap-3 p-4">
+          {stages.map((s) => (
+            <StageColumn
+              key={s.id}
+              stage={s}
+              leads={leads.filter((l) => l.stageId === s.id)}
+              onOpen={setOpenLeadId}
+            />
+          ))}
+        </div>
+      </DndContext>
+      <LeadDetailDrawer
+        leadId={openLeadId}
+        stages={stages}
+        onClose={() => setOpenLeadId(null)}
+      />
+    </>
   );
 }
 
-function StageColumn({ stage, leads }: { stage: LeadStage; leads: LeadCard[] }) {
+function StageColumn({
+  stage,
+  leads,
+  onOpen,
+}: {
+  stage: LeadStage;
+  leads: LeadCard[];
+  onOpen: (id: string) => void;
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: `stage:${stage.id}` });
   return (
     <div className="flex w-[260px] shrink-0 flex-col rounded-2xl border border-line bg-canvas">
@@ -116,14 +134,20 @@ function StageColumn({ stage, leads }: { stage: LeadStage; leads: LeadCard[] }) 
             Drop here
           </div>
         ) : (
-          leads.map((l) => <DraggableLead key={l.id} lead={l} />)
+          leads.map((l) => <DraggableLead key={l.id} lead={l} onOpen={onOpen} />)
         )}
       </div>
     </div>
   );
 }
 
-function DraggableLead({ lead }: { lead: LeadCard }) {
+function DraggableLead({
+  lead,
+  onOpen,
+}: {
+  lead: LeadCard;
+  onOpen: (id: string) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: lead.id,
   });
@@ -136,6 +160,11 @@ function DraggableLead({ lead }: { lead: LeadCard }) {
       style={style}
       {...listeners}
       {...attributes}
+      onClick={() => {
+        // PointerSensor activationConstraint distance:5 means a no-movement pointer
+        // interaction won't start a drag; the click event still fires normally.
+        if (!isDragging) onOpen(lead.id);
+      }}
       className={`relative cursor-grab rounded-xl border border-line bg-surface p-3 active:cursor-grabbing ${
         isDragging ? 'opacity-40' : ''
       }`}
