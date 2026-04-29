@@ -6,27 +6,30 @@
 //   1. Persist the recording URL + duration on the `calls` row.
 //   2. Kick off Whisper transcription in the background.
 //
-// Auth: the status URL contains a HMAC-signed RecordingTokenPayload
-// (callId, exp). We never trust call-id from the body alone.
+// Auth: callId + 16-char HMAC signature are encoded as path segments.
+// Path-based instead of `?t=<jwt>` because SignalWire rejects long
+// dot-separated tokens in query strings ("Parameter status_url ...
+// has invalid value").
 
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { verifyRecordingToken } from '@/lib/dial-token';
+import { verifyRecordingPath } from '@/lib/dial-token';
 import { transcribeRecording } from '@/lib/transcribe';
 
-export async function POST(req: NextRequest) {
-  return handle(req);
+type Params = { params: Promise<{ callId: string; sig: string }> };
+
+export async function POST(req: NextRequest, ctx: Params) {
+  return handle(req, ctx);
 }
-export async function GET(req: NextRequest) {
-  return handle(req);
+export async function GET(req: NextRequest, ctx: Params) {
+  return handle(req, ctx);
 }
 
-async function handle(req: NextRequest) {
-  const url = new URL(req.url);
-  const token = url.searchParams.get('t');
-  if (!token) return NextResponse.json({ error: 'missing token' }, { status: 401 });
-  const payload = verifyRecordingToken(token);
-  if (!payload) return NextResponse.json({ error: 'bad token' }, { status: 401 });
+async function handle(req: NextRequest, { params }: Params) {
+  const { callId, sig } = await params;
+  if (!verifyRecordingPath(callId, sig)) {
+    return NextResponse.json({ error: 'bad signature' }, { status: 401 });
+  }
 
   // Capture both JSON and form-encoded bodies — SignalWire varies.
   const raw = await req.text();
@@ -59,12 +62,12 @@ async function handle(req: NextRequest) {
       recording_duration_sec: Number.isFinite(duration) ? duration : null,
       transcript_status: recordingUrl ? 'pending' : 'skipped',
     })
-    .eq('id', payload.callId);
+    .eq('id', callId);
 
   // Fire-and-forget transcription. We respond 200 to SignalWire
   // immediately so it doesn't retry while we wait on Whisper.
   if (recordingUrl) {
-    void runTranscription(payload.callId, recordingUrl);
+    void runTranscription(callId, recordingUrl);
   }
 
   return NextResponse.json({ ok: true });

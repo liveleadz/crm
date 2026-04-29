@@ -21,12 +21,6 @@ export type DialTokenPayload = {
   exp: number; // unix seconds
 };
 
-export type RecordingTokenPayload = {
-  callId: string;
-  brandId: string;
-  exp: number; // unix seconds
-};
-
 function getSecret(): string {
   const secret = process.env.LAML_WEBHOOK_SECRET;
   if (!secret) throw new Error('LAML_WEBHOOK_SECRET not set');
@@ -77,10 +71,20 @@ export function verifyDialToken(token: string): DialTokenPayload | null {
   return verifyToken<DialTokenPayload>(token);
 }
 
-export function signRecordingToken(payload: RecordingTokenPayload): string {
-  return signToken(payload);
+// Path-based recording signature. Used as the `status_url` on `record_call`
+// — SignalWire rejects the dot-separated JWT-style token in a query string
+// ("Parameter \"status_url\" in method \"record_call\" has invalid value"),
+// so we sign just the callId and embed both as path segments. Short URL,
+// no query string, no separator chars SignalWire dislikes.
+export function signRecordingPath(callId: string): string {
+  return createHmac('sha256', getSecret()).update(callId).digest('hex').slice(0, 16);
 }
 
-export function verifyRecordingToken(token: string): RecordingTokenPayload | null {
-  return verifyToken<RecordingTokenPayload>(token);
+export function verifyRecordingPath(callId: string, sig: string): boolean {
+  if (!callId || !sig || sig.length !== 16) return false;
+  const expected = signRecordingPath(callId);
+  const a = Buffer.from(expected);
+  const b = Buffer.from(sig);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }

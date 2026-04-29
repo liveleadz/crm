@@ -13,7 +13,7 @@
 // `calls` row when the recording is ready.
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { signRecordingToken, verifyDialToken } from '@/lib/dial-token';
+import { signRecordingPath, verifyDialToken } from '@/lib/dial-token';
 import { getPublicAppUrl } from '@/lib/dialer';
 
 function jsonSwmlResponse(swml: object) {
@@ -67,16 +67,10 @@ async function handle(req: NextRequest) {
   const payload = verifyDialToken(token);
   if (!payload) return jsonSwmlResponse(HANGUP_SWML);
 
-  // We don't have brand_id in the dial token, but the recording route
-  // verifies the call row matches its own RLS check by callId, so brand
-  // lookup happens there. We only need callId in the recording token.
-  const recToken = signRecordingToken({
-    callId: payload.callId,
-    brandId: '',
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 6, // 6h to allow for slow recordings
-  });
-
-  const statusUrl = `${getPublicAppUrl()}/api/swml/recording?t=${encodeURIComponent(recToken)}`;
+  // Path-based status URL — SignalWire rejects long JWT-style tokens in
+  // ?t= query strings on record_call.status_url with "invalid value".
+  const recSig = signRecordingPath(payload.callId);
+  const statusUrl = `${getPublicAppUrl()}/api/swml/recording/${payload.callId}/${recSig}`;
 
   // Answer the WebRTC leg explicitly first — otherwise record_call runs
   // before the call is answered (because connect.answer_on_bridge defers
