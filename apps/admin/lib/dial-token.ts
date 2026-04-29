@@ -1,14 +1,15 @@
 // HMAC-signed short-lived tokens for in-flight WebRTC dials.
 //
 // Flow:
-//   1. /dialer-v2 server action creates a `calls` row and signs a token
+//   1. /dialer server action creates a `calls` row and signs a dial token
 //      containing { callId, from, to, exp }.
-//   2. Browser dials `/private/leadpilot-dialer?t=<token>`.
-//   3. SignalWire fetches our SWML webhook with the dialed address;
-//      the webhook verifies the token and returns <Connect> SWML.
+//   2. Browser dials the SWML webhook resource; SignalWire forwards the
+//      token via userVariables and we verify it server-side.
+//   3. The same secret is reused to sign recording-callback tokens so
+//      SignalWire's status_url POST can be authenticated against the row.
 //
-// We use HMAC-SHA256 over a base64url-encoded JSON payload. No DB lookup
-// is required to validate, so the webhook stays fast and stateless.
+// HMAC-SHA256 over a base64url-encoded JSON payload. No DB lookup is
+// required to validate, so the webhook stays fast and stateless.
 
 import 'server-only';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -17,6 +18,12 @@ export type DialTokenPayload = {
   callId: string;
   from: string; // brand caller-ID, E.164
   to: string; // lead phone, E.164
+  exp: number; // unix seconds
+};
+
+export type RecordingTokenPayload = {
+  callId: string;
+  brandId: string;
   exp: number; // unix seconds
 };
 
@@ -35,13 +42,13 @@ function b64urlDecode(str: string): Buffer {
   return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64');
 }
 
-export function signDialToken(payload: DialTokenPayload): string {
+function signToken(payload: object): string {
   const body = b64url(Buffer.from(JSON.stringify(payload)));
   const sig = b64url(createHmac('sha256', getSecret()).update(body).digest());
   return `${body}.${sig}`;
 }
 
-export function verifyDialToken(token: string): DialTokenPayload | null {
+function verifyToken<T extends { exp: number }>(token: string): T | null {
   const parts = token.split('.');
   if (parts.length !== 2) return null;
   const [body, sig] = parts as [string, string];
@@ -50,9 +57,9 @@ export function verifyDialToken(token: string): DialTokenPayload | null {
   const expBuf = Buffer.from(expected);
   if (sigBuf.length !== expBuf.length) return null;
   if (!timingSafeEqual(sigBuf, expBuf)) return null;
-  let payload: DialTokenPayload;
+  let payload: T;
   try {
-    payload = JSON.parse(b64urlDecode(body).toString('utf8')) as DialTokenPayload;
+    payload = JSON.parse(b64urlDecode(body).toString('utf8')) as T;
   } catch {
     return null;
   }
@@ -60,4 +67,20 @@ export function verifyDialToken(token: string): DialTokenPayload | null {
     return null;
   }
   return payload;
+}
+
+export function signDialToken(payload: DialTokenPayload): string {
+  return signToken(payload);
+}
+
+export function verifyDialToken(token: string): DialTokenPayload | null {
+  return verifyToken<DialTokenPayload>(token);
+}
+
+export function signRecordingToken(payload: RecordingTokenPayload): string {
+  return signToken(payload);
+}
+
+export function verifyRecordingToken(token: string): RecordingTokenPayload | null {
+  return verifyToken<RecordingTokenPayload>(token);
 }

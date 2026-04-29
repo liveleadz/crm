@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   getLeadDetail,
   logCall,
@@ -9,7 +10,6 @@ import {
   type CallDirection,
   type CallDisposition,
 } from '@/app/actions/leads';
-import { startCall } from '@/app/actions/dialer';
 import type { LeadDetail, LeadStage, TimelineEntry } from '@/lib/leads';
 import { LeadTasksPanel } from '@/components/tasks/lead-tasks-panel';
 import { LeadTagsSection } from '@/components/tags/lead-tags-section';
@@ -87,9 +87,8 @@ export function LeadDetailDrawer({
   const [notes, setNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-  const [callError, setCallError] = useState<string | null>(null);
-  const [calling, setCalling] = useState(false);
   const [, startTransition] = useTransition();
+  const router = useRouter();
 
   async function refreshDetail(id: string) {
     const res = await getLeadDetail(id);
@@ -135,14 +134,9 @@ export function LeadDetailDrawer({
   }
 
   function callLead() {
-    if (!data?.lead.phone || calling) return;
-    setCallError(null);
-    setCalling(true);
-    startTransition(async () => {
-      const res = await startCall({ toNumber: data.lead.phone!, leadId: data.lead.id });
-      setCalling(false);
-      if (!res.ok) setCallError(res.error);
-    });
+    if (!data?.lead.phone) return;
+    const params = new URLSearchParams({ to: data.lead.phone, leadId: data.lead.id });
+    router.push(`/dialer?${params.toString()}`);
   }
 
   function toggleConsent(key: 'doNotCall' | 'doNotEmail') {
@@ -194,13 +188,12 @@ export function LeadDetailDrawer({
             <button
               type="button"
               onClick={callLead}
-              disabled={calling}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-teal/10 px-2.5 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/15 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-teal/10 px-2.5 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/15"
             >
               <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M20 15.5c-1.25 0-2.45-.2-3.57-.57a1 1 0 00-1.02.24l-2.2 2.2a15.05 15.05 0 01-6.59-6.59l2.2-2.2a1 1 0 00.25-1.02A11.36 11.36 0 018.5 4a1 1 0 00-1-1H4a1 1 0 00-1 1c0 9.39 7.61 17 17 17a1 1 0 001-1v-3.5a1 1 0 00-1-1z" />
               </svg>
-              {calling ? 'Calling…' : 'Call'}
+              Call
             </button>
           )}
           <button
@@ -215,11 +208,6 @@ export function LeadDetailDrawer({
           </button>
         </header>
 
-        {callError && (
-          <div className="border-b border-line bg-hp/10 px-5 py-2 text-[11.5px] leading-snug text-hp">
-            {callError}
-          </div>
-        )}
         {!lead ? (
           <div className="flex flex-1 items-center justify-center text-[12px] text-txt-3">
             {loading ? 'Loading…' : 'Lead not found.'}

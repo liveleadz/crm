@@ -1,14 +1,18 @@
 import { PageHeader } from '@/components/page-header';
-import { DialPad } from '@/components/dialer/dial-pad';
+import { WebRTCDialPad } from '@/components/dialer/webrtc-dial-pad';
 import { getActiveBrand } from '@/lib/active-brand';
-import { getMyProfile, getOutboundFromNumber } from '@/lib/dialer';
+import { getOutboundFromNumber } from '@/lib/dialer';
 
-export default async function DialerPage() {
+type SearchParams = Promise<{ to?: string; leadId?: string }>;
+
+export default async function DialerPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
   const active = await getActiveBrand();
-  const [fromNumber, profile] = await Promise.all([
-    active ? getOutboundFromNumber(active.id) : Promise.resolve(null),
-    getMyProfile(),
-  ]);
+  const fromNumber = active ? await getOutboundFromNumber(active.id) : null;
+  const sp = await searchParams;
 
   return (
     <>
@@ -23,10 +27,11 @@ export default async function DialerPage() {
         }
       />
       <div className="flex-1 overflow-auto p-6">
-        <DialPad
+        <WebRTCDialPad
           brandName={active?.name ?? null}
           fromE164={fromNumber?.e164 ?? null}
-          mobilePhone={profile?.mobilePhone ?? null}
+          initialNumber={sp.to ?? null}
+          initialLeadId={sp.leadId ?? null}
         />
       </div>
     </>

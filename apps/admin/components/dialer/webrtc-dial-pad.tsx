@@ -1,14 +1,14 @@
 'use client';
 
-// WebRTC dialer (v2). Initializes a SignalWire Call Fabric client with a
-// SAT token fetched from /api/signalwire/token, then dials our private
+// WebRTC dialer. Initializes a SignalWire Call Fabric client with a SAT
+// token fetched from /api/signalwire/token, then dials our private
 // `leadpilot-dialer` resource which bridges to the lead with the brand's
 // caller-ID. Audio is captured from the laptop mic and rendered through
 // the SDK's internal <audio> element — no phone bridge.
 
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { SignalWire, type SignalWireClient, type FabricRoomSession } from '@signalwire/js';
-import { attachSignalwireCallId, markCallEnded, prepareCall } from '@/app/actions/dialer-v2';
+import { attachSignalwireCallId, markCallEnded, prepareCall } from '@/app/actions/dialer';
 
 const KEYS: { value: string; sub?: string }[] = [
   { value: '1' },
@@ -28,6 +28,8 @@ const KEYS: { value: string; sub?: string }[] = [
 type Props = {
   brandName: string | null;
   fromE164: string | null;
+  initialNumber?: string | null;
+  initialLeadId?: string | null;
 };
 
 type Status =
@@ -36,8 +38,9 @@ type Status =
   | { kind: 'in_call'; startedAt: number }
   | { kind: 'error'; message: string };
 
-export function WebRTCDialPad({ brandName, fromE164 }: Props) {
-  const [number, setNumber] = useState('');
+export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadId }: Props) {
+  const [number, setNumber] = useState(initialNumber ?? '');
+  const leadIdRef = useRef<string | null>(initialLeadId ?? null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [muted, setMuted] = useState(false);
   const [, startTransition] = useTransition();
@@ -89,7 +92,7 @@ export function WebRTCDialPad({ brandName, fromE164 }: Props) {
     if (!number.trim() || status.kind !== 'idle') return;
     setStatus({ kind: 'connecting' });
     try {
-      const prep = await prepareCall({ toNumber: number });
+      const prep = await prepareCall({ toNumber: number, leadId: leadIdRef.current });
       if (!prep.ok) {
         setStatus({ kind: 'error', message: prep.error });
         return;

@@ -217,11 +217,14 @@ export type Database = {
           lead_id: string | null
           member_id: string | null
           number_id: string | null
+          recording_duration_sec: number | null
+          recording_sid: string | null
           recording_url: string | null
           signalwire_call_id: string | null
           started_at: string
           to_number: string
           transcript: string | null
+          transcript_status: string | null
         }
         Insert: {
           brand_id: string
@@ -235,11 +238,14 @@ export type Database = {
           lead_id?: string | null
           member_id?: string | null
           number_id?: string | null
+          recording_duration_sec?: number | null
+          recording_sid?: string | null
           recording_url?: string | null
           signalwire_call_id?: string | null
           started_at?: string
           to_number: string
           transcript?: string | null
+          transcript_status?: string | null
         }
         Update: {
           brand_id?: string
@@ -253,11 +259,14 @@ export type Database = {
           lead_id?: string | null
           member_id?: string | null
           number_id?: string | null
+          recording_duration_sec?: number | null
+          recording_sid?: string | null
           recording_url?: string | null
           signalwire_call_id?: string | null
           started_at?: string
           to_number?: string
           transcript?: string | null
+          transcript_status?: string | null
         }
         Relationships: [
           {
@@ -1170,6 +1179,10 @@ export type Database = {
       brand_role: {
         Args: { b: string }
         Returns: Database["public"]["Enums"]["member_role"]
+      }
+      grant_founder_brand_access: {
+        Args: { p_email: string; p_member_id: string }
+        Returns: undefined
       }
       is_brand_member: { Args: { b: string }; Returns: boolean }
     }

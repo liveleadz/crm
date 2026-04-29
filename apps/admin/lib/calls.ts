@@ -13,6 +13,10 @@ export type CallRow = {
   leadFirstName: string | null;
   leadLastName: string | null;
   leadPhone: string | null;
+  hasRecording: boolean;
+  recordingDurationSec: number | null;
+  transcript: string | null;
+  transcriptStatus: 'pending' | 'ready' | 'failed' | 'skipped' | null;
 };
 
 export async function loadCalls(brandId: string, limit = 200): Promise<CallRow[]> {
@@ -20,7 +24,7 @@ export async function loadCalls(brandId: string, limit = 200): Promise<CallRow[]
   const { data } = await supabase
     .from('calls')
     .select(
-      'id, started_at, direction, disposition, duration_sec, from_number, to_number, lead_id, leads(first_name, last_name, phone)',
+      'id, started_at, direction, disposition, duration_sec, from_number, to_number, lead_id, recording_url, recording_duration_sec, transcript, transcript_status, leads(first_name, last_name, phone)',
     )
     .eq('brand_id', brandId)
     .order('started_at', { ascending: false })
@@ -43,6 +47,10 @@ export async function loadCalls(brandId: string, limit = 200): Promise<CallRow[]
       leadFirstName: lead?.first_name ?? null,
       leadLastName: lead?.last_name ?? null,
       leadPhone: lead?.phone ?? null,
+      hasRecording: Boolean(c.recording_url),
+      recordingDurationSec: c.recording_duration_sec ?? null,
+      transcript: c.transcript ?? null,
+      transcriptStatus: (c.transcript_status as CallRow['transcriptStatus']) ?? null,
     };
   });
 }

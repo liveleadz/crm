@@ -58,6 +58,7 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
   const [range, setRange] = useState<RangeFilter>('all');
   const [search, setSearch] = useState('');
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const cutoff = (() => {
@@ -144,7 +145,8 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
           <table className="w-full text-[12.5px]">
             <thead className="sticky top-0 z-10 border-b border-line bg-canvas text-left">
               <tr className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
-                <th className="px-6 py-2.5">Lead</th>
+                <th className="w-8 px-3 py-2.5"></th>
+                <th className="px-3 py-2.5">Lead</th>
                 <th className="px-3 py-2.5">Direction</th>
                 <th className="px-3 py-2.5">Disposition</th>
                 <th className="px-3 py-2.5">Duration</th>
@@ -155,46 +157,83 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
             <tbody>
               {filtered.map((c) => {
                 const counterparty = c.direction === 'outbound' ? c.toNumber : c.fromNumber;
+                const isExpanded = expandedId === c.id;
+                const canExpand = c.hasRecording || Boolean(c.transcript) || c.transcriptStatus === 'pending';
                 return (
-                  <tr
-                    key={c.id}
-                    onClick={() => c.leadId && setOpenLeadId(c.leadId)}
-                    className={`border-b border-line/60 transition-colors ${
-                      c.leadId ? 'cursor-pointer hover:bg-surface' : 'opacity-60'
-                    }`}
-                  >
-                    <td className="px-6 py-2.5">
-                      <span className="font-medium">{leadName(c)}</span>
-                      {c.leadPhone && (
-                        <span className="ml-2 font-mono text-[11px] text-txt-3">
-                          {c.leadPhone}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span
-                        className={`inline-flex h-[18px] items-center rounded-full px-1.5 text-[10.5px] font-medium capitalize ${
-                          c.direction === 'outbound'
-                            ? 'bg-teal/15 text-teal'
-                            : 'bg-bs/15 text-bs'
-                        }`}
+                  <RowGroup key={c.id}>
+                    <tr
+                      className={`border-b border-line/60 transition-colors ${
+                        c.leadId || canExpand ? 'hover:bg-surface' : 'opacity-60'
+                      }`}
+                    >
+                      <td className="px-3 py-2.5 text-center">
+                        {canExpand && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedId(isExpanded ? null : c.id);
+                            }}
+                            className="grid h-5 w-5 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1"
+                            aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                          >
+                            <svg
+                              width="10"
+                              height="10"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                            >
+                              <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </button>
+                        )}
+                      </td>
+                      <td
+                        className={`px-3 py-2.5 ${c.leadId ? 'cursor-pointer' : ''}`}
+                        onClick={() => c.leadId && setOpenLeadId(c.leadId)}
                       >
-                        {c.direction}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-txt-2">
-                      {c.disposition ? DISPOSITION_LABEL[c.disposition] ?? c.disposition : '—'}
-                    </td>
-                    <td className="px-3 py-2.5 font-mono text-txt-2">
-                      {formatDuration(c.durationSec)}
-                    </td>
-                    <td className="px-3 py-2.5 font-mono text-[11.5px] text-txt-3">
-                      {counterparty}
-                    </td>
-                    <td className="px-6 py-2.5 text-right font-mono text-[11.5px] text-txt-3">
-                      {formatWhen(c.startedAt)}
-                    </td>
-                  </tr>
+                        <span className="font-medium">{leadName(c)}</span>
+                        {c.leadPhone && (
+                          <span className="ml-2 font-mono text-[11px] text-txt-3">
+                            {c.leadPhone}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span
+                          className={`inline-flex h-[18px] items-center rounded-full px-1.5 text-[10.5px] font-medium capitalize ${
+                            c.direction === 'outbound'
+                              ? 'bg-teal/15 text-teal'
+                              : 'bg-bs/15 text-bs'
+                          }`}
+                        >
+                          {c.direction}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-txt-2">
+                        {c.disposition ? DISPOSITION_LABEL[c.disposition] ?? c.disposition : '—'}
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-txt-2">
+                        {formatDuration(c.durationSec)}
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-[11.5px] text-txt-3">
+                        {counterparty}
+                      </td>
+                      <td className="px-6 py-2.5 text-right font-mono text-[11.5px] text-txt-3">
+                        {formatWhen(c.startedAt)}
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr className="border-b border-line/60 bg-canvas/40">
+                        <td colSpan={7} className="px-6 py-4">
+                          <CallDetail call={c} />
+                        </td>
+                      </tr>
+                    )}
+                  </RowGroup>
                 );
               })}
             </tbody>
@@ -207,5 +246,81 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
         onClose={() => setOpenLeadId(null)}
       />
     </>
+  );
+}
+
+// React requires a single parent for sibling <tr>s in JSX; <></> works in
+// <tbody> so we just return both rows.
+function RowGroup({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
+
+function CallDetail({ call }: { call: CallRow }) {
+  return (
+    <div className="grid gap-4 md:grid-cols-[1fr,1.5fr]">
+      <div className="space-y-2">
+        <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+          Recording
+        </div>
+        {call.hasRecording ? (
+          <>
+            <audio
+              controls
+              preload="metadata"
+              src={`/api/calls/recording/${call.id}`}
+              className="w-full"
+            />
+            {call.recordingDurationSec !== null && (
+              <div className="font-mono text-[10.5px] text-txt-3">
+                {formatDuration(call.recordingDurationSec)}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="rounded-lg border border-line bg-surface px-3 py-2 text-[11.5px] text-txt-3">
+            No recording yet.
+          </div>
+        )}
+      </div>
+      <div className="space-y-2">
+        <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+          Transcript
+        </div>
+        <TranscriptPanel
+          status={call.transcriptStatus}
+          text={call.transcript}
+          hasRecording={call.hasRecording}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TranscriptPanel({
+  status,
+  text,
+  hasRecording,
+}: {
+  status: CallRow['transcriptStatus'];
+  text: string | null;
+  hasRecording: boolean;
+}) {
+  if (text) {
+    return (
+      <div className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-surface px-3 py-2 text-[12px] leading-relaxed text-txt-1">
+        {text}
+      </div>
+    );
+  }
+  let label = '—';
+  if (!hasRecording) label = 'No recording yet.';
+  else if (status === 'pending') label = 'Transcribing… refresh in a moment.';
+  else if (status === 'failed') label = 'Transcription failed.';
+  else if (status === 'skipped')
+    label = 'Transcription skipped — set OPENAI_API_KEY to enable.';
+  return (
+    <div className="rounded-lg border border-line bg-surface px-3 py-2 text-[11.5px] text-txt-3">
+      {label}
+    </div>
   );
 }

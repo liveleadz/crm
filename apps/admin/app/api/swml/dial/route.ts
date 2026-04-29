@@ -2,21 +2,19 @@
 //
 // Configured as the Primary Request URL on the SignalWire SWML Webhook
 // resource named `leadpilot-dialer`. When the browser dials
-// `/public/leadpilot-dialer?channel=audio` (with the token in
-// userVariables), SignalWire fetches this URL with call info and our
-// userVariables in the body, then executes the SWML we return.
+// `/public/leadpilot-dialer?channel=audio` (with the dial token in
+// userVariables), SignalWire POSTs this URL with call info, then executes
+// the SWML we return.
 //
-// We extract the signed dial token from the request, verify it,
-// and respond with a <connect> action that bridges to the lead with
-// the brand's caller-ID.
-//
-// Every hit is also persisted to the `swml_debug` table so we can
-// inspect what SignalWire actually sends. Remove the debug write once
-// /dialer-v2 is verified.
+// We extract the signed dial token, verify it, and respond with a
+// `record_call` action followed by `connect` to bridge the lead with the
+// brand's caller-ID. The recording status callback hits
+// /api/swml/recording with a separately-signed token so we can update the
+// `calls` row when the recording is ready.
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import { verifyDialToken } from '@/lib/dial-token';
+import { signRecordingToken, verifyDialToken } from '@/lib/dial-token';
+import { getPublicAppUrl } from '@/lib/dialer';
 
 function jsonSwmlResponse(swml: object) {
   return new NextResponse(JSON.stringify(swml), {
@@ -41,117 +39,82 @@ export async function POST(req: NextRequest) {
 async function handle(req: NextRequest) {
   const url = new URL(req.url);
 
-  // Capture everything: SignalWire may send JSON, form-encoded, or
-  // something else entirely depending on the resource configuration.
-  const headers: Record<string, string> = {};
-  req.headers.forEach((v, k) => {
-    headers[k] = v;
-  });
-  const query: Record<string, string> = {};
-  url.searchParams.forEach((v, k) => {
-    query[k] = v;
-  });
-  const rawBody = await req.text();
   let parsedBody: unknown = null;
-  try {
-    parsedBody = rawBody ? JSON.parse(rawBody) : null;
-  } catch {
-    // Try urlencoded.
+  const rawBody = await req.text();
+  if (rawBody) {
     try {
-      const params = new URLSearchParams(rawBody);
-      const obj: Record<string, string> = {};
-      params.forEach((v, k) => {
-        obj[k] = v;
-      });
-      parsedBody = Object.keys(obj).length ? obj : null;
+      parsedBody = JSON.parse(rawBody);
     } catch {
-      parsedBody = null;
+      try {
+        const params = new URLSearchParams(rawBody);
+        const obj: Record<string, string> = {};
+        params.forEach((v, k) => {
+          obj[k] = v;
+        });
+        parsedBody = Object.keys(obj).length ? obj : null;
+      } catch {
+        parsedBody = null;
+      }
     }
   }
 
-  // Try to find the token in any plausible location.
   let token = url.searchParams.get('t');
   if (!token && parsedBody && typeof parsedBody === 'object') {
     token = extractTokenFromBody(parsedBody as Record<string, unknown>);
   }
+  if (!token) return jsonSwmlResponse(HANGUP_SWML);
 
-  const responseSwml = (() => {
-    if (!token) return HANGUP_SWML;
-    const payload = verifyDialToken(token);
-    if (!payload) return HANGUP_SWML;
-    return {
-      version: '1.0.0',
-      sections: {
-        main: [
-          {
-            connect: {
-              from: payload.from,
-              to: payload.to,
-              timeout: 25,
-              answer_on_bridge: true,
-            },
-          },
-        ],
-      },
-    };
-  })();
+  const payload = verifyDialToken(token);
+  if (!payload) return jsonSwmlResponse(HANGUP_SWML);
 
-  // Fire-and-forget debug write. Service-role bypass on RLS.
-  void writeDebug({
-    method: req.method,
-    url: req.url,
-    query,
-    headers,
-    body: parsedBody,
-    bodyText: rawBody.length ? rawBody.slice(0, 8000) : null,
-    response: responseSwml,
+  // We don't have brand_id in the dial token, but the recording route
+  // verifies the call row matches its own RLS check by callId, so brand
+  // lookup happens there. We only need callId in the recording token.
+  const recToken = signRecordingToken({
+    callId: payload.callId,
+    brandId: '',
+    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 6, // 6h to allow for slow recordings
   });
 
-  return jsonSwmlResponse(responseSwml);
-}
+  const statusUrl = `${getPublicAppUrl()}/api/swml/recording?t=${encodeURIComponent(recToken)}`;
 
-async function writeDebug(row: {
-  method: string;
-  url: string;
-  query: Record<string, string>;
-  headers: Record<string, string>;
-  body: unknown;
-  bodyText: string | null;
-  response: unknown;
-}) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return;
-  try {
-    const sb = createClient(url, key, { auth: { persistSession: false } });
-    await sb.from('swml_debug').insert({
-      method: row.method,
-      url: row.url,
-      query: row.query,
-      headers: row.headers,
-      body: row.body,
-      body_text: row.bodyText,
-      response: row.response,
-    });
-  } catch {
-    // Don't let debug logging break the SWML response.
-  }
+  return jsonSwmlResponse({
+    version: '1.0.0',
+    sections: {
+      main: [
+        {
+          record_call: {
+            format: 'mp3',
+            stereo: true,
+            direction: 'both',
+            status_url: statusUrl,
+            beep: false,
+          },
+        },
+        {
+          connect: {
+            from: payload.from,
+            to: payload.to,
+            timeout: 25,
+            answer_on_bridge: true,
+          },
+        },
+      ],
+    },
+  });
 }
 
 function extractTokenFromBody(body: Record<string, unknown>): string | null {
   const candidates: unknown[] = [];
 
-  // Direct fields the dial() call may surface as.
   candidates.push(body['t'], body['token']);
 
-  // Nested under user_variables (Call Fabric's documented forwarding).
   const uv = body['user_variables'];
   if (uv && typeof uv === 'object') {
     const o = uv as Record<string, unknown>;
     candidates.push(o['t'], o['token']);
   }
 
-  // Nested under call.user_variables / call.userVariables.
   const call = body['call'];
   if (call && typeof call === 'object') {
     const c = call as Record<string, unknown>;
@@ -166,7 +129,6 @@ function extractTokenFromBody(body: Record<string, unknown>): string | null {
     }
   }
 
-  // The dialed address may be present somewhere with our query string.
   candidates.push(body['to'], body['address']);
 
   for (const c of candidates) {
