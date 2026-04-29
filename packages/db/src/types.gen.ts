@@ -136,18 +136,21 @@ export type Database = {
         Row: {
           brand_id: string
           created_at: string
+          is_active: boolean
           member_id: string
           role: Database["public"]["Enums"]["member_role"]
         }
         Insert: {
           brand_id: string
           created_at?: string
+          is_active?: boolean
           member_id: string
           role?: Database["public"]["Enums"]["member_role"]
         }
         Update: {
           brand_id?: string
           created_at?: string
+          is_active?: boolean
           member_id?: string
           role?: Database["public"]["Enums"]["member_role"]
         }
@@ -287,6 +290,48 @@ export type Database = {
           },
         ]
       }
+      lead_custom_fields: {
+        Row: {
+          brand_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          key: string
+          label: string
+        }
+        Insert: {
+          brand_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          key: string
+          label: string
+        }
+        Update: {
+          brand_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          key?: string
+          label?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_custom_fields_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_custom_fields_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_events: {
         Row: {
           brand_id: string
@@ -339,20 +384,81 @@ export type Database = {
           },
         ]
       }
+      lead_lists: {
+        Row: {
+          brand_id: string
+          created_at: string
+          created_by: string | null
+          criteria: Json | null
+          id: string
+          name: string
+          source: Database["public"]["Enums"]["list_source"]
+          updated_at: string
+        }
+        Insert: {
+          brand_id: string
+          created_at?: string
+          created_by?: string | null
+          criteria?: Json | null
+          id?: string
+          name: string
+          source?: Database["public"]["Enums"]["list_source"]
+          updated_at?: string
+        }
+        Update: {
+          brand_id?: string
+          created_at?: string
+          created_by?: string | null
+          criteria?: Json | null
+          id?: string
+          name?: string
+          source?: Database["public"]["Enums"]["list_source"]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_lists_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_lists_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_tags: {
         Row: {
+          created_at: string
+          created_by: string | null
           lead_id: string
           tag_id: string
         }
         Insert: {
+          created_at?: string
+          created_by?: string | null
           lead_id: string
           tag_id: string
         }
         Update: {
+          created_at?: string
+          created_by?: string | null
           lead_id?: string
           tag_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "lead_tags_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "lead_tags_lead_id_fkey"
             columns: ["lead_id"]
@@ -381,6 +487,7 @@ export type Database = {
           first_name: string | null
           id: string
           last_name: string | null
+          list_id: string | null
           notes: string | null
           owner_id: string | null
           phone: string | null
@@ -401,6 +508,7 @@ export type Database = {
           first_name?: string | null
           id?: string
           last_name?: string | null
+          list_id?: string | null
           notes?: string | null
           owner_id?: string | null
           phone?: string | null
@@ -421,6 +529,7 @@ export type Database = {
           first_name?: string | null
           id?: string
           last_name?: string | null
+          list_id?: string | null
           notes?: string | null
           owner_id?: string | null
           phone?: string | null
@@ -436,6 +545,13 @@ export type Database = {
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "leads_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "lead_lists"
             referencedColumns: ["id"]
           },
           {
@@ -463,6 +579,7 @@ export type Database = {
           email_provider: string | null
           full_name: string | null
           id: string
+          mobile_phone: string | null
           updated_at: string
         }
         Insert: {
@@ -473,6 +590,7 @@ export type Database = {
           email_provider?: string | null
           full_name?: string | null
           id: string
+          mobile_phone?: string | null
           updated_at?: string
         }
         Update: {
@@ -483,6 +601,7 @@ export type Database = {
           email_provider?: string | null
           full_name?: string | null
           id?: string
+          mobile_phone?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -579,8 +698,11 @@ export type Database = {
           brand_id: string
           created_at: string
           created_by: string | null
+          description: string | null
           id: string
+          kind: string
           name: string
+          subject: string | null
           updated_at: string
         }
         Insert: {
@@ -588,8 +710,11 @@ export type Database = {
           brand_id: string
           created_at?: string
           created_by?: string | null
+          description?: string | null
           id?: string
+          kind?: string
           name: string
+          subject?: string | null
           updated_at?: string
         }
         Update: {
@@ -597,8 +722,11 @@ export type Database = {
           brand_id?: string
           created_at?: string
           created_by?: string | null
+          description?: string | null
           id?: string
+          kind?: string
           name?: string
+          subject?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -738,22 +866,28 @@ export type Database = {
           brand_id: string
           color: string | null
           created_at: string
+          created_by: string | null
           id: string
           name: string
+          updated_at: string
         }
         Insert: {
           brand_id: string
           color?: string | null
           created_at?: string
+          created_by?: string | null
           id?: string
           name: string
+          updated_at?: string
         }
         Update: {
           brand_id?: string
           color?: string | null
           created_at?: string
+          created_by?: string | null
           id?: string
           name?: string
+          updated_at?: string
         }
         Relationships: [
           {
@@ -761,6 +895,160 @@ export type Database = {
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tags_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      task_reminders: {
+        Row: {
+          channel: Database["public"]["Enums"]["task_reminder_channel"]
+          created_at: string
+          id: string
+          offset_minutes: number
+          remind_at: string
+          send_error: string | null
+          sent_at: string | null
+          task_id: string
+        }
+        Insert: {
+          channel: Database["public"]["Enums"]["task_reminder_channel"]
+          created_at?: string
+          id?: string
+          offset_minutes: number
+          remind_at: string
+          send_error?: string | null
+          sent_at?: string | null
+          task_id: string
+        }
+        Update: {
+          channel?: Database["public"]["Enums"]["task_reminder_channel"]
+          created_at?: string
+          id?: string
+          offset_minutes?: number
+          remind_at?: string
+          send_error?: string | null
+          sent_at?: string | null
+          task_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_reminders_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tasks: {
+        Row: {
+          assignee_id: string | null
+          brand_id: string
+          completed_at: string | null
+          completed_by: string | null
+          created_at: string
+          created_by: string | null
+          due_at: string | null
+          id: string
+          kind: Database["public"]["Enums"]["task_kind"]
+          lead_id: string | null
+          notes: string | null
+          parent_task_id: string | null
+          priority: Database["public"]["Enums"]["task_priority"]
+          recurrence: Json | null
+          snoozed_until: string | null
+          status: Database["public"]["Enums"]["task_status"]
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          assignee_id?: string | null
+          brand_id: string
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          due_at?: string | null
+          id?: string
+          kind?: Database["public"]["Enums"]["task_kind"]
+          lead_id?: string | null
+          notes?: string | null
+          parent_task_id?: string | null
+          priority?: Database["public"]["Enums"]["task_priority"]
+          recurrence?: Json | null
+          snoozed_until?: string | null
+          status?: Database["public"]["Enums"]["task_status"]
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          assignee_id?: string | null
+          brand_id?: string
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          due_at?: string | null
+          id?: string
+          kind?: Database["public"]["Enums"]["task_kind"]
+          lead_id?: string | null
+          notes?: string | null
+          parent_task_id?: string | null
+          priority?: Database["public"]["Enums"]["task_priority"]
+          recurrence?: Json | null
+          snoozed_until?: string | null
+          status?: Database["public"]["Enums"]["task_status"]
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tasks_assignee_id_fkey"
+            columns: ["assignee_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_completed_by_fkey"
+            columns: ["completed_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_parent_task_id_fkey"
+            columns: ["parent_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
             referencedColumns: ["id"]
           },
         ]
@@ -899,9 +1187,14 @@ export type Database = {
         | "sale"
         | "not_interested"
       lead_source: "manual" | "form" | "csv" | "api" | "workflow"
+      list_source: "import" | "manual" | "filter"
       member_role: "owner" | "admin" | "manager" | "agent" | "viewer"
       sms_direction: "outbound" | "inbound"
       sms_status: "queued" | "sent" | "delivered" | "failed" | "received"
+      task_kind: "call" | "text" | "email" | "meeting" | "note" | "other"
+      task_priority: "low" | "normal" | "high"
+      task_reminder_channel: "email" | "sms" | "in_app"
+      task_status: "open" | "done"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1043,9 +1336,14 @@ export const Constants = {
         "not_interested",
       ],
       lead_source: ["manual", "form", "csv", "api", "workflow"],
+      list_source: ["import", "manual", "filter"],
       member_role: ["owner", "admin", "manager", "agent", "viewer"],
       sms_direction: ["outbound", "inbound"],
       sms_status: ["queued", "sent", "delivered", "failed", "received"],
+      task_kind: ["call", "text", "email", "meeting", "note", "other"],
+      task_priority: ["low", "normal", "high"],
+      task_reminder_channel: ["email", "sms", "in_app"],
+      task_status: ["open", "done"],
     },
   },
 } as const
