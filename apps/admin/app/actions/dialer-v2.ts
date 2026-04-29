@@ -26,7 +26,10 @@ type PrepareCallResult =
     }
   | { ok: false; code?: string; error: string };
 
-const FABRIC_ADDRESS = '/private/leadpilot-dialer';
+// Address comes from the SignalWire SWML Webhook resource's default address.
+// Confirmed via GET /api/fabric/resources/{id}/addresses on the
+// `leadpilot-dialer` resource.
+const FABRIC_ADDRESS = '/public/leadpilot-dialer';
 
 export async function prepareCall(input: {
   toNumber: string;
@@ -83,7 +86,7 @@ export async function prepareCall(input: {
   return {
     ok: true,
     callId: inserted.id,
-    fabricAddress: `${FABRIC_ADDRESS}?t=${encodeURIComponent(token)}`,
+    fabricAddress: `${FABRIC_ADDRESS}?channel=audio&t=${encodeURIComponent(token)}`,
     from: fromNumber.e164,
     to,
     brandName: active.name,
