@@ -78,10 +78,16 @@ async function handle(req: NextRequest) {
 
   const statusUrl = `${getPublicAppUrl()}/api/swml/recording?t=${encodeURIComponent(recToken)}`;
 
+  // Answer the WebRTC leg explicitly first — otherwise record_call runs
+  // before the call is answered (because connect.answer_on_bridge defers
+  // answer until the PSTN leg picks up) and the script aborts. Once we
+  // answer ourselves, record_call has live media, then connect bridges
+  // to the PSTN with a ringback so the agent still hears it ring.
   return jsonSwmlResponse({
     version: '1.0.0',
     sections: {
       main: [
+        { answer: {} },
         {
           record_call: {
             format: 'mp3',
@@ -96,7 +102,7 @@ async function handle(req: NextRequest) {
             from: payload.from,
             to: payload.to,
             timeout: 25,
-            answer_on_bridge: true,
+            ringback: ['%(2000,4000,440,480)'],
           },
         },
       ],
