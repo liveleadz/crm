@@ -20,6 +20,7 @@ type PrepareCallResult =
       ok: true;
       callId: string;
       fabricAddress: string;
+      dialToken: string;
       from: string;
       to: string;
       brandName: string;
@@ -86,7 +87,12 @@ export async function prepareCall(input: {
   return {
     ok: true,
     callId: inserted.id,
+    // Keep the token in the address as a fallback. The primary path is
+    // userVariables on the dial() call, which we forward in the webhook
+    // body — that one survives if SignalWire strips query strings on
+    // SWML resource fetches.
     fabricAddress: `${FABRIC_ADDRESS}?channel=audio&t=${encodeURIComponent(token)}`,
+    dialToken: token,
     from: fromNumber.e164,
     to,
     brandName: active.name,

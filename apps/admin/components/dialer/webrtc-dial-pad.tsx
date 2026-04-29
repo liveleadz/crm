@@ -102,6 +102,10 @@ export function WebRTCDialPad({ brandName, fromE164 }: Props) {
         audio: true,
         video: false,
         negotiateVideo: false,
+        // Primary channel for passing our signed dial token to the SWML
+        // webhook. Forwarded in the webhook request body as
+        // call.user_variables.t. URL query string is a fallback.
+        userVariables: { t: prep.dialToken },
       });
       sessionRef.current = session;
 
