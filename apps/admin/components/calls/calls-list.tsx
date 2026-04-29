@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CallRow } from '@/lib/calls';
 import type { LeadStage } from '@/lib/leads';
 import { LeadDetailDrawer } from '@/components/leads/lead-detail-drawer';
@@ -61,22 +61,64 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // Single shared <audio> element drives inline playback for any row.
-  // Tracking the playing call id lets us toggle the per-row icon and
-  // pause one row before starting another.
-  const [playingId, setPlayingId] = useState<string | null>(null);
+  // activeId = which row's player is "open" (showing scrubber/speed).
+  // isPlaying tracks audio.paused so the icon can flip without re-clicking.
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [rate, setRate] = useState(1);
 
-  function togglePlay(callId: string) {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (playingId === callId) {
-      audio.pause();
-      setPlayingId(null);
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onTime = () => setCurrentTime(a.currentTime);
+    const onMeta = () => setAudioDuration(Number.isFinite(a.duration) ? a.duration : 0);
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onEnded = () => setIsPlaying(false);
+    a.addEventListener('timeupdate', onTime);
+    a.addEventListener('loadedmetadata', onMeta);
+    a.addEventListener('play', onPlay);
+    a.addEventListener('pause', onPause);
+    a.addEventListener('ended', onEnded);
+    return () => {
+      a.removeEventListener('timeupdate', onTime);
+      a.removeEventListener('loadedmetadata', onMeta);
+      a.removeEventListener('play', onPlay);
+      a.removeEventListener('pause', onPause);
+      a.removeEventListener('ended', onEnded);
+    };
+  }, []);
+
+  function play(callId: string) {
+    const a = audioRef.current;
+    if (!a) return;
+    if (activeId === callId) {
+      if (a.paused) void a.play().catch(() => undefined);
+      else a.pause();
       return;
     }
-    audio.src = `/api/calls/recording/${callId}`;
-    audio.play().catch(() => setPlayingId(null));
-    setPlayingId(callId);
+    setActiveId(callId);
+    setCurrentTime(0);
+    setAudioDuration(0);
+    a.src = `/api/calls/recording/${callId}`;
+    a.playbackRate = rate;
+    void a.play().catch(() => setActiveId(null));
+  }
+
+  function seek(t: number) {
+    const a = audioRef.current;
+    if (a && Number.isFinite(t)) a.currentTime = t;
+    setCurrentTime(t);
+  }
+
+  function cycleRate() {
+    const rates = [1, 1.25, 1.5, 2];
+    const next = rates[(rates.indexOf(rate) + 1) % rates.length] ?? 1;
+    setRate(next);
+    if (audioRef.current) audioRef.current.playbackRate = next;
   }
 
   const filtered = useMemo(() => {
@@ -260,32 +302,18 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
                           '—'
                         )}
                       </td>
-                      <td className="px-3 py-2.5 font-mono text-txt-2">
-                        <div className="flex items-center gap-1.5">
-                          {c.hasRecording && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                togglePlay(c.id);
-                              }}
-                              aria-label={playingId === c.id ? 'Pause recording' : 'Play recording'}
-                              className="grid h-5 w-5 place-items-center rounded-full border border-line bg-canvas text-txt-2 hover:border-teal/60 hover:text-teal"
-                            >
-                              {playingId === c.id ? (
-                                <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor">
-                                  <rect x="6" y="5" width="4" height="14" rx="1" />
-                                  <rect x="14" y="5" width="4" height="14" rx="1" />
-                                </svg>
-                              ) : (
-                                <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
-                                  <path d="M8 5v14l11-7z" />
-                                </svg>
-                              )}
-                            </button>
-                          )}
-                          <span>{formatDuration(c.durationSec ?? c.recordingDurationSec)}</span>
-                        </div>
+                      <td className="whitespace-nowrap px-3 py-2.5 font-mono text-txt-2">
+                        <RecordingCell
+                          call={c}
+                          isActive={activeId === c.id}
+                          isPlaying={isPlaying}
+                          currentTime={currentTime}
+                          audioDuration={audioDuration}
+                          rate={rate}
+                          onPlay={() => play(c.id)}
+                          onSeek={seek}
+                          onCycleRate={cycleRate}
+                        />
                       </td>
                       <td className="px-3 py-2.5 font-mono text-[11.5px] text-txt-3">
                         {counterparty}
@@ -313,13 +341,7 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
         stages={stages}
         onClose={() => setOpenLeadId(null)}
       />
-      <audio
-        ref={audioRef}
-        onEnded={() => setPlayingId(null)}
-        onPause={() => setPlayingId((id) => (audioRef.current?.paused ? null : id))}
-        preload="none"
-        className="hidden"
-      />
+      <audio ref={audioRef} preload="none" className="hidden" />
     </>
   );
 }
@@ -387,6 +409,109 @@ function CallDetail({ call }: { call: CallRow }) {
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function fmtTime(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+type RecordingCellProps = {
+  call: CallRow;
+  isActive: boolean;
+  isPlaying: boolean;
+  currentTime: number;
+  audioDuration: number;
+  rate: number;
+  onPlay: () => void;
+  onSeek: (t: number) => void;
+  onCycleRate: () => void;
+};
+
+function RecordingCell({
+  call,
+  isActive,
+  isPlaying,
+  currentTime,
+  audioDuration,
+  rate,
+  onPlay,
+  onSeek,
+  onCycleRate,
+}: RecordingCellProps) {
+  if (!call.hasRecording) {
+    return <span>{formatDuration(call.durationSec ?? call.recordingDurationSec)}</span>;
+  }
+  const total = isActive && audioDuration > 0
+    ? audioDuration
+    : call.recordingDurationSec ?? call.durationSec ?? 0;
+  const downloadHref = `/api/calls/recording/${call.id}`;
+  const downloadName = `call-${call.id.slice(0, 8)}.mp3`;
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onPlay();
+        }}
+        aria-label={isActive && isPlaying ? 'Pause' : 'Play'}
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line bg-canvas text-txt-2 hover:border-teal/60 hover:text-teal"
+      >
+        {isActive && isPlaying ? (
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="5" width="4" height="14" rx="1" />
+            <rect x="14" y="5" width="4" height="14" rx="1" />
+          </svg>
+        ) : (
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+        )}
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={total || 1}
+        step={0.1}
+        value={isActive ? currentTime : 0}
+        disabled={!isActive}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => onSeek(Number(e.target.value))}
+        aria-label="Seek"
+        className="h-1 w-32 cursor-pointer accent-teal disabled:cursor-default disabled:opacity-50"
+      />
+      <span className="font-mono text-[10.5px] text-txt-3">
+        {isActive ? `${fmtTime(currentTime)} / ${fmtTime(total)}` : formatDuration(total || null)}
+      </span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onCycleRate();
+        }}
+        aria-label="Playback speed"
+        className="rounded border border-line bg-canvas px-1.5 py-0.5 text-[10.5px] font-medium text-txt-2 hover:border-teal/60 hover:text-teal"
+      >
+        {rate}×
+      </button>
+      <a
+        href={downloadHref}
+        download={downloadName}
+        onClick={(e) => e.stopPropagation()}
+        aria-label="Download recording"
+        className="grid h-5 w-5 shrink-0 place-items-center rounded text-txt-3 hover:text-teal"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 3v12" />
+          <path d="m7 10 5 5 5-5" />
+          <path d="M5 21h14" />
+        </svg>
+      </a>
     </div>
   );
 }
