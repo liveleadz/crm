@@ -50,6 +50,9 @@ export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadI
   const clientRef = useRef<SignalWireClient | null>(null);
   const sessionRef = useRef<FabricRoomSession | null>(null);
   const callIdRef = useRef<string | null>(null);
+  // Mirror of the in_call startedAt so finishCall can read it from the
+  // SDK 'destroy' callback, whose closure captures stale status.
+  const startedAtRef = useRef<number | null>(null);
 
   // Tick the duration display once per second while in a call.
   useEffect(() => {
@@ -131,7 +134,9 @@ export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadI
       });
 
       await session.start();
-      setStatus({ kind: 'in_call', startedAt: Date.now() });
+      const startedAt = Date.now();
+      startedAtRef.current = startedAt;
+      setStatus({ kind: 'in_call', startedAt });
     } catch (e) {
       setStatus({ kind: 'error', message: (e as Error).message ?? 'Call failed.' });
     }
@@ -150,9 +155,10 @@ export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadI
 
   function finishCall() {
     const cid = callIdRef.current;
-    const startedAt = status.kind === 'in_call' ? status.startedAt : null;
+    const startedAt = startedAtRef.current;
     sessionRef.current = null;
     callIdRef.current = null;
+    startedAtRef.current = null;
     if (cid) {
       const duration = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : undefined;
       startTransition(() => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { CallRow } from '@/lib/calls';
 import type { LeadStage } from '@/lib/leads';
 import { LeadDetailDrawer } from '@/components/leads/lead-detail-drawer';
@@ -60,6 +60,24 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
   const [search, setSearch] = useState('');
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Single shared <audio> element drives inline playback for any row.
+  // Tracking the playing call id lets us toggle the per-row icon and
+  // pause one row before starting another.
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  function togglePlay(callId: string) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playingId === callId) {
+      audio.pause();
+      setPlayingId(null);
+      return;
+    }
+    audio.src = `/api/calls/recording/${callId}`;
+    audio.play().catch(() => setPlayingId(null));
+    setPlayingId(callId);
+  }
 
   const filtered = useMemo(() => {
     const cutoff = (() => {
@@ -243,7 +261,31 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
                         )}
                       </td>
                       <td className="px-3 py-2.5 font-mono text-txt-2">
-                        {formatDuration(c.durationSec)}
+                        <div className="flex items-center gap-1.5">
+                          {c.hasRecording && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                togglePlay(c.id);
+                              }}
+                              aria-label={playingId === c.id ? 'Pause recording' : 'Play recording'}
+                              className="grid h-5 w-5 place-items-center rounded-full border border-line bg-canvas text-txt-2 hover:border-teal/60 hover:text-teal"
+                            >
+                              {playingId === c.id ? (
+                                <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor">
+                                  <rect x="6" y="5" width="4" height="14" rx="1" />
+                                  <rect x="14" y="5" width="4" height="14" rx="1" />
+                                </svg>
+                              ) : (
+                                <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+                                  <path d="M8 5v14l11-7z" />
+                                </svg>
+                              )}
+                            </button>
+                          )}
+                          <span>{formatDuration(c.durationSec ?? c.recordingDurationSec)}</span>
+                        </div>
                       </td>
                       <td className="px-3 py-2.5 font-mono text-[11.5px] text-txt-3">
                         {counterparty}
@@ -270,6 +312,13 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
         leadId={openLeadId}
         stages={stages}
         onClose={() => setOpenLeadId(null)}
+      />
+      <audio
+        ref={audioRef}
+        onEnded={() => setPlayingId(null)}
+        onPause={() => setPlayingId((id) => (audioRef.current?.paused ? null : id))}
+        preload="none"
+        className="hidden"
       />
     </>
   );
