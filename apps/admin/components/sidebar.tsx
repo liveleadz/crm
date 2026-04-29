@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { Route } from 'next';
 import type { ReactNode } from 'react';
+import type { MemberRole } from '@/lib/team';
 
 type NavItem = { href: Route; label: string; icon: ReactNode; badge?: ReactNode };
 
@@ -57,6 +58,16 @@ const WORKSPACE: NavItem[] = [
       <span className="ml-auto inline-flex h-[22px] items-center rounded-full bg-ll/15 px-2 text-[11.5px] font-medium text-ll">
         Live
       </span>
+    ),
+  },
+  {
+    href: '/tasks',
+    label: 'Tasks',
+    icon: ICON(
+      <>
+        <path d="M9 11l3 3L22 4" />
+        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+      </>,
     ),
   },
   {
@@ -163,9 +174,14 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
   );
 }
 
-export function Sidebar() {
+function canSeeManagement(role: MemberRole | null): boolean {
+  return role === 'owner' || role === 'admin' || role === 'manager';
+}
+
+export function Sidebar({ role }: { role: MemberRole | null }) {
   const pathname = usePathname();
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
+  const showManagement = canSeeManagement(role);
 
   return (
     <aside className="flex w-[232px] shrink-0 flex-col border-r border-line bg-surface">
@@ -176,12 +192,16 @@ export function Sidebar() {
         {WORKSPACE.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />
         ))}
-        <div className="px-2 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-wider text-txt-3">
-          Management
-        </div>
-        {MANAGEMENT.map((item) => (
-          <NavLink key={item.href} item={item} active={isActive(item.href)} />
-        ))}
+        {showManagement && (
+          <>
+            <div className="px-2 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-wider text-txt-3">
+              Management
+            </div>
+            {MANAGEMENT.map((item) => (
+              <NavLink key={item.href} item={item} active={isActive(item.href)} />
+            ))}
+          </>
+        )}
       </nav>
       <div className="space-y-0.5 border-t border-line p-3">
         {FOOTER.map((item) => (

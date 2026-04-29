@@ -3,6 +3,7 @@ import { createServerClient } from '@leadpilot/db/server';
 import { Sidebar } from '@/components/sidebar';
 import { Topbar } from '@/components/topbar';
 import { getActiveBrand, getMembershipBrands } from '@/lib/active-brand';
+import { getCurrentBrandRole } from '@/lib/team';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerClient();
@@ -32,11 +33,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     (user.user_metadata?.name as string | undefined) ??
     null;
 
+  const role = await getCurrentBrandRole(active.id);
+
   return (
     <div className="flex h-screen flex-col">
       <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />
       <div className="flex min-h-0 flex-1">
-        <Sidebar />
+        <Sidebar role={role} />
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">{children}</main>
       </div>
     </div>
