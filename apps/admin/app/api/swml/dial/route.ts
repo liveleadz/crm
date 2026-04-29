@@ -96,7 +96,6 @@ async function handle(req: NextRequest) {
             from: payload.from,
             to: payload.to,
             timeout: 25,
-            ringback: ['%(2000,4000,440,480)'],
           },
         },
       ],
