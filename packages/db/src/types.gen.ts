@@ -207,6 +207,7 @@ export type Database = {
       calls: {
         Row: {
           brand_id: string
+          callback_at: string | null
           created_at: string
           direction: Database["public"]["Enums"]["call_direction"]
           disposition: Database["public"]["Enums"]["call_disposition"] | null
@@ -216,6 +217,8 @@ export type Database = {
           id: string
           lead_id: string | null
           member_id: string | null
+          needs_disposition: boolean
+          note: string | null
           number_id: string | null
           recording_duration_sec: number | null
           recording_sid: string | null
@@ -228,6 +231,7 @@ export type Database = {
         }
         Insert: {
           brand_id: string
+          callback_at?: string | null
           created_at?: string
           direction: Database["public"]["Enums"]["call_direction"]
           disposition?: Database["public"]["Enums"]["call_disposition"] | null
@@ -237,6 +241,8 @@ export type Database = {
           id?: string
           lead_id?: string | null
           member_id?: string | null
+          needs_disposition?: boolean
+          note?: string | null
           number_id?: string | null
           recording_duration_sec?: number | null
           recording_sid?: string | null
@@ -249,6 +255,7 @@ export type Database = {
         }
         Update: {
           brand_id?: string
+          callback_at?: string | null
           created_at?: string
           direction?: Database["public"]["Enums"]["call_direction"]
           disposition?: Database["public"]["Enums"]["call_disposition"] | null
@@ -258,6 +265,8 @@ export type Database = {
           id?: string
           lead_id?: string | null
           member_id?: string | null
+          needs_disposition?: boolean
+          note?: string | null
           number_id?: string | null
           recording_duration_sec?: number | null
           recording_sid?: string | null

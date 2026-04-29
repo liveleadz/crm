@@ -126,3 +126,36 @@ export async function markCallEnded(input: {
   revalidatePath('/calls');
   return { ok: true };
 }
+
+export type DispositionCode =
+  | 'connected'
+  | 'voicemail'
+  | 'no_answer'
+  | 'busy'
+  | 'failed'
+  | 'wrong_number'
+  | 'do_not_call'
+  | 'callback'
+  | 'sale'
+  | 'not_interested';
+
+export async function setDisposition(input: {
+  callId: string;
+  disposition: DispositionCode;
+  note?: string | null;
+  callbackAt?: string | null; // ISO timestamp when disposition === 'callback'
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('calls')
+    .update({
+      disposition: input.disposition,
+      note: input.note?.trim() ? input.note.trim() : null,
+      callback_at: input.disposition === 'callback' ? input.callbackAt ?? null : null,
+      needs_disposition: false,
+    })
+    .eq('id', input.callId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/calls');
+  return { ok: true };
+}

@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import type { CallRow } from '@/lib/calls';
 import type { LeadStage } from '@/lib/leads';
 import { LeadDetailDrawer } from '@/components/leads/lead-detail-drawer';
+import { DispositionPicker } from '@/components/dialer/disposition-picker';
 
 const DISPOSITION_LABEL: Record<string, string> = {
   connected: 'Connected',
@@ -19,7 +20,7 @@ const DISPOSITION_LABEL: Record<string, string> = {
 };
 
 type DirectionFilter = 'all' | 'outbound' | 'inbound';
-type DispositionFilter = 'all' | keyof typeof DISPOSITION_LABEL;
+type DispositionFilter = 'all' | 'needs' | keyof typeof DISPOSITION_LABEL;
 type RangeFilter = 'all' | '24h' | '7d' | '30d';
 
 function formatDuration(sec: number | null) {
@@ -68,7 +69,11 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
     const q = search.trim().toLowerCase();
     return calls.filter((c) => {
       if (direction !== 'all' && c.direction !== direction) return false;
-      if (disposition !== 'all' && c.disposition !== disposition) return false;
+      if (disposition === 'needs') {
+        if (!c.needsDisposition) return false;
+      } else if (disposition !== 'all' && c.disposition !== disposition) {
+        return false;
+      }
       if (cutoff !== null && new Date(c.startedAt).getTime() < cutoff) return false;
       if (q) {
         const name = leadName(c).toLowerCase();
@@ -103,6 +108,7 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
             className="rounded-lg border border-line bg-canvas px-2.5 py-1 text-[11.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
           >
             <option value="all">All dispositions</option>
+            <option value="needs">Needs disposition</option>
             {Object.entries(DISPOSITION_LABEL).map(([v, l]) => (
               <option key={v} value={v}>
                 {l}
@@ -158,7 +164,12 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
               {filtered.map((c) => {
                 const counterparty = c.direction === 'outbound' ? c.toNumber : c.fromNumber;
                 const isExpanded = expandedId === c.id;
-                const canExpand = c.hasRecording || Boolean(c.transcript) || c.transcriptStatus === 'pending';
+                const canExpand =
+                  c.hasRecording ||
+                  Boolean(c.transcript) ||
+                  c.transcriptStatus === 'pending' ||
+                  c.needsDisposition ||
+                  Boolean(c.note);
                 return (
                   <RowGroup key={c.id}>
                     <tr
@@ -214,7 +225,22 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
                         </span>
                       </td>
                       <td className="px-3 py-2.5 text-txt-2">
-                        {c.disposition ? DISPOSITION_LABEL[c.disposition] ?? c.disposition : '—'}
+                        {c.disposition ? (
+                          DISPOSITION_LABEL[c.disposition] ?? c.disposition
+                        ) : c.needsDisposition ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedId(isExpanded ? null : c.id);
+                            }}
+                            className="inline-flex h-[18px] items-center rounded-full bg-hp/15 px-1.5 text-[10.5px] font-medium text-hp hover:bg-hp/25"
+                          >
+                            Needs disposition
+                          </button>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td className="px-3 py-2.5 font-mono text-txt-2">
                         {formatDuration(c.durationSec)}
@@ -257,40 +283,60 @@ function RowGroup({ children }: { children: React.ReactNode }) {
 
 function CallDetail({ call }: { call: CallRow }) {
   return (
-    <div className="grid gap-4 md:grid-cols-[1fr,1.5fr]">
-      <div className="space-y-2">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
-          Recording
-        </div>
-        {call.hasRecording ? (
-          <>
-            <audio
-              controls
-              preload="metadata"
-              src={`/api/calls/recording/${call.id}`}
-              className="w-full"
-            />
-            {call.recordingDurationSec !== null && (
-              <div className="font-mono text-[10.5px] text-txt-3">
-                {formatDuration(call.recordingDurationSec)}
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="rounded-lg border border-line bg-surface px-3 py-2 text-[11.5px] text-txt-3">
-            No recording yet.
+    <div className="space-y-4">
+      {call.needsDisposition && (
+        <div className="rounded-xl border border-hp/40 bg-hp/5 p-3">
+          <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-hp">
+            Set disposition
           </div>
-        )}
-      </div>
-      <div className="space-y-2">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
-          Transcript
+          <DispositionPicker callId={call.id} onSaved={() => undefined} />
         </div>
-        <TranscriptPanel
-          status={call.transcriptStatus}
-          text={call.transcript}
-          hasRecording={call.hasRecording}
-        />
+      )}
+      {!call.needsDisposition && call.note && (
+        <div className="space-y-1">
+          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+            Note
+          </div>
+          <div className="whitespace-pre-wrap rounded-lg border border-line bg-surface px-3 py-2 text-[12px] text-txt-1">
+            {call.note}
+          </div>
+        </div>
+      )}
+      <div className="grid gap-4 md:grid-cols-[1fr,1.5fr]">
+        <div className="space-y-2">
+          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+            Recording
+          </div>
+          {call.hasRecording ? (
+            <>
+              <audio
+                controls
+                preload="metadata"
+                src={`/api/calls/recording/${call.id}`}
+                className="w-full"
+              />
+              {call.recordingDurationSec !== null && (
+                <div className="font-mono text-[10.5px] text-txt-3">
+                  {formatDuration(call.recordingDurationSec)}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="rounded-lg border border-line bg-surface px-3 py-2 text-[11.5px] text-txt-3">
+              No recording yet.
+            </div>
+          )}
+        </div>
+        <div className="space-y-2">
+          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+            Transcript
+          </div>
+          <TranscriptPanel
+            status={call.transcriptStatus}
+            text={call.transcript}
+            hasRecording={call.hasRecording}
+          />
+        </div>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { SignalWire, type SignalWireClient, type FabricRoomSession } from '@signalwire/js';
 import { attachSignalwireCallId, markCallEnded, prepareCall } from '@/app/actions/dialer';
+import { DispositionPicker } from '@/components/dialer/disposition-picker';
 
 const KEYS: { value: string; sub?: string }[] = [
   { value: '1' },
@@ -36,6 +37,7 @@ type Status =
   | { kind: 'idle' }
   | { kind: 'connecting' }
   | { kind: 'in_call'; startedAt: number }
+  | { kind: 'wrap_up'; callId: string }
   | { kind: 'error'; message: string };
 
 export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadId }: Props) {
@@ -156,8 +158,11 @@ export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadI
       startTransition(() => {
         void markCallEnded({ callId: cid, durationSec: duration });
       });
+      // Force the agent to set a disposition before the dialer is reusable.
+      setStatus({ kind: 'wrap_up', callId: cid });
+    } else {
+      setStatus({ kind: 'idle' });
     }
-    setStatus({ kind: 'idle' });
     setMuted(false);
   }
 
@@ -176,6 +181,20 @@ export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadI
   const inCall = status.kind === 'in_call';
   const callDisabled =
     !number.trim() || status.kind === 'connecting' || status.kind === 'in_call' || !fromE164;
+
+  if (status.kind === 'wrap_up') {
+    return (
+      <div className="mx-auto w-full max-w-sm rounded-2xl border border-line bg-surface p-5">
+        <div className="mb-3 flex items-center justify-between rounded-lg border border-teal/40 bg-teal/10 px-3 py-2 text-[11.5px] text-teal">
+          <span>Call ended — set disposition to continue.</span>
+        </div>
+        <DispositionPicker
+          callId={status.callId}
+          onSaved={() => setStatus({ kind: 'idle' })}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-sm rounded-2xl border border-line bg-surface p-5">
