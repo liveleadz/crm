@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import {
   DndContext,
   PointerSensor,
@@ -59,6 +59,12 @@ export function KanbanBoard({
   const [leads, setLeads] = useState(initialLeads);
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+
+  // Re-sync local state when the server prop changes (e.g. after createLead +
+  // router.refresh() or after revalidatePath rebuilds the parent RSC).
+  useEffect(() => {
+    setLeads(initialLeads);
+  }, [initialLeads]);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   function onDragEnd(e: DragEndEvent) {

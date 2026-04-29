@@ -5,6 +5,53 @@ import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadLeadDetail } from '@/lib/leads';
 
+export async function createLead(input: {
+  firstName?: string | null;
+  lastName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  stageId?: string | null;
+  notes?: string | null;
+}) {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false as const, error: 'No active brand' };
+
+  const firstName = input.firstName?.trim() || null;
+  const lastName = input.lastName?.trim() || null;
+  const phone = input.phone?.trim() || null;
+  const email = input.email?.trim() || null;
+  if (!firstName && !lastName && !phone && !email) {
+    return { ok: false as const, error: 'Provide at least a name, phone, or email.' };
+  }
+
+  const supabase = await createServerClient();
+  const { data, error } = await supabase
+    .from('leads')
+    .insert({
+      brand_id: active.id,
+      first_name: firstName,
+      last_name: lastName,
+      phone,
+      email,
+      city: input.city?.trim() || null,
+      state: input.state?.trim() || null,
+      zip: input.zip?.trim() || null,
+      stage_id: input.stageId ?? null,
+      notes: input.notes?.trim() || null,
+      source: 'manual',
+    })
+    .select('id')
+    .single();
+  if (error || !data) return { ok: false as const, error: error?.message ?? 'Insert failed' };
+
+  revalidatePath('/leads');
+  revalidatePath('/dashboard');
+  return { ok: true as const, leadId: data.id };
+}
+
 export async function moveLeadStage(leadId: string, stageId: string) {
   const supabase = await createServerClient();
   // RLS scopes the update; if the user can't access the lead the row count is 0.

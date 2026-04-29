@@ -2,6 +2,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadKanban } from '@/lib/leads';
 import { PageHeader } from '@/components/page-header';
 import { KanbanBoard } from '@/components/leads/kanban-board';
+import { NewLeadButton } from '@/components/leads/new-lead-button';
 
 export default async function LeadsPage() {
   const active = await getActiveBrand();
@@ -12,7 +13,11 @@ export default async function LeadsPage() {
 
   return (
     <>
-      <PageHeader title="Leads" subtitle={subtitle} />
+      <PageHeader
+        title="Leads"
+        subtitle={subtitle}
+        actions={stages.length > 0 ? <NewLeadButton stages={stages} /> : null}
+      />
       {stages.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-12">
           <div className="max-w-md rounded-lg border border-dashed border-line-2 bg-surface p-8 text-center">
