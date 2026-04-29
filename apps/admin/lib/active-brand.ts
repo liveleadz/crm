@@ -16,9 +16,17 @@ const ALLOWED: BrandId[] = ['hp', 'vl', 'bs', 'll', 'hb', 'bi'];
 
 export async function getMembershipBrands(): Promise<ActiveBrand[]> {
   const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return [];
+  // RLS lets a member read every brand_members row in their brands, so we
+  // must filter to the current user explicitly to avoid duplicate brands
+  // when multiple owners share the same set.
   const { data } = await supabase
     .from('brand_members')
     .select('brand_id, brands!inner(id, name, color)')
+    .eq('member_id', user.id)
     .order('brand_id');
   if (!data) return [];
   return data
