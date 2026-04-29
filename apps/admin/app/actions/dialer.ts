@@ -127,21 +127,12 @@ export async function markCallEnded(input: {
   return { ok: true };
 }
 
-export type DispositionCode =
-  | 'connected'
-  | 'voicemail'
-  | 'no_answer'
-  | 'busy'
-  | 'failed'
-  | 'wrong_number'
-  | 'do_not_call'
-  | 'callback'
-  | 'sale'
-  | 'not_interested';
-
+// Disposition codes are now data — managers configure them per brand
+// in /settings. We keep the string permissive here; existing rows with
+// the old hardcoded codes (connected, callback, etc.) remain valid.
 export async function setDisposition(input: {
   callId: string;
-  disposition: DispositionCode;
+  disposition: string;
   note?: string | null;
   callbackAt?: string | null; // ISO timestamp when disposition === 'callback'
 }): Promise<{ ok: true } | { ok: false; error: string }> {

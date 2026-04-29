@@ -210,7 +210,7 @@ export type Database = {
           callback_at: string | null
           created_at: string
           direction: Database["public"]["Enums"]["call_direction"]
-          disposition: Database["public"]["Enums"]["call_disposition"] | null
+          disposition: string | null
           duration_sec: number | null
           ended_at: string | null
           from_number: string
@@ -234,7 +234,7 @@ export type Database = {
           callback_at?: string | null
           created_at?: string
           direction: Database["public"]["Enums"]["call_direction"]
-          disposition?: Database["public"]["Enums"]["call_disposition"] | null
+          disposition?: string | null
           duration_sec?: number | null
           ended_at?: string | null
           from_number: string
@@ -258,7 +258,7 @@ export type Database = {
           callback_at?: string | null
           created_at?: string
           direction?: Database["public"]["Enums"]["call_direction"]
-          disposition?: Database["public"]["Enums"]["call_disposition"] | null
+          disposition?: string | null
           duration_sec?: number | null
           ended_at?: string | null
           from_number?: string
@@ -304,6 +304,50 @@ export type Database = {
             columns: ["number_id"]
             isOneToOne: false
             referencedRelation: "numbers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dispositions: {
+        Row: {
+          brand_id: string
+          code: string
+          created_at: string
+          id: string
+          is_archived: boolean
+          label: string
+          sort_order: number
+          tone: string
+          updated_at: string
+        }
+        Insert: {
+          brand_id: string
+          code: string
+          created_at?: string
+          id?: string
+          is_archived?: boolean
+          label: string
+          sort_order?: number
+          tone?: string
+          updated_at?: string
+        }
+        Update: {
+          brand_id?: string
+          code?: string
+          created_at?: string
+          id?: string
+          is_archived?: boolean
+          label?: string
+          sort_order?: number
+          tone?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dispositions_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
             referencedColumns: ["id"]
           },
         ]
@@ -1197,17 +1241,6 @@ export type Database = {
     }
     Enums: {
       call_direction: "outbound" | "inbound"
-      call_disposition:
-        | "connected"
-        | "voicemail"
-        | "no_answer"
-        | "busy"
-        | "failed"
-        | "wrong_number"
-        | "do_not_call"
-        | "callback"
-        | "sale"
-        | "not_interested"
       lead_source: "manual" | "form" | "csv" | "api" | "workflow"
       list_source: "import" | "manual" | "filter"
       member_role: "owner" | "admin" | "manager" | "agent" | "viewer"
@@ -1345,18 +1378,6 @@ export const Constants = {
   public: {
     Enums: {
       call_direction: ["outbound", "inbound"],
-      call_disposition: [
-        "connected",
-        "voicemail",
-        "no_answer",
-        "busy",
-        "failed",
-        "wrong_number",
-        "do_not_call",
-        "callback",
-        "sale",
-        "not_interested",
-      ],
       lead_source: ["manual", "form", "csv", "api", "workflow"],
       list_source: ["import", "manual", "filter"],
       member_role: ["owner", "admin", "manager", "agent", "viewer"],

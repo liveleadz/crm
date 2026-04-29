@@ -9,7 +9,10 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { SignalWire, type SignalWireClient, type FabricRoomSession } from '@signalwire/js';
 import { attachSignalwireCallId, markCallEnded, prepareCall } from '@/app/actions/dialer';
-import { DispositionPicker } from '@/components/dialer/disposition-picker';
+import {
+  DispositionPicker,
+  type DispositionChoice,
+} from '@/components/dialer/disposition-picker';
 
 const KEYS: { value: string; sub?: string }[] = [
   { value: '1' },
@@ -31,6 +34,7 @@ type Props = {
   fromE164: string | null;
   initialNumber?: string | null;
   initialLeadId?: string | null;
+  dispositions: DispositionChoice[];
 };
 
 type Status =
@@ -40,7 +44,13 @@ type Status =
   | { kind: 'wrap_up'; callId: string }
   | { kind: 'error'; message: string };
 
-export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadId }: Props) {
+export function WebRTCDialPad({
+  brandName,
+  fromE164,
+  initialNumber,
+  initialLeadId,
+  dispositions,
+}: Props) {
   const [number, setNumber] = useState(initialNumber ?? '');
   const leadIdRef = useRef<string | null>(initialLeadId ?? null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
@@ -196,6 +206,7 @@ export function WebRTCDialPad({ brandName, fromE164, initialNumber, initialLeadI
         </div>
         <DispositionPicker
           callId={status.callId}
+          choices={dispositions}
           onSaved={() => setStatus({ kind: 'idle' })}
         />
       </div>

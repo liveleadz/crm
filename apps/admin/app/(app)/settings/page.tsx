@@ -1,16 +1,19 @@
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadKanban } from '@/lib/leads';
 import { loadBrandTagsWithCounts } from '@/lib/tags';
+import { loadDispositions } from '@/lib/dispositions';
 import { PageHeader } from '@/components/page-header';
 import { StagesManager } from '@/components/settings/stages-manager';
 import { TagsManager } from '@/components/settings/tags-manager';
+import { DispositionsManager } from '@/components/settings/dispositions-manager';
 
 export default async function SettingsPage() {
   const active = await getActiveBrand();
   if (!active) return null;
-  const [{ stages }, tags] = await Promise.all([
+  const [{ stages }, tags, dispositions] = await Promise.all([
     loadKanban(active.id),
     loadBrandTagsWithCounts(active.id),
+    loadDispositions(active.id),
   ]);
   return (
     <>
@@ -35,6 +38,14 @@ export default async function SettingsPage() {
               delete one to detach it from every lead.
             </p>
             <TagsManager initialTags={tags} />
+          </section>
+          <section>
+            <h2 className="mb-1 text-[13px] font-semibold">Call dispositions</h2>
+            <p className="mb-4 text-[12px] text-txt-3">
+              Outcomes agents pick after every call. Reorder, retone, rename, or
+              archive — archived ones still resolve on historical calls.
+            </p>
+            <DispositionsManager initial={dispositions} />
           </section>
         </div>
       </div>

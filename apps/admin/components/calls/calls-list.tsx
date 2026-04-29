@@ -4,7 +4,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CallRow } from '@/lib/calls';
 import type { LeadStage } from '@/lib/leads';
 import { LeadDetailDrawer } from '@/components/leads/lead-detail-drawer';
-import { DispositionPicker } from '@/components/dialer/disposition-picker';
+import {
+  DispositionPicker,
+  type DispositionChoice,
+} from '@/components/dialer/disposition-picker';
 
 const DISPOSITION_LABEL: Record<string, string> = {
   connected: 'Connected',
@@ -53,7 +56,22 @@ function rangeMs(r: RangeFilter): number | null {
   return null;
 }
 
-export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallRow[] }) {
+export function CallsList({
+  stages,
+  calls,
+  dispositions,
+}: {
+  stages: LeadStage[];
+  calls: CallRow[];
+  dispositions: DispositionChoice[];
+}) {
+  // Map by code so the disposition column can resolve labels for both
+  // active and archived codes (archived ones still appear on history but
+  // aren't passed in dispositions; fall back to the static map below).
+  const labelByCode: Record<string, string> = {
+    ...DISPOSITION_LABEL,
+    ...Object.fromEntries(dispositions.map((d) => [d.code, d.label])),
+  };
   const [direction, setDirection] = useState<DirectionFilter>('all');
   const [disposition, setDisposition] = useState<DispositionFilter>('all');
   const [range, setRange] = useState<RangeFilter>('all');
@@ -288,7 +306,7 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
                       </td>
                       <td className="px-3 py-2.5 text-txt-2">
                         {c.disposition ? (
-                          DISPOSITION_LABEL[c.disposition] ?? c.disposition
+                          labelByCode[c.disposition] ?? c.disposition
                         ) : c.needsDisposition ? (
                           <button
                             type="button"
@@ -345,6 +363,7 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
       />
       <DispositionModal
         callId={dispositionCallId}
+        choices={dispositions}
         onClose={() => setDispositionCallId(null)}
       />
       <audio ref={audioRef} preload="none" className="hidden" />
@@ -516,9 +535,11 @@ function RecordingCell({
 
 function DispositionModal({
   callId,
+  choices,
   onClose,
 }: {
   callId: string | null;
+  choices: DispositionChoice[];
   onClose: () => void;
 }) {
   // `mounted` keeps the node in the tree during the close transition so
@@ -559,27 +580,32 @@ function DispositionModal({
         }`}
       />
       <div
-        className={`relative w-[320px] rounded-2xl border border-line bg-surface p-4 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.04)_inset] transition-all duration-200 ease-out ${
+        className={`relative w-[461px] rounded-2xl border border-line bg-surface p-6 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.04)_inset] transition-all duration-200 ease-out ${
           shown ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-1'
         }`}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        <div className="mb-5 flex items-center justify-between">
+          <div className="text-[15px] font-semibold uppercase tracking-wide text-txt-3">
             Set disposition
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="grid h-5 w-5 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1"
+            className="grid h-7 w-7 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1"
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
               <path d="M6 6l12 12" />
               <path d="M18 6l-12 12" />
             </svg>
           </button>
         </div>
-        <DispositionPicker callId={callId} onSaved={onClose} onCancel={onClose} />
+        <DispositionPicker
+          callId={callId}
+          choices={choices}
+          onSaved={onClose}
+          onCancel={onClose}
+        />
       </div>
     </div>
   );
