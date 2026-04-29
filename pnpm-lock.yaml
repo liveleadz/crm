@@ -41,6 +41,9 @@ importers:
       '@leadpilot/workflows':
         specifier: workspace:*
         version: link:../../packages/workflows
+      '@signalwire/js':
+        specifier: ^3.30.0
+        version: 3.30.0(@types/jest@29.5.14)(@types/node@22.19.17)
       '@supabase/ssr':
         specifier: ^0.10.2
         version: 0.10.2(@supabase/supabase-js@2.105.0)

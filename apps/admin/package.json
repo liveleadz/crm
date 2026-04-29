@@ -16,6 +16,7 @@
     "@leadpilot/sip": "workspace:*",
     "@leadpilot/ui": "workspace:*",
     "@leadpilot/workflows": "workspace:*",
+    "@signalwire/js": "^3.30.0",
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.46.1",
     "next": "^15.1.0",
