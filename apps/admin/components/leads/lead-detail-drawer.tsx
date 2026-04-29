@@ -11,6 +11,9 @@ import {
 } from '@/app/actions/leads';
 import { startCall } from '@/app/actions/dialer';
 import type { LeadDetail, LeadStage, TimelineEntry } from '@/lib/leads';
+import { LeadTasksPanel } from '@/components/tasks/lead-tasks-panel';
+import { LeadTagsSection } from '@/components/tags/lead-tags-section';
+import { LeadScriptsSection } from '@/components/scripts/lead-scripts-section';
 
 const DISPOSITION_LABEL: Record<string, string> = {
   connected: 'Connected',
@@ -267,6 +270,28 @@ export function LeadDetailDrawer({
                   <span>Do not email</span>
                 </label>
               </div>
+            </section>
+
+            <section className="border-b border-line p-5">
+              <LeadTagsSection leadId={lead.id} />
+            </section>
+
+            <section className="border-b border-line p-5">
+              <LeadScriptsSection
+                lead={{
+                  firstName: lead.firstName,
+                  lastName: lead.lastName,
+                  phone: lead.phone,
+                  email: lead.email,
+                  stageName: lead.stageId
+                    ? stages.find((s) => s.id === lead.stageId)?.name ?? null
+                    : null,
+                }}
+              />
+            </section>
+
+            <section className="border-b border-line p-5">
+              <LeadTasksPanel leadId={lead.id} />
             </section>
 
             <section className="border-b border-line p-5">

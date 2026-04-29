@@ -13,6 +13,7 @@ import {
 import { moveLeadStage } from '@/app/actions/leads';
 import type { LeadCard, LeadStage } from '@/lib/leads';
 import { LeadDetailDrawer } from './lead-detail-drawer';
+import { TagChip } from '@/components/tags/tag-chip';
 
 const STAGE_DOT: Record<string, string> = {
   teal: 'bg-teal',
@@ -184,8 +185,23 @@ function DraggableLead({
       {lead.phone && (
         <div className="mt-2 font-mono text-[11.5px] text-txt-2">{lead.phone}</div>
       )}
+      {lead.tags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {lead.tags.slice(0, 4).map((t) => (
+            <TagChip key={t.id} name={t.name} color={t.color} size="xs" />
+          ))}
+          {lead.tags.length > 4 && (
+            <span className="text-[10px] text-txt-3">+{lead.tags.length - 4}</span>
+          )}
+        </div>
+      )}
       <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-txt-3">
         <span className="capitalize">{lead.source}</span>
+        {(lead.doNotCall || lead.doNotEmail) && (
+          <span className="rounded border border-line px-1 font-medium text-txt-2">
+            {[lead.doNotCall && 'DNC', lead.doNotEmail && 'DNE'].filter(Boolean).join('·')}
+          </span>
+        )}
         <span className="ml-auto">{timeAgo(lead.updatedAt)}</span>
       </div>
     </div>
