@@ -26,10 +26,12 @@ const CHOICES: Choice[] = [
   { code: 'failed', label: 'Failed', tone: 'bad' },
 ];
 
-const TONE_CLASS: Record<Choice['tone'], string> = {
-  good: 'border-teal/40 bg-teal/10 text-teal hover:bg-teal/20',
-  neutral: 'border-line bg-canvas text-txt-2 hover:bg-surface-2',
-  bad: 'border-hp/40 bg-hp/10 text-hp hover:bg-hp/20',
+// Tone is conveyed by a small dot, not by tinting the whole button —
+// keeps the grid calm so only the selected option lights up.
+const TONE_DOT: Record<Choice['tone'], string> = {
+  good: 'bg-teal',
+  neutral: 'bg-txt-3/50',
+  bad: 'bg-hp',
 };
 
 type Props = {
@@ -75,12 +77,12 @@ export function DispositionPicker({ callId, onSaved, onCancel }: Props) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2.5">
       <div>
-        <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-txt-3">
           How did the call go?
         </div>
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className="grid grid-cols-2 gap-1">
           {CHOICES.map((c) => {
             const active = code === c.code;
             return (
@@ -88,12 +90,17 @@ export function DispositionPicker({ callId, onSaved, onCancel }: Props) {
                 key={c.code}
                 type="button"
                 onClick={() => setCode(c.code)}
-                className={`rounded-lg border px-2 py-1.5 text-[11.5px] font-medium transition-colors ${
+                className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
                   active
-                    ? 'border-teal bg-teal text-white shadow-sm'
-                    : TONE_CLASS[c.tone]
+                    ? 'border-teal bg-teal text-white'
+                    : 'border-line bg-canvas text-txt-2 hover:bg-surface-2'
                 }`}
               >
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    active ? 'bg-white/80' : TONE_DOT[c.tone]
+                  }`}
+                />
                 {c.label}
               </button>
             );
@@ -103,20 +110,20 @@ export function DispositionPicker({ callId, onSaved, onCancel }: Props) {
 
       {code === 'callback' && (
         <div>
-          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-txt-3">
             Callback when?
           </div>
           <input
             type="datetime-local"
             value={callbackAt}
             onChange={(e) => setCallbackAt(e.target.value)}
-            className="w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+            className="w-full rounded-md border border-line bg-canvas px-2 py-1 text-[11.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
           />
         </div>
       )}
 
       <div>
-        <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-txt-3">
           Note <span className="text-txt-3 normal-case">(optional)</span>
         </div>
         <textarea
@@ -124,31 +131,31 @@ export function DispositionPicker({ callId, onSaved, onCancel }: Props) {
           onChange={(e) => setNote(e.target.value)}
           rows={2}
           placeholder="What did they say?"
-          className="w-full resize-none rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+          className="w-full resize-none rounded-md border border-line bg-canvas px-2 py-1 text-[11.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
         />
       </div>
 
       {error && (
-        <div className="rounded-lg border border-hp/40 bg-hp/10 px-2.5 py-1.5 text-[11px] text-hp">
+        <div className="rounded-md border border-hp/40 bg-hp/10 px-2 py-1 text-[10.5px] text-hp">
           {error}
         </div>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <button
           type="button"
           onClick={submit}
           disabled={pending || !code}
-          className="flex-1 rounded-xl bg-teal py-2.5 text-[12.5px] font-semibold text-white hover:bg-teal/90 disabled:opacity-50"
+          className="flex-1 rounded-lg bg-teal py-2 text-[12px] font-semibold text-white hover:bg-teal/90 disabled:opacity-50"
         >
-          {pending ? 'Saving…' : 'Save disposition'}
+          {pending ? 'Saving…' : 'Save'}
         </button>
         {onCancel && (
           <button
             type="button"
             onClick={onCancel}
             disabled={pending}
-            className="rounded-xl border border-line px-3 py-2.5 text-[12.5px] text-txt-2 hover:bg-canvas"
+            className="rounded-lg border border-line px-2.5 py-2 text-[12px] text-txt-2 hover:bg-canvas"
           >
             Cancel
           </button>

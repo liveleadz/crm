@@ -60,6 +60,9 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
   const [search, setSearch] = useState('');
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Disposition picker is now a centred modal — click the "Needs
+  // disposition" pill to open. null = closed.
+  const [dispositionCallId, setDispositionCallId] = useState<string | null>(null);
   // Single shared <audio> element drives inline playback for any row.
   // activeId = which row's player is "open" (showing scrubber/speed).
   // isPlaying tracks audio.paused so the icon can flip without re-clicking.
@@ -228,7 +231,6 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
                   c.hasRecording ||
                   Boolean(c.transcript) ||
                   c.transcriptStatus === 'pending' ||
-                  c.needsDisposition ||
                   Boolean(c.note);
                 return (
                   <RowGroup key={c.id}>
@@ -292,7 +294,7 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setExpandedId(isExpanded ? null : c.id);
+                              setDispositionCallId(c.id);
                             }}
                             className="inline-flex h-[18px] items-center rounded-full bg-hp/15 px-1.5 text-[10.5px] font-medium text-hp hover:bg-hp/25"
                           >
@@ -341,6 +343,10 @@ export function CallsList({ stages, calls }: { stages: LeadStage[]; calls: CallR
         stages={stages}
         onClose={() => setOpenLeadId(null)}
       />
+      <DispositionModal
+        callId={dispositionCallId}
+        onClose={() => setDispositionCallId(null)}
+      />
       <audio ref={audioRef} preload="none" className="hidden" />
     </>
   );
@@ -355,15 +361,7 @@ function RowGroup({ children }: { children: React.ReactNode }) {
 function CallDetail({ call }: { call: CallRow }) {
   return (
     <div className="space-y-4">
-      {call.needsDisposition && (
-        <div className="rounded-xl border border-hp/40 bg-hp/5 p-3">
-          <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-hp">
-            Set disposition
-          </div>
-          <DispositionPicker callId={call.id} onSaved={() => undefined} />
-        </div>
-      )}
-      {!call.needsDisposition && call.note && (
+      {call.note && (
         <div className="space-y-1">
           <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
             Note
@@ -512,6 +510,77 @@ function RecordingCell({
           <path d="M5 21h14" />
         </svg>
       </a>
+    </div>
+  );
+}
+
+function DispositionModal({
+  callId,
+  onClose,
+}: {
+  callId: string | null;
+  onClose: () => void;
+}) {
+  // `mounted` keeps the node in the tree during the close transition so
+  // the scale/opacity animation actually plays out before unmounting.
+  // `shown` toggles the visible state one tick after mount.
+  const [mounted, setMounted] = useState(false);
+  const [shown, setShown] = useState(false);
+
+  useEffect(() => {
+    if (callId) {
+      setMounted(true);
+      const t = window.setTimeout(() => setShown(true), 10);
+      return () => window.clearTimeout(t);
+    }
+    setShown(false);
+    const t = window.setTimeout(() => setMounted(false), 180);
+    return () => window.clearTimeout(t);
+  }, [callId]);
+
+  // ESC closes.
+  useEffect(() => {
+    if (!callId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [callId, onClose]);
+
+  if (!mounted || !callId) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        onClick={onClose}
+        className={`absolute inset-0 bg-black/40 backdrop-blur-[2px] transition-opacity duration-150 ${
+          shown ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+      <div
+        className={`relative w-[320px] rounded-2xl border border-line bg-surface p-4 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.04)_inset] transition-all duration-200 ease-out ${
+          shown ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-1'
+        }`}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+            Set disposition
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-5 w-5 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+              <path d="M6 6l12 12" />
+              <path d="M18 6l-12 12" />
+            </svg>
+          </button>
+        </div>
+        <DispositionPicker callId={callId} onSaved={onClose} onCancel={onClose} />
+      </div>
     </div>
   );
 }
