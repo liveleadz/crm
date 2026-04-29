@@ -1,5 +1,6 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
+import { loadTagsForLeads, type Tag } from './tags';
 
 export type LeadStage = {
   id: string;
@@ -19,6 +20,20 @@ export type LeadCard = {
   source: string;
   stageId: string | null;
   updatedAt: string;
+  doNotCall: boolean;
+  doNotEmail: boolean;
+  tags: Tag[];
+};
+
+export type KanbanFilter = {
+  listId?: string | null;
+  search?: string | null;
+  source?: string | null;
+  // Match leads that have ANY of these tag ids attached.
+  tagIds?: string[] | null;
+  // When true, exclude leads with the corresponding consent flag set.
+  excludeDnc?: boolean;
+  excludeDne?: boolean;
 };
 
 export type LeadDetail = {
@@ -144,19 +159,58 @@ export async function loadLeadDetail(leadId: string, brandId: string) {
   return { lead, timeline };
 }
 
-export async function loadKanban(brandId: string) {
+export async function loadKanban(brandId: string, filter: KanbanFilter = {}) {
   const supabase = await createServerClient();
+  let leadsQuery = supabase
+    .from('leads')
+    .select(
+      'id, first_name, last_name, phone, email, source, stage_id, updated_at, do_not_call, do_not_email',
+    )
+    .eq('brand_id', brandId)
+    .order('updated_at', { ascending: false });
+  if (filter.listId) leadsQuery = leadsQuery.eq('list_id', filter.listId);
+  if (filter.source)
+    leadsQuery = leadsQuery.eq(
+      'source',
+      filter.source as 'manual' | 'form' | 'csv' | 'api' | 'workflow',
+    );
+  if (filter.excludeDnc) leadsQuery = leadsQuery.eq('do_not_call', false);
+  if (filter.excludeDne) leadsQuery = leadsQuery.eq('do_not_email', false);
+
+  // Free-text search across name/phone/email.
+  const search = filter.search?.trim();
+  if (search) {
+    const esc = search.replace(/[%,]/g, ' ');
+    const pattern = `%${esc}%`;
+    leadsQuery = leadsQuery.or(
+      `first_name.ilike.${pattern},last_name.ilike.${pattern},phone.ilike.${pattern},email.ilike.${pattern}`,
+    );
+  }
+
+  // Tag filter requires a join. We pre-query lead_tags to find matching ids,
+  // then add an .in() clause. Empty result short-circuits to no leads.
+  let tagFilteredIds: string[] | null = null;
+  if (filter.tagIds && filter.tagIds.length > 0) {
+    const { data: ltRows } = await supabase
+      .from('lead_tags')
+      .select('lead_id')
+      .in('tag_id', filter.tagIds);
+    tagFilteredIds = Array.from(new Set((ltRows ?? []).map((r) => r.lead_id)));
+    if (tagFilteredIds.length === 0) {
+      // Force empty leads result while still loading stages for the kanban shell.
+      leadsQuery = leadsQuery.eq('id', '00000000-0000-0000-0000-000000000000');
+    } else {
+      leadsQuery = leadsQuery.in('id', tagFilteredIds);
+    }
+  }
+
   const [stagesRes, leadsRes] = await Promise.all([
     supabase
       .from('stages')
       .select('id, name, color, position, is_won, is_lost')
       .eq('brand_id', brandId)
       .order('position'),
-    supabase
-      .from('leads')
-      .select('id, first_name, last_name, phone, email, source, stage_id, updated_at')
-      .eq('brand_id', brandId)
-      .order('updated_at', { ascending: false }),
+    leadsQuery,
   ]);
 
   const stages: LeadStage[] = (stagesRes.data ?? []).map((s) => ({
@@ -168,7 +222,9 @@ export async function loadKanban(brandId: string) {
     isLost: s.is_lost,
   }));
 
-  const leads: LeadCard[] = (leadsRes.data ?? []).map((l) => ({
+  const rows = leadsRes.data ?? [];
+  const tagMap = await loadTagsForLeads(rows.map((l) => l.id));
+  const leads: LeadCard[] = rows.map((l) => ({
     id: l.id,
     firstName: l.first_name,
     lastName: l.last_name,
@@ -177,6 +233,9 @@ export async function loadKanban(brandId: string) {
     source: l.source,
     stageId: l.stage_id,
     updatedAt: l.updated_at,
+    doNotCall: l.do_not_call,
+    doNotEmail: l.do_not_email,
+    tags: tagMap.get(l.id) ?? [],
   }));
 
   return { stages, leads };
