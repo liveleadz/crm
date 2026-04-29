@@ -68,8 +68,14 @@ export function toE164(input: string): string | null {
 }
 
 export function getPublicAppUrl(): string {
+  // Only trust NEXT_PUBLIC_APP_URL if it actually parses as an http(s) URL.
+  // (Some Vercel projects ship with the literal placeholder string baked in,
+  // which then gets used as a webhook URL and SignalWire rejects record_call
+  // status_url as "invalid value".)
   const explicit = process.env.NEXT_PUBLIC_APP_URL;
-  if (explicit) return explicit.replace(/\/$/, '');
+  if (explicit && /^https?:\/\//.test(explicit)) return explicit.replace(/\/$/, '');
+  const vercelProd = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (vercelProd) return `https://${vercelProd}`;
   const vercel = process.env.VERCEL_URL;
   if (vercel) return `https://${vercel}`;
   return 'http://localhost:3000';
