@@ -1,10 +1,21 @@
-import { PageHeader, StubBody } from '@/components/page-header';
+import { getActiveBrand } from '@/lib/active-brand';
+import { loadCalls } from '@/lib/calls';
+import { loadKanban } from '@/lib/leads';
+import { PageHeader } from '@/components/page-header';
+import { CallsList } from '@/components/calls/calls-list';
 
-export default function CallsPage() {
+export default async function CallsPage() {
+  const active = await getActiveBrand();
+  if (!active) return null;
+  const [calls, { stages }] = await Promise.all([
+    loadCalls(active.id),
+    loadKanban(active.id),
+  ]);
+  const subtitle = `${calls.length.toLocaleString()} call${calls.length === 1 ? '' : 's'}`;
   return (
     <>
-      <PageHeader title="Calls" subtitle="Call log + recordings + transcripts" />
-      <StubBody note="SignalWire-driven call log lands in Sprint 1.4." />
+      <PageHeader title="Calls" subtitle={subtitle} />
+      <CallsList stages={stages} calls={calls} />
     </>
   );
 }
