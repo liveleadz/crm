@@ -54,6 +54,8 @@ export function useIncomingCall(): Ctx {
 type LooseInvite = {
   accept: (params: Record<string, unknown>) => Promise<unknown>;
   reject: () => Promise<unknown>;
+  on?: (event: string, handler: () => void) => void;
+  off?: (event: string, handler: () => void) => void;
   details?: {
     caller_id_number?: string;
     caller_id_name?: string;
@@ -135,12 +137,34 @@ export function IncomingCallProvider({
               if (!inv) return;
               const details = inv.details ?? {};
               inviteRef.current = inv;
+              // Auto-dismiss the popup if the caller hangs up before the
+              // agent answers. SignalWire fires 'destroy' on the invite
+              // when it's canceled by the far side; if the SDK doesn't
+              // expose events we fall back to a 60s safety timer below.
+              const onCancelled = () => {
+                if (inviteRef.current === inv) {
+                  inviteRef.current = null;
+                  setPending((cur) => (cur && cur.receivedAt === receivedAt ? null : cur));
+                }
+              };
+              const receivedAt = Date.now();
+              try {
+                inv.on?.('destroy', onCancelled);
+              } catch {
+                /* no-op */
+              }
+              // Hard fallback in case the SDK doesn't fire the event:
+              // ringing popup auto-clears after 60s. Real connect timeout
+              // is shorter (15s in SWML), so this is just a safety net.
+              window.setTimeout(() => {
+                if (inviteRef.current === inv) onCancelled();
+              }, 60_000);
               setPending({
                 fromNumber:
                   cleanPhone(details.caller_id_number) ?? cleanPhone(details.from) ?? 'Unknown',
                 toNumber: cleanPhone(details.callee_id_number) ?? cleanPhone(details.to) ?? '',
                 leadName: cleanName(details.caller_id_name),
-                receivedAt: Date.now(),
+                receivedAt,
               });
             }) as never,
           },

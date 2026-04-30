@@ -174,13 +174,22 @@ async function handle(req: NextRequest) {
     .single();
   const callId = callRow?.id ?? null;
 
-  // Dispatch any call_received automations (best-effort). Bell-style
-  // notifications are NOT inserted here — that would alert the agent
-  // about every inbound including ones they answer in real time. Missed-
-  // call / voicemail notifications are inserted in the voicemail
-  // webhook instead, which only fires when the call actually rolled to
-  // voicemail.
+  // Insert a "Missed call" notification up-front for the assigned
+  // members (and the lead owner if matched). claimRecentInboundCall
+  // marks these as READ when the agent picks up — so the bell only ever
+  // shows truly missed calls. Voicemail webhook updates the title
+  // afterwards if a recording was left.
   if (callId) {
+    void notifyMissedCall({
+      brandId: numberRow.brand_id,
+      callId,
+      leadId,
+      leadName,
+      leadOwnerId,
+      ringMemberIds: targetMemberIds,
+      fromNumber,
+      toNumber: e164,
+    });
     void runAutomations({
       trigger: 'call_received',
       brandId: numberRow.brand_id,
@@ -193,49 +202,22 @@ async function handle(req: NextRequest) {
       console.error('[inbound-swml:automations]', (e as Error).message);
     });
   }
-  // Suppress unused warnings — these are kept for the voicemail-side
-  // notification once we wire the missed-call path through that webhook.
-  void leadName;
-  void leadOwnerId;
-  void targetMemberIds;
 
   // Compose the SWML response.
   //
-  // 1. answer + a brief "connecting" cue so the caller knows the script
-  //    is alive (vs. dead-air silence which is indistinguishable from a
-  //    misconfigured webhook).
-  // 2. connect to the routed subscribers via Call Fabric. We pass both
-  //    /private/<reference> and /public/<reference> so the dispatch
-  //    works regardless of which namespace the subscriber's default
-  //    address landed in.
-  // 3. On no-answer / refused, fall through to voicemail greeting (top-
-  //    level `say` verb — `play.say.text` is NOT valid SWML and was
-  //    the reason the previous fallback played silence) + record_call.
-  // SWML's TTS goes through the `play` verb with a `say:` URL scheme. There
-  // is NO top-level `say` action — passing one is silently ignored, which
-  // is what made the call go dead-silent for 20s then hang up.
-  // Record every call so the agent can replay it from /calls. The
-  // record_call action runs against the inbound (caller) leg; when the
-  // agent's leg connects via the connect verb below, the SDK side is
-  // bridged into the same media path so audio from both ends is captured.
+  // Recording starts INSIDE the connect (record_call action runs after
+  // bridge), so the agent's playback only contains the actual conversation
+  // — no "Connecting your call" TTS, no waiting silence, no ring tones.
   // Voicemail uses its own record_call inside connect.result on no-answer.
   const sections: Array<Record<string, unknown>> = [
     { answer: {} },
+    { play: { url: 'say:Connecting your call.' } },
   ];
-  if (callId) {
-    const recSig = signRecordingPath(callId);
-    const recStatusUrl = `${getPublicAppUrl()}/api/swml/recording/${callId}/${recSig}`;
-    sections.push({
-      record_call: {
-        format: 'mp3',
-        stereo: true,
-        direction: 'both',
-        beep: false,
-        status_url: recStatusUrl,
-      },
-    });
-  }
-  sections.push({ play: { url: 'say:Connecting your call.' } });
+  const recSig = callId ? signRecordingPath(callId) : null;
+  const recStatusUrl =
+    callId && recSig
+      ? `${getPublicAppUrl()}/api/swml/recording/${callId}/${recSig}`
+      : null;
 
   // Shorter timeout than configured so callers don't sit in silence too
   // long when no agent is online — voicemail kicks in faster.
@@ -277,29 +259,36 @@ async function handle(req: NextRequest) {
     });
     console.log('[inbound-swml] dispatching to', addresses);
     if (addresses.length > 0) {
-      // Connect bridges the caller to the agent. On no-answer / failure,
-      // route to voicemail via connect.result so the voicemail prompt only
-      // plays when nobody picked up. On a successful bridge, the call ends
-      // when either side hangs up and we fall through to the final hangup
-      // (NOT to voicemail) — fixing the bug where answered calls were
-      // followed by the voicemail prompt + recording.
-      const connectAction: Record<string, unknown> = {
-        connect: {
-          to: addresses.length === 1 ? addresses[0] : addresses,
-          timeout: connectTimeout,
-          from: fromNumber !== 'unknown' ? fromNumber : e164,
-        },
+      // Connect bridges the caller to the agent. record_call lives INSIDE
+      // the connect so the recording only captures the bridge audio (no
+      // ring tones / "connecting your call" prefix). On no-answer or
+      // failure, route to voicemail via connect.result. On a successful
+      // bridge, the call ends when either side hangs up and falls through
+      // to the final hangup (NOT to voicemail).
+      const connectInner: Record<string, unknown> = {
+        to: addresses.length === 1 ? addresses[0] : addresses,
+        timeout: connectTimeout,
+        from: fromNumber !== 'unknown' ? fromNumber : e164,
       };
+      if (recStatusUrl) {
+        connectInner.record_call = {
+          format: 'mp3',
+          stereo: true,
+          direction: 'both',
+          beep: false,
+          status_url: recStatusUrl,
+        };
+      }
       if (voicemailActions.length > 0) {
         const failureBranch = { execute: voicemailActions };
-        (connectAction.connect as Record<string, unknown>).result = {
+        connectInner.result = {
           no_answer: failureBranch,
           failed: failureBranch,
           busy: failureBranch,
           canceled: failureBranch,
         };
       }
-      sections.push(connectAction);
+      sections.push({ connect: connectInner });
     } else if (voicemailActions.length > 0) {
       // No targets at all — go straight to voicemail.
       sections.push(...voicemailActions);
@@ -331,5 +320,46 @@ function pickTargetsForStrategy(
   const lastIdx = lastRung ? memberIds.indexOf(lastRung) : -1;
   const start = lastIdx >= 0 ? (lastIdx + 1) % memberIds.length : 0;
   return [memberIds[start]!];
+}
+
+// Insert "Missed call" notifications for the routed members + lead owner.
+// claimRecentInboundCall marks them as read when the agent answers, so the
+// bell badge only accumulates rows for actually missed inbound. The
+// voicemail webhook updates the row text if a recording is left.
+async function notifyMissedCall(input: {
+  brandId: string;
+  callId: string;
+  leadId: string | null;
+  leadName: string | null;
+  leadOwnerId: string | null;
+  ringMemberIds: string[];
+  fromNumber: string;
+  toNumber: string;
+}) {
+  const supabase = createAdminClient();
+  try {
+    const recipients = new Set<string>(input.ringMemberIds);
+    if (input.leadOwnerId) recipients.add(input.leadOwnerId);
+    if (recipients.size === 0) return;
+    const who = input.leadName || input.fromNumber;
+    const rows = Array.from(recipients).map((memberId) => ({
+      brand_id: input.brandId,
+      recipient_member_id: memberId,
+      kind: 'inbound_call',
+      title: `Missed call from ${who}`,
+      body: `${input.fromNumber} → ${input.toNumber}`,
+      link_url: input.leadId ? `/leads/${input.leadId}` : `/calls`,
+      data: {
+        call_id: input.callId,
+        lead_id: input.leadId,
+        lead_name: input.leadName,
+        from_number: input.fromNumber,
+        to_number: input.toNumber,
+      },
+    }));
+    await supabase.from('notifications').insert(rows);
+  } catch (e) {
+    console.error('[inbound-swml:notify]', (e as Error).message);
+  }
 }
 

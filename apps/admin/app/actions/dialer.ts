@@ -133,6 +133,14 @@ export async function claimRecentInboundCall(): Promise<
     .from('calls')
     .update({ member_id: profile.id, needs_disposition: true })
     .eq('id', call.id);
+  // Clear the "Missed call" notifications for THIS call across all
+  // recipients — an answered call should never show as missed in the bell.
+  await supabase
+    .from('notifications')
+    .update({ read_at: new Date().toISOString() })
+    .eq('brand_id', active.id)
+    .eq('kind', 'inbound_call')
+    .contains('data', { call_id: call.id });
   const lead = call.leads as { first_name: string | null; last_name: string | null } | null;
   const leadName = lead
     ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null
