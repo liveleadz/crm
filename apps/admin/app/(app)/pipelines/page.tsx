@@ -36,20 +36,24 @@ export default async function PipelinesPage({
   const excludeDnc = sp.dnc === '1';
   const excludeDne = sp.dne === '1';
 
-  const [{ stages, leads }, lists, tagLibrary] = await Promise.all([
-    loadKanban(active.id, {
-      listId: activeListId,
-      search,
-      source,
-      tagIds,
-      excludeDnc,
-      excludeDne,
-    }),
+  const [lists, tagLibrary] = await Promise.all([
     loadLists(active.id),
     loadBrandTags(active.id),
   ]);
 
   const activeList = activeListId ? lists.find((l) => l.id === activeListId) ?? null : null;
+  // Filter-source lists carry their criteria in URL params (q/source/tags/...);
+  // they aren't materialized so don't scope leads by list_id.
+  const materializedListId = activeList && activeList.source !== 'filter' ? activeList.id : null;
+
+  const { stages, leads } = await loadKanban(active.id, {
+    listId: materializedListId,
+    search,
+    source,
+    tagIds,
+    excludeDnc,
+    excludeDne,
+  });
   const filtersActive =
     !!search || !!source || tagIds.length > 0 || excludeDnc || excludeDne;
   const subtitle = activeList

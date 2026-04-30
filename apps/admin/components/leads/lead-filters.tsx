@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { Route } from 'next';
 import type { Tag } from '@/lib/tags';
 import { TagChip } from '@/components/tags/tag-chip';
+import { saveSmartList } from '@/app/actions/lists';
 
 const SOURCES = [
   { value: '', label: 'Any source' },
@@ -42,6 +43,9 @@ export function LeadFilters({
   const [dnc, setDnc] = useState(initialDnc);
   const [dne, setDne] = useState(initialDne);
   const [tagOpen, setTagOpen] = useState(false);
+  const [savingName, setSavingName] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveBusy, setSaveBusy] = useState(false);
   const [, startTransition] = useTransition();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -109,7 +113,47 @@ export function LeadFilters({
     setTagIds([]);
     setDnc(false);
     setDne(false);
-    navigate({ q: '', source: '', tagIds: [], dnc: false, dne: false });
+    // Drop the saved-list pin too — clearing filters means leaving the
+    // smart list, not staying pinned with empty criteria.
+    const sp = new URLSearchParams(params.toString());
+    sp.delete('q');
+    sp.delete('source');
+    sp.delete('tags');
+    sp.delete('dnc');
+    sp.delete('dne');
+    sp.delete('list');
+    const qs = sp.toString();
+    startTransition(() => {
+      router.replace((qs ? `${pathname}?${qs}` : pathname) as Route);
+    });
+  }
+
+  async function handleSaveAsList() {
+    setSaveError(null);
+    const name = (savingName ?? '').trim();
+    if (!name) {
+      setSaveError('Name is required.');
+      return;
+    }
+    setSaveBusy(true);
+    const res = await saveSmartList({
+      name,
+      criteria: {
+        search: search || null,
+        source: source || null,
+        tagIds: tagIds.length > 0 ? tagIds : null,
+        excludeDnc: dnc,
+        excludeDne: dne,
+      },
+    });
+    setSaveBusy(false);
+    if (!res.ok) {
+      setSaveError(res.error);
+      return;
+    }
+    setSavingName(null);
+    setSaveError(null);
+    router.refresh();
   }
 
   const anyActive = !!search || !!source || tagIds.length > 0 || dnc || dne;
@@ -238,13 +282,68 @@ export function LeadFilters({
       </label>
 
       {anyActive && (
-        <button
-          type="button"
-          onClick={clearAll}
-          className="ml-auto text-[11.5px] font-medium text-txt-3 hover:text-txt"
-        >
-          Clear filters
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {savingName !== null ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                autoFocus
+                value={savingName}
+                onChange={(e) => {
+                  setSavingName(e.target.value);
+                  if (saveError) setSaveError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleSaveAsList();
+                  if (e.key === 'Escape') {
+                    setSavingName(null);
+                    setSaveError(null);
+                  }
+                }}
+                placeholder="Smart list name"
+                disabled={saveBusy}
+                className="w-40 rounded-md border border-line bg-surface px-2 py-1 text-[11.5px] outline-none focus:border-teal/60"
+              />
+              <button
+                type="button"
+                onClick={() => void handleSaveAsList()}
+                disabled={saveBusy}
+                className="rounded-md border border-teal/40 bg-teal/10 px-2 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/20 disabled:opacity-40"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSavingName(null);
+                  setSaveError(null);
+                }}
+                disabled={saveBusy}
+                className="rounded-md px-1.5 py-1 text-[11.5px] text-txt-3 hover:text-txt"
+              >
+                Cancel
+              </button>
+              {saveError && (
+                <span className="text-[11px] text-hp">{saveError}</span>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setSavingName('')}
+              className="rounded-md border border-line bg-surface px-2 py-1 text-[11.5px] font-medium text-txt-2 hover:bg-canvas"
+            >
+              Save as list
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={clearAll}
+            className="text-[11.5px] font-medium text-txt-3 hover:text-txt"
+          >
+            Clear filters
+          </button>
+        </div>
       )}
     </div>
   );

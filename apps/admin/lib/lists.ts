@@ -1,10 +1,36 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
 
+// Smart-list saved filter criteria. Stored in lead_lists.criteria when
+// source='filter'. Mirrors the URL search-param shape used by /leads.
+export type SmartListCriteria = {
+  search?: string | null;
+  source?: string | null;
+  tagIds?: string[] | null;
+  excludeDnc?: boolean;
+  excludeDne?: boolean;
+};
+
+export function parseCriteria(raw: unknown): SmartListCriteria | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const out: SmartListCriteria = {};
+  if (typeof o.search === 'string') out.search = o.search;
+  if (typeof o.source === 'string') out.source = o.source;
+  if (Array.isArray(o.tagIds)) {
+    out.tagIds = o.tagIds.filter((x): x is string => typeof x === 'string');
+  }
+  if (typeof o.excludeDnc === 'boolean') out.excludeDnc = o.excludeDnc;
+  if (typeof o.excludeDne === 'boolean') out.excludeDne = o.excludeDne;
+  return out;
+}
+
 export type LeadList = {
   id: string;
   name: string;
   source: 'import' | 'manual' | 'filter';
+  // Only present (and only meaningful) for source='filter' lists.
+  criteria: SmartListCriteria | null;
   createdAt: string;
   count: number;
 };
@@ -15,13 +41,16 @@ export type CustomField = {
   label: string;
 };
 
-// Fetch all lists for a brand with their current lead counts (counted via leads.list_id).
+// Fetch all lists for a brand with their current lead counts (counted via
+// leads.list_id). For source='filter' lists the count is dynamic — leads
+// aren't materialized into a list_id — so we leave count=0 and the UI hides
+// the badge.
 export async function loadLists(brandId: string): Promise<LeadList[]> {
   const supabase = await createServerClient();
   const [listsRes, countsRes] = await Promise.all([
     supabase
       .from('lead_lists')
-      .select('id, name, source, created_at')
+      .select('id, name, source, criteria, created_at')
       .eq('brand_id', brandId)
       .order('created_at', { ascending: false }),
     supabase
@@ -41,8 +70,9 @@ export async function loadLists(brandId: string): Promise<LeadList[]> {
     id: l.id,
     name: l.name,
     source: l.source,
+    criteria: l.source === 'filter' ? parseCriteria(l.criteria) : null,
     createdAt: l.created_at,
-    count: counts.get(l.id) ?? 0,
+    count: l.source === 'filter' ? 0 : counts.get(l.id) ?? 0,
   }));
 }
 

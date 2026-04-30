@@ -1,10 +1,25 @@
 'use client';
 
 import Link from 'next/link';
+import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { bulkDeleteLists, deleteList, renameList } from '@/app/actions/lists';
-import type { LeadList } from '@/lib/lists';
+import type { LeadList, SmartListCriteria } from '@/lib/lists';
+
+// Build a /leads URL that re-applies a saved smart-list's stored criteria
+// via search params. Includes `list=<id>` so the pill can render as active.
+function smartListHref(list: LeadList): Route {
+  const c: SmartListCriteria = list.criteria ?? {};
+  const sp = new URLSearchParams();
+  sp.set('list', list.id);
+  if (c.search) sp.set('q', c.search);
+  if (c.source) sp.set('source', c.source);
+  if (c.tagIds && c.tagIds.length > 0) sp.set('tags', c.tagIds.join(','));
+  if (c.excludeDnc) sp.set('dnc', '1');
+  if (c.excludeDne) sp.set('dne', '1');
+  return `/leads?${sp.toString()}` as Route;
+}
 
 export function ListPills({
   lists,
@@ -165,22 +180,45 @@ export function ListPills({
             ) : (
               <>
                 <Link
-                  href={`/pipelines?list=${l.id}`}
+                  href={
+                    l.source === 'filter'
+                      ? smartListHref(l)
+                      : (`/pipelines?list=${l.id}` as Route)
+                  }
                   onDoubleClick={(e) => {
                     e.preventDefault();
                     beginRename(l);
                   }}
-                  className={`rounded-full px-3 py-1 text-[11.5px] font-medium ${
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-[11.5px] font-medium ${
                     isActive
                       ? 'bg-teal/15 text-teal'
                       : 'bg-canvas text-txt-2 hover:bg-canvas/70'
                   }`}
-                  title="Double-click to rename"
+                  title={
+                    l.source === 'filter'
+                      ? 'Saved filter · double-click to rename'
+                      : 'Double-click to rename'
+                  }
                 >
+                  {l.source === 'filter' && (
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      className="opacity-70"
+                    >
+                      <path d="M3 5h18l-7 9v5l-4-2v-3L3 5Z" strokeLinejoin="round" />
+                    </svg>
+                  )}
                   {l.name}
-                  <span className={`ml-1.5 text-[10.5px] ${isActive ? 'text-teal/70' : 'text-txt-3'}`}>
-                    {l.count}
-                  </span>
+                  {l.source !== 'filter' && (
+                    <span className={`text-[10.5px] ${isActive ? 'text-teal/70' : 'text-txt-3'}`}>
+                      {l.count}
+                    </span>
+                  )}
                 </Link>
                 <button
                   type="button"

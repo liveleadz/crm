@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
-import { slugifyLabel } from '@/lib/lists';
+import { slugifyLabel, type SmartListCriteria } from '@/lib/lists';
 
 // Create a custom field definition for the active brand. Returns the slug key.
 // If a field with the same key already exists, returns the existing one (idempotent).
@@ -63,6 +63,58 @@ export async function deleteList(listId: string) {
   if (error) return { ok: false as const, error: error.message };
   revalidatePath('/leads');
   return { ok: true as const };
+}
+
+// Save the current /leads filter as a named smart list. Stored with
+// source='filter' and the filter shape in `criteria` JSONB. Names are
+// disambiguated within a brand (the unique index on (brand_id, lower(name))
+// rejects duplicates with a clear constraint error).
+export async function saveSmartList(input: {
+  name: string;
+  criteria: SmartListCriteria;
+}) {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false as const, error: 'No active brand.' };
+  const name = input.name.trim();
+  if (!name) return { ok: false as const, error: 'Name is required.' };
+
+  // Strip empty/false-y fields so the stored JSON stays minimal and
+  // round-trips cleanly through the URL.
+  const c = input.criteria;
+  const criteria: SmartListCriteria = {};
+  if (c.search) criteria.search = c.search;
+  if (c.source) criteria.source = c.source;
+  if (c.tagIds && c.tagIds.length > 0) criteria.tagIds = c.tagIds;
+  if (c.excludeDnc) criteria.excludeDnc = true;
+  if (c.excludeDne) criteria.excludeDne = true;
+
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false as const, error: 'Not authenticated.' };
+
+  const { data, error } = await supabase
+    .from('lead_lists')
+    .insert({
+      brand_id: active.id,
+      name,
+      source: 'filter' as const,
+      criteria,
+      created_by: user.id,
+    })
+    .select('id')
+    .single();
+  if (error || !data) {
+    const msg = error?.message ?? 'Insert failed';
+    if (msg.includes('lead_lists_brand_name_idx')) {
+      return { ok: false as const, error: 'A list with that name already exists.' };
+    }
+    return { ok: false as const, error: msg };
+  }
+
+  revalidatePath('/leads');
+  return { ok: true as const, id: data.id };
 }
 
 // Bulk delete several smart lists. Brand-scoped via the active brand check

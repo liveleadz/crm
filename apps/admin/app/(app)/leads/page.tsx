@@ -42,19 +42,26 @@ export default async function LeadsListPage({
   const excludeDnc = sp.dnc === '1';
   const excludeDne = sp.dne === '1';
 
-  const [{ stages, leads }, lists, tagLibrary, team] = await Promise.all([
-    loadKanban(active.id, {
-      listId: activeListId,
-      search,
-      source,
-      tagIds,
-      excludeDnc,
-      excludeDne,
-    }),
+  const [lists, tagLibrary, team] = await Promise.all([
     loadLists(active.id),
     loadBrandTags(active.id),
     loadTeam(active.id),
   ]);
+
+  // Filter-source (smart) lists carry their criteria in URL params (set by
+  // the pill href). For those we do NOT scope by list_id — leads aren't
+  // materialized into them. For import/manual lists we still scope by id.
+  const activeList = activeListId ? lists.find((l) => l.id === activeListId) ?? null : null;
+  const materializedListId = activeList && activeList.source !== 'filter' ? activeList.id : null;
+
+  const { stages, leads } = await loadKanban(active.id, {
+    listId: materializedListId,
+    search,
+    source,
+    tagIds,
+    excludeDnc,
+    excludeDne,
+  });
 
   const teamOpts = team.map((t) => ({
     id: t.memberId,
