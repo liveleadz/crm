@@ -67,21 +67,6 @@ async function handle(req: NextRequest) {
   const payload = verifyDialToken(token);
   if (!payload) return jsonSwmlResponse(HANGUP_SWML);
 
-  // Inbound-answer flow: agent's browser is joining a room where the inbound
-  // caller is already held. No record_call here — the inbound LaML side
-  // already started recording. Just answer and hop into the room.
-  if (payload.conference) {
-    return jsonSwmlResponse({
-      version: '1.0.0',
-      sections: {
-        main: [
-          { answer: {} },
-          { connect: { to: `room:${payload.conference}` } },
-        ],
-      },
-    });
-  }
-
   // Path-based status URL — SignalWire rejects long JWT-style tokens in
   // ?t= query strings on record_call.status_url with "invalid value".
   const recSig = signRecordingPath(payload.callId);

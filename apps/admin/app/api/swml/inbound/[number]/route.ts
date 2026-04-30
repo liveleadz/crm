@@ -107,26 +107,24 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
     route?.last_rung_member_id ?? null,
   );
 
-  // Fetch mobile_phones for just the chosen targets. Drop members without
-  // a mobile_phone — we have nothing to ring.
-  const ringNumbers: string[] = [];
+  // Fetch member emails for the chosen targets. Each member's email maps
+  // 1:1 to a SignalWire Subscriber `reference`; <Dial><Client>email</Client>
+  // dispatches the call to whichever browsers have a SignalWire JS client
+  // online for that subscriber. No PSTN, no SIP — pure WebRTC.
+  const ringEmails: string[] = [];
   let nextRotationMemberId: string | null = null;
   if (targetMemberIds.length > 0) {
     const { data: members } = await supabase
       .from('members')
-      .select('id, mobile_phone')
+      .select('id, email')
       .in('id', targetMemberIds);
     const byId = new Map((members ?? []).map((m) => [m.id, m] as const));
-    // Preserve target order so round_robin / single ring the chosen one.
     for (const id of targetMemberIds) {
       const m = byId.get(id);
-      if (m?.mobile_phone) {
-        const n = toE164(m.mobile_phone);
-        if (n) {
-          ringNumbers.push(n);
-          if (strategy === 'round_robin' && !nextRotationMemberId) {
-            nextRotationMemberId = id;
-          }
+      if (m?.email) {
+        ringEmails.push(m.email.toLowerCase());
+        if (strategy === 'round_robin' && !nextRotationMemberId) {
+          nextRotationMemberId = id;
         }
       }
     }
@@ -200,25 +198,19 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
 
   // Build LaML XML response.
   //
-  // In-browser ringing: drop the caller into a conference room named
-  // inbound-<callId>. The notification we insert via notifyAndDispatch
-  // streams over Supabase realtime to the routed members' browsers; the
-  // IncomingCallProvider shows a popup with Answer/Reject. On Answer the
-  // agent's WebRTC leg joins the same conference and the bridge forms.
-  // If the ring timeout elapses without an answer, execution falls
-  // through to the voicemail flow below.
-  void ringNumbers;
+  // In-browser ringing: <Dial><Client>email</Client></Dial> dispatches to
+  // any SignalWire JS Subscriber online for that email. Multiple <Client>
+  // children parallel-dial — first to accept wins. If <Dial> times out
+  // with no answer, execution falls through to <Say>+<Record> voicemail.
   void nextRotationMemberId;
   const verbs: string[] = [];
-  const conferenceName = callId ? `inbound-${callId}` : null;
   const ring = route?.ring_timeout_sec ?? 25;
 
-  if (conferenceName && targetMemberIds.length > 0) {
+  if (ringEmails.length > 0) {
+    const callerIdAttr = ` callerId="${escapeXml(fromNumber !== 'unknown' ? fromNumber : e164)}"`;
+    const clients = ringEmails.map((e) => `<Client>${escapeXml(e)}</Client>`).join('');
     verbs.push(
-      `<Dial timeout="${ring}" answerOnBridge="true">` +
-        `<Conference startConferenceOnEnter="false" endConferenceOnExit="true" beep="false">` +
-        escapeXml(conferenceName) +
-        `</Conference></Dial>`,
+      `<Dial timeout="${ring}" answerOnBridge="true"${callerIdAttr}>${clients}</Dial>`,
     );
   }
 
@@ -287,7 +279,6 @@ async function notifyAndDispatch(input: {
     if (input.leadOwnerId) recipients.add(input.leadOwnerId);
     if (recipients.size > 0) {
       const who = input.leadName || input.fromNumber;
-      const conferenceName = `inbound-${input.callId}`;
       const rows = Array.from(recipients).map((memberId) => ({
         brand_id: input.brandId,
         recipient_member_id: memberId,
@@ -301,7 +292,6 @@ async function notifyAndDispatch(input: {
           lead_name: input.leadName,
           from_number: input.fromNumber,
           to_number: input.toNumber,
-          conference_name: conferenceName,
         },
       }));
       await supabase.from('notifications').insert(rows);

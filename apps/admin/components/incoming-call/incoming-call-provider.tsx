@@ -1,30 +1,23 @@
 'use client';
 
-// Subscribes the current member's browser to inbound-call notifications and
-// surfaces them through a context that <IncomingCallPopup> renders. When
-// an inbound call lands on a routed brand number, the SWML inbound route
-// (a) drops the PSTN caller into a conference room and (b) inserts a row
-// into `notifications` with kind='inbound_call'. Supabase realtime
-// streams that row to any connected browser whose recipient_member_id
-// matches; the popup answers/rejects.
+// Persistent SignalWire JS subscriber. Stays online for the duration of
+// the page session so PSTN inbound calls dispatched via
+// <Dial><Client>email</Client></Dial> reach this browser. The SDK fires
+// `incomingCallHandlers.all` with a notification carrying the invite —
+// we surface caller info to the popup and accept/reject the invite when
+// the user clicks.
 //
-// Answer flow: prepareInboundAnswer() returns a SignalWire Call Fabric
-// address + dial token whose SWML response connects the agent's WebRTC
-// leg to the same conference. Two parties, one room, audio bridged.
+// We deliberately don't pass rootElement on accept; audio-only calls
+// route through the SDK's internal <audio> element. Passing the body
+// would otherwise blank the page with a video container.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { createBrowserClient } from '@leadpilot/db/client';
-import { SignalWire, type SignalWireClient, type FabricRoomSession } from '@signalwire/js';
-import { prepareInboundAnswer, markNotificationHandled } from '@/app/actions/dialer';
+import { SignalWire, type SignalWireClient } from '@signalwire/js';
 
 export type IncomingCall = {
-  notificationId: string;
-  callId: string;
   fromNumber: string;
   toNumber: string;
   leadName: string | null;
-  leadId: string | null;
-  conference: string;
   receivedAt: number;
 };
 
@@ -50,143 +43,131 @@ export function useIncomingCall(): Ctx {
   return ctx;
 }
 
+// Loose shape for the SDK's incoming-call notification + invite. We treat
+// these as opaque so the component compiles regardless of minor SDK type
+// drift; the runtime shape is what matters.
+type LooseInvite = {
+  accept: (params: Record<string, unknown>) => Promise<unknown>;
+  reject: () => Promise<unknown>;
+  details?: {
+    caller_id_number?: string;
+    caller_id_name?: string;
+    callee_id_number?: string;
+    callee_id_name?: string;
+    from?: string;
+    to?: string;
+  };
+};
+
+type ActiveSession = {
+  on?: (event: string, cb: () => void) => void;
+  hangup?: () => Promise<unknown>;
+};
+
 export function IncomingCallProvider({ children }: { children: React.ReactNode }) {
   const [pending, setPending] = useState<IncomingCall | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const clientRef = useRef<SignalWireClient | null>(null);
-  const sessionRef = useRef<FabricRoomSession | null>(null);
+  const inviteRef = useRef<LooseInvite | null>(null);
+  const sessionRef = useRef<ActiveSession | null>(null);
 
-  // Subscribe to Supabase realtime for new inbound_call notifications
-  // addressed to the current member. Triggers the popup.
+  // Boot a long-lived SignalWire client and register for incoming calls.
   useEffect(() => {
-    const supabase = createBrowserClient();
-    let channel: ReturnType<typeof supabase.channel> | null = null;
     let cancelled = false;
+    let client: SignalWireClient | null = null;
 
     (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user || cancelled) return;
-      channel = supabase
-        .channel(`inbound-calls-${user.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'notifications',
-            filter: `recipient_member_id=eq.${user.id}`,
+      try {
+        const tokenRes = await fetch('/api/signalwire/token', { method: 'POST' });
+        if (!tokenRes.ok) return; // not signed in or env not set — silently skip
+        const { token } = (await tokenRes.json()) as { token?: string };
+        if (!token || cancelled) return;
+
+        client = await SignalWire({ token });
+        if (cancelled) {
+          await client.disconnect().catch(() => undefined);
+          return;
+        }
+        clientRef.current = client;
+
+        await client.online({
+          incomingCallHandlers: {
+            all: ((notification: unknown) => {
+              const inv = (notification as { invite?: LooseInvite })?.invite;
+              if (!inv) return;
+              const details = inv.details ?? {};
+              inviteRef.current = inv;
+              setPending({
+                fromNumber: details.caller_id_number || details.from || 'Unknown',
+                toNumber: details.callee_id_number || details.to || '',
+                leadName: details.caller_id_name || null,
+                receivedAt: Date.now(),
+              });
+            }) as never,
           },
-          (payload) => {
-            const row = payload.new as {
-              id: string;
-              kind: string;
-              data: Record<string, unknown> | null;
-            };
-            if (row.kind !== 'inbound_call' || !row.data) return;
-            const data = row.data;
-            const callId = String(data.call_id ?? '');
-            const conference = String(data.conference_name ?? '');
-            if (!callId || !conference) return;
-            setPending({
-              notificationId: row.id,
-              callId,
-              fromNumber: String(data.from_number ?? 'Unknown'),
-              toNumber: String(data.to_number ?? ''),
-              leadName: (data.lead_name as string | null) ?? null,
-              leadId: (data.lead_id as string | null) ?? null,
-              conference,
-              receivedAt: Date.now(),
-            });
-          },
-        )
-        .subscribe();
+        });
+      } catch (e) {
+        // Don't crash the app shell if the SDK fails to init — features
+        // outside inbound calls keep working.
+        console.error('[incoming-call] init failed', (e as Error).message);
+      }
     })();
 
     return () => {
       cancelled = true;
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, []);
-
-  // Tear down any live session on unmount.
-  useEffect(() => {
-    return () => {
-      sessionRef.current?.hangup().catch(() => undefined);
-      clientRef.current?.disconnect().catch(() => undefined);
+      void client?.disconnect().catch(() => undefined);
     };
   }, []);
 
   const cleanup = useCallback(async () => {
-    if (sessionRef.current) {
+    inviteRef.current = null;
+    if (sessionRef.current?.hangup) {
       try {
         await sessionRef.current.hangup();
       } catch {
         /* already gone */
       }
-      sessionRef.current = null;
     }
-    if (clientRef.current) {
-      try {
-        await clientRef.current.disconnect();
-      } catch {
-        /* already gone */
-      }
-      clientRef.current = null;
-    }
+    sessionRef.current = null;
   }, []);
 
   const answer = useCallback(async () => {
-    if (!pending) return;
+    const invite = inviteRef.current;
+    if (!invite || !invite.accept) return;
     setStatus({ kind: 'connecting' });
     try {
-      const prep = await prepareInboundAnswer({ callId: pending.callId });
-      if (!prep.ok) throw new Error(prep.error);
-
-      // Fetch a fresh SAT token for the SDK.
-      const tokenRes = await fetch('/api/signalwire/token', { method: 'POST' });
-      const tokenJson = (await tokenRes.json()) as { token?: string; error?: string };
-      if (!tokenRes.ok || !tokenJson.token) {
-        throw new Error(tokenJson.error || 'Failed to fetch SignalWire token');
-      }
-
-      const client = await SignalWire({ token: tokenJson.token });
-      clientRef.current = client;
-
-      const session = await client.dial({
-        to: prep.fabricAddress,
+      // No rootElement / video — audio-only WebRTC. The SDK's internal
+      // <audio> element handles playback.
+      const session = (await invite.accept({
         audio: true,
         video: false,
-        // Important: do NOT pass rootElement for audio-only — the SDK
-        // would inject a full-screen video container into the page. The
-        // existing /dialer flow proves audio works without it.
         negotiateVideo: false,
-        userVariables: { t: prep.dialToken },
-      });
+      })) as ActiveSession;
       sessionRef.current = session;
-
       session.on?.('destroy', () => {
         setStatus({ kind: 'idle' });
-        void cleanup();
+        sessionRef.current = null;
       });
-
-      await session.start();
       setStatus({ kind: 'in_call', startedAt: Date.now() });
-      // Mark the notification handled so the popup doesn't re-fire.
-      void markNotificationHandled({ notificationId: pending.notificationId });
       setPending(null);
     } catch (e) {
       setStatus({ kind: 'error', message: (e as Error).message });
       void cleanup();
     }
-  }, [pending, cleanup]);
+  }, [cleanup]);
 
   const reject = useCallback(async () => {
-    if (!pending) return;
-    void markNotificationHandled({ notificationId: pending.notificationId });
+    const invite = inviteRef.current;
     setPending(null);
-  }, [pending]);
+    if (invite?.reject) {
+      try {
+        await invite.reject();
+      } catch {
+        /* invite may have already timed out */
+      }
+    }
+    inviteRef.current = null;
+  }, []);
 
   const hangup = useCallback(async () => {
     await cleanup();
