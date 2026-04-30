@@ -31,7 +31,6 @@ import {
   deleteAutomation,
   reorderAutomations,
   setAutomationEnabled,
-  updateAutomation,
 } from '@/app/actions/automations';
 import { describeAction, type Automation, type AutomationAction } from '@/lib/automation-types';
 import { AutomationForm } from './automation-form';
@@ -47,10 +46,7 @@ type Props = {
   dispositions: DispositionRef[];
 };
 
-type EditorState =
-  | { kind: 'closed' }
-  | { kind: 'create' }
-  | { kind: 'edit'; automation: Automation };
+type EditorState = { kind: 'closed' } | { kind: 'create' };
 
 export function AutomationsManager({ initial, stages, tags, dispositions }: Props) {
   const [items, setItems] = useState<Automation[]>(initial);
@@ -58,8 +54,8 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  // 5px activation distance avoids hijacking clicks on the toggle / Edit
-  // / Delete buttons that share the row.
+  // 5px activation distance avoids hijacking clicks on the toggle / Open
+  // editor / Delete controls that share the row.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -101,55 +97,32 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
     });
   }
 
-  async function handleSave(values: {
+  async function handleCreate(values: {
     name: string;
     description: string;
     triggerType: string;
     triggerConfig: Record<string, unknown>;
     actions: AutomationAction[];
   }): Promise<string | null> {
-    if (editor.kind === 'create') {
-      const res = await createAutomation(values);
-      if (!res.ok) return res.error;
-      setItems((prev) => [
-        ...prev,
-        {
-          id: res.id ?? `pending-${Date.now()}`,
-          name: values.name.trim(),
-          description: values.description.trim() || null,
-          triggerType: values.triggerType,
-          triggerConfig: values.triggerConfig,
-          actions: values.actions,
-          isEnabled: true,
-          isSystem: false,
-          sortOrder: (prev.at(-1)?.sortOrder ?? 0) + 10,
-          mode: 'simple',
-          graph: null,
-        },
-      ]);
-      setEditor({ kind: 'closed' });
-      return null;
-    }
-    if (editor.kind === 'edit') {
-      const res = await updateAutomation({ id: editor.automation.id, ...values });
-      if (!res.ok) return res.error;
-      setItems((prev) =>
-        prev.map((a) =>
-          a.id === editor.automation.id
-            ? {
-                ...a,
-                name: values.name.trim(),
-                description: values.description.trim() || null,
-                triggerType: values.triggerType,
-                triggerConfig: values.triggerConfig,
-                actions: values.actions,
-              }
-            : a,
-        ),
-      );
-      setEditor({ kind: 'closed' });
-      return null;
-    }
+    const res = await createAutomation(values);
+    if (!res.ok) return res.error;
+    setItems((prev) => [
+      ...prev,
+      {
+        id: res.id ?? `pending-${Date.now()}`,
+        name: values.name.trim(),
+        description: values.description.trim() || null,
+        triggerType: values.triggerType,
+        triggerConfig: values.triggerConfig,
+        actions: values.actions,
+        isEnabled: true,
+        isSystem: false,
+        sortOrder: (prev.at(-1)?.sortOrder ?? 0) + 10,
+        mode: 'simple',
+        graph: null,
+      },
+    ]);
+    setEditor({ kind: 'closed' });
     return null;
   }
 
@@ -194,7 +167,6 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
                   tags={tags}
                   dispositions={dispositions}
                   onToggle={(enabled) => toggleEnabled(a.id, enabled)}
-                  onEdit={() => setEditor({ kind: 'edit', automation: a })}
                   onDelete={() => remove(a)}
                 />
               ))}
@@ -203,15 +175,15 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
         )}
       </div>
 
-      {editor.kind !== 'closed' && (
+      {editor.kind === 'create' && (
         <AutomationForm
-          mode={editor.kind}
-          initial={editor.kind === 'edit' ? editor.automation : null}
+          mode="create"
+          initial={null}
           stages={stages}
           tags={tags}
           dispositions={dispositions}
           onCancel={() => setEditor({ kind: 'closed' })}
-          onSave={handleSave}
+          onSave={handleCreate}
         />
       )}
     </div>
@@ -224,7 +196,6 @@ function SortableAutomationRow(props: {
   tags: TagRef[];
   dispositions: DispositionRef[];
   onToggle: (enabled: boolean) => void;
-  onEdit: () => void;
   onDelete: () => void;
 }) {
   const { automation } = props;
@@ -308,17 +279,13 @@ function SortableAutomationRow(props: {
         <Toggle enabled={automation.isEnabled} onChange={props.onToggle} />
         <Link
           href={`/workflows/${automation.id}` as Route}
-          className="rounded-md border border-line bg-canvas px-2.5 py-1 text-[11.5px] hover:bg-surface-2"
+          className="inline-flex items-center gap-1.5 rounded-md border border-line bg-canvas px-2.5 py-1 text-[11.5px] hover:bg-surface-2"
         >
-          Open
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M9 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-4M14 3h7v7M10 14L21 3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Open editor
         </Link>
-        <button
-          type="button"
-          onClick={props.onEdit}
-          className="rounded-md border border-line bg-canvas px-2.5 py-1 text-[11.5px] hover:bg-surface-2"
-        >
-          Edit
-        </button>
         <button
           type="button"
           onClick={props.onDelete}
