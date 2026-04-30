@@ -162,7 +162,7 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
         <Stat
           label="At risk"
           value={atRisk.toString()}
-          sub={atRisk === 0 ? 'all clear' : 'check reputation links'}
+          sub={atRisk === 0 ? 'all clear' : 'review block rate + STIR'}
         />
       </div>
 
@@ -215,7 +215,6 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
               <col style={{ width: 90 }} />
               <col style={{ width: 90 }} />
               <col style={{ width: 130 }} />
-              <col style={{ width: 110 }} />
               <col style={{ width: 70 }} />
               <col style={{ width: 60 }} />
             </colgroup>
@@ -242,7 +241,6 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
                 <th className="px-3 py-2 font-medium">Risk</th>
                 <th className="px-3 py-2 font-medium">Last used</th>
                 <th className="px-3 py-2 font-medium">Inbound</th>
-                <th className="px-3 py-2 font-medium">Reputation check</th>
                 <th className="px-3 py-2 font-medium">Active</th>
                 <th className="px-3 py-2" />
               </tr>
@@ -318,9 +316,6 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
                     />
                   </td>
                   <td className="px-3 py-3">
-                    <ReputationLinks e164={n.e164} />
-                  </td>
-                  <td className="px-3 py-3">
                     <Toggle enabled={n.active} onChange={(v) => onActiveToggle(n, v)} />
                   </td>
                   <td className="px-3 py-3 text-right">
@@ -385,8 +380,7 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
         <p>
           <strong className="text-txt-2">CNAM</strong> is fetched on demand from SignalWire
           (~$0.005/lookup) — click <span className="font-medium text-txt-2">Look up</span> to
-          fetch the registered caller-ID name terminating carriers see. The reputation links
-          remain the ground-truth check on YouMail, NoMoRobo, FreeCallerID, and Hiya.
+          fetch the registered caller-ID name terminating carriers see.
         </p>
       </div>
     </div>
@@ -427,52 +421,6 @@ function RiskBadge({
     >
       {level}
     </span>
-  );
-}
-
-function ReputationLinks({ e164 }: { e164: string }) {
-  // Strip the leading + so a few of the older tools that don't accept it
-  // still load directly. URL-encoding the +-prefixed form is fine for the
-  // others; we pass both shapes so each link goes to the right page.
-  const encoded = encodeURIComponent(e164);
-  const naked = e164.replace(/^\+/, '');
-  const links = [
-    {
-      label: 'YouMail',
-      href: `https://directory.youmail.com/phone/${naked}`,
-      title: 'Crowdsourced spam reports + carrier flag indicators',
-    },
-    {
-      label: 'NoMoRobo',
-      href: `https://www.nomorobo.com/lookup/${naked}`,
-      title: 'Robocall-blocking database',
-    },
-    {
-      label: 'FreeCallerID',
-      href: `https://freecallerid.com/${naked}`,
-      title: 'Free reverse lookup + caller ID name',
-    },
-    {
-      label: 'Hiya',
-      href: `https://www.hiya.com/${encoded}`,
-      title: 'Hiya consumer reputation page',
-    },
-  ];
-  return (
-    <div className="flex flex-wrap gap-1">
-      {links.map((l) => (
-        <a
-          key={l.label}
-          href={l.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={l.title}
-          className="rounded-md border border-line bg-canvas px-1.5 py-0.5 text-[10.5px] text-txt-2 hover:border-teal/40 hover:text-teal"
-        >
-          {l.label}
-        </a>
-      ))}
-    </div>
   );
 }
 
