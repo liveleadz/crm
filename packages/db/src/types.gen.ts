@@ -946,6 +946,7 @@ export type Database = {
           created_at: string
           e164: string
           id: string
+          inbound_connected_at: string | null
           label: string | null
           signalwire_id: string | null
         }
@@ -958,6 +959,7 @@ export type Database = {
           created_at?: string
           e164: string
           id?: string
+          inbound_connected_at?: string | null
           label?: string | null
           signalwire_id?: string | null
         }
@@ -970,6 +972,7 @@ export type Database = {
           created_at?: string
           e164?: string
           id?: string
+          inbound_connected_at?: string | null
           label?: string | null
           signalwire_id?: string | null
         }

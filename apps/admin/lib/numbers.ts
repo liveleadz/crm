@@ -17,6 +17,7 @@ export type NumberRow = {
   a2pCampaignId: string | null;
   active: boolean;
   createdAt: string;
+  inboundConnectedAt: string | null;
 };
 
 export type AttestationMix = { A: number; B: number; C: number; unknown: number };
@@ -69,7 +70,7 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
   const { data: rows } = await supabase
     .from('numbers')
     .select(
-      'id, e164, signalwire_id, label, cnam, cnam_checked_at, a2p_campaign_id, active, created_at',
+      'id, e164, signalwire_id, label, cnam, cnam_checked_at, a2p_campaign_id, active, created_at, inbound_connected_at',
     )
     .eq('brand_id', brandId)
     .order('created_at', { ascending: true });
@@ -86,6 +87,7 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
     a2pCampaignId: r.a2p_campaign_id,
     active: r.active,
     createdAt: r.created_at,
+    inboundConnectedAt: r.inbound_connected_at,
   }));
 
   const since = new Date(Date.now() - SEVEN_DAYS_MS).toISOString();

@@ -117,6 +117,83 @@ export async function lookupCnam(e164: string): Promise<SwResult<CnamLookupResul
 }
 
 /**
+ * Look up a SignalWire IncomingPhoneNumber SID by its E.164 number. We need
+ * the SID to PATCH the number's voice handler (the LaML API addresses
+ * numbers by SID, not by phone). Returns null if no match.
+ */
+export async function findIncomingPhoneNumberSid(
+  e164: string,
+): Promise<SwResult<string | null>> {
+  const projectId = process.env.SIGNALWIRE_PROJECT_ID;
+  if (!projectId) {
+    return { ok: false, error: 'SIGNALWIRE_PROJECT_ID not configured' };
+  }
+  // LaML expects PhoneNumber to include the leading +; encode it.
+  const encoded = encodeURIComponent(e164);
+  const path = `/api/laml/2010-04-01/Accounts/${projectId}/IncomingPhoneNumbers.json?PhoneNumber=${encoded}`;
+  const res = await swGet<{
+    incoming_phone_numbers?: Array<{ sid: string; phone_number: string }>;
+  }>(path);
+  if (!res.ok) return res;
+  const match = (res.data.incoming_phone_numbers ?? []).find(
+    (n) => n.phone_number === e164,
+  );
+  return { ok: true, data: match?.sid ?? null };
+}
+
+/**
+ * Update an IncomingPhoneNumber's voice webhook so inbound calls POST to our
+ * SWML route. SignalWire's LaML API uses form-encoded body for updates.
+ */
+export async function setIncomingPhoneNumberVoiceUrl(input: {
+  sid: string;
+  voiceUrl: string;
+  voiceMethod?: 'POST' | 'GET';
+}): Promise<SwResult<{ sid: string; voice_url: string | null }>> {
+  const auth = basicAuth();
+  const space = spaceUrl();
+  const projectId = process.env.SIGNALWIRE_PROJECT_ID;
+  if (!auth || !space || !projectId) {
+    return {
+      ok: false,
+      error:
+        'SignalWire credentials missing. Set SIGNALWIRE_PROJECT_ID, SIGNALWIRE_TOKEN, SIGNALWIRE_SPACE_URL.',
+    };
+  }
+  const url = `https://${space}/api/laml/2010-04-01/Accounts/${projectId}/IncomingPhoneNumbers/${input.sid}.json`;
+  const form = new URLSearchParams({
+    VoiceUrl: input.voiceUrl,
+    VoiceMethod: input.voiceMethod ?? 'POST',
+  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: form.toString(),
+      signal: AbortSignal.timeout(15_000),
+      cache: 'no-store',
+    });
+  } catch (e) {
+    return { ok: false, error: `Network error: ${(e as Error).message}` };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    return {
+      ok: false,
+      status: res.status,
+      error: body ? `${res.status} ${body.slice(0, 240)}` : `HTTP ${res.status}`,
+    };
+  }
+  const json = (await res.json()) as { sid?: string; voice_url?: string | null };
+  return { ok: true, data: { sid: json.sid ?? input.sid, voice_url: json.voice_url ?? null } };
+}
+
+/**
  * Send an SMS via SignalWire's LaML Messages API. Returns the provider's
  * message SID on success. Used by the message_outbox drain worker.
  */

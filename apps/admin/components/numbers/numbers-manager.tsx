@@ -8,8 +8,10 @@
 import { useMemo, useState, useTransition } from 'react';
 import {
   bulkDeleteNumbers,
+  connectInboundNumber,
   deleteInboundRoute,
   deleteNumber,
+  disconnectInboundNumber,
   refreshCnam,
   saveInboundRoute,
   setA2pCampaignId,
@@ -305,9 +307,14 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
                   </td>
                   <td className="px-3 py-3">
                     <InboundCell
+                      number={n}
                       route={routes.get(n.id) ?? null}
                       memberById={memberById}
                       onConfigure={() => setRoutingNumberId(n.id)}
+                      onConnectionChange={(connectedAt) =>
+                        patch(n.id, (cur) => ({ ...cur, inboundConnectedAt: connectedAt }))
+                      }
+                      onError={setError}
                     />
                   </td>
                   <td className="px-3 py-3">
@@ -637,51 +644,111 @@ function timeAgo(iso: string): string {
 
 
 function InboundCell({
+  number,
   route,
   memberById,
   onConfigure,
+  onConnectionChange,
+  onError,
 }: {
+  number: NumberWithHealth;
   route: InboundRouteRow | null;
   memberById: Map<string, BrandMember>;
   onConfigure: () => void;
+  onConnectionChange: (connectedAt: string | null) => void;
+  onError: (msg: string) => void;
 }) {
-  if (!route || (route.memberIds.length === 0 && !route.voicemailEnabled)) {
-    return (
-      <button
-        type="button"
-        onClick={onConfigure}
-        className="rounded-md border border-dashed border-line bg-canvas px-2 py-0.5 text-[11px] text-txt-3 hover:border-teal hover:text-teal"
-      >
-        Set up
-      </button>
-    );
+  const [busy, setBusy] = useState(false);
+  const isConnected = Boolean(number.inboundConnectedAt);
+
+  async function connect() {
+    setBusy(true);
+    const res = await connectInboundNumber({ numberId: number.id });
+    setBusy(false);
+    if (!res.ok) {
+      onError(res.error);
+      return;
+    }
+    onConnectionChange(new Date().toISOString());
   }
-  const named = route.memberIds
-    .map((id) => memberById.get(id))
-    .filter(Boolean) as BrandMember[];
-  const summary =
-    named.length === 0
-      ? "voicemail only"
+  async function disconnect() {
+    if (!window.confirm('Disconnect this number? Inbound calls will stop reaching the platform.')) {
+      return;
+    }
+    setBusy(true);
+    const res = await disconnectInboundNumber({ numberId: number.id });
+    setBusy(false);
+    if (!res.ok) {
+      onError(res.error);
+      return;
+    }
+    onConnectionChange(null);
+  }
+
+  // Routing summary — same logic as before, just rendered as the second line.
+  const named = route
+    ? (route.memberIds.map((id) => memberById.get(id)).filter(Boolean) as BrandMember[])
+    : [];
+  const hasRouting =
+    !!route && (route.memberIds.length > 0 || route.voicemailEnabled);
+  const summary = !hasRouting
+    ? null
+    : named.length === 0
+      ? 'voicemail only'
       : named.length === 1
-        ? (named[0]!.full_name || named[0]!.email)
-        : route.strategy === "simul"
+        ? named[0]!.full_name || named[0]!.email
+        : route!.strategy === 'simul'
           ? `ring all (${named.length})`
-          : route.strategy === "round_robin"
+          : route!.strategy === 'round_robin'
             ? `round robin (${named.length})`
             : `single (${named.length})`;
+
   return (
-    <button
-      type="button"
-      onClick={onConfigure}
-      className="flex flex-col items-start text-left text-[11.5px] hover:text-teal"
-      title="Click to edit routing"
-    >
-      <span className="truncate">{summary}</span>
-      <span className="text-[10px] text-txt-3">
-        {route.ringTimeoutSec}s
-        {route.voicemailEnabled ? " · vm on" : ""}
-      </span>
-    </button>
+    <div className="flex flex-col items-start gap-1">
+      {isConnected ? (
+        <button
+          type="button"
+          onClick={disconnect}
+          disabled={busy}
+          title="Click to disconnect"
+          className="group inline-flex items-center gap-1 rounded-full border border-teal/40 bg-teal/10 px-2 py-0.5 text-[10.5px] font-medium text-teal hover:border-hp/40 hover:bg-hp/10 hover:text-hp disabled:opacity-50"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-teal group-hover:bg-hp" />
+          <span>Connected</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={connect}
+          disabled={busy}
+          className="rounded-full border border-line bg-canvas px-2 py-0.5 text-[10.5px] font-medium text-txt-2 hover:border-teal hover:bg-teal/10 hover:text-teal disabled:opacity-50"
+        >
+          {busy ? 'Connecting…' : 'Connect'}
+        </button>
+      )}
+      {hasRouting ? (
+        <button
+          type="button"
+          onClick={onConfigure}
+          className="flex flex-col items-start text-left text-[11.5px] hover:text-teal"
+          title="Click to edit routing"
+        >
+          <span className="truncate">{summary}</span>
+          <span className="text-[10px] text-txt-3">
+            {route!.ringTimeoutSec}s
+            {route!.voicemailEnabled ? ' · vm on' : ''}
+          </span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={onConfigure}
+          className="rounded-md border border-dashed border-line bg-canvas px-2 py-0.5 text-[10.5px] text-txt-3 hover:border-teal hover:text-teal"
+        >
+          Set up routing
+        </button>
+      )}
+    </div>
   );
 }
 

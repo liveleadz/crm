@@ -8,7 +8,12 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
-import { lookupCnam } from '@/lib/signalwire';
+import {
+  findIncomingPhoneNumberSid,
+  lookupCnam,
+  setIncomingPhoneNumberVoiceUrl,
+} from '@/lib/signalwire';
+import { getPublicAppUrl } from '@/lib/dialer';
 
 type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -93,6 +98,92 @@ export async function deleteInboundRoute(input: { numberId: string }): Promise<R
     .eq('number_id', input.numberId)
     .eq('brand_id', active.id);
   if (error) return { ok: false, error: error.message };
+  revalidatePath('/numbers');
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Carrier wiring — point the upstream voice handler at our SWML route so
+// inbound calls reach the platform. Stores `inbound_connected_at` on success
+// so the UI can render a "Connected" pill.
+// ---------------------------------------------------------------------------
+
+export async function connectInboundNumber(input: {
+  numberId: string;
+}): Promise<Result> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const supabase = await createServerClient();
+  const { data: num } = await supabase
+    .from('numbers')
+    .select('id, e164, signalwire_id')
+    .eq('id', input.numberId)
+    .eq('brand_id', active.id)
+    .maybeSingle();
+  if (!num) return { ok: false, error: 'Number not found in this brand.' };
+
+  // Resolve provider SID (cache on numbers.signalwire_id once we have it).
+  let sid = num.signalwire_id;
+  if (!sid) {
+    const lookup = await findIncomingPhoneNumberSid(num.e164);
+    if (!lookup.ok) return { ok: false, error: lookup.error };
+    if (!lookup.data) {
+      return {
+        ok: false,
+        error: 'Number is not provisioned upstream. Buy or port it first.',
+      };
+    }
+    sid = lookup.data;
+  }
+
+  const voiceUrl = `${getPublicAppUrl()}/api/swml/inbound/${encodeURIComponent(num.e164)}`;
+  const update = await setIncomingPhoneNumberVoiceUrl({ sid, voiceUrl });
+  if (!update.ok) return { ok: false, error: update.error };
+
+  await supabase
+    .from('numbers')
+    .update({
+      signalwire_id: sid,
+      inbound_connected_at: new Date().toISOString(),
+    })
+    .eq('id', input.numberId);
+
+  revalidatePath('/numbers');
+  return { ok: true };
+}
+
+export async function disconnectInboundNumber(input: {
+  numberId: string;
+}): Promise<Result> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const supabase = await createServerClient();
+  const { data: num } = await supabase
+    .from('numbers')
+    .select('id, e164, signalwire_id')
+    .eq('id', input.numberId)
+    .eq('brand_id', active.id)
+    .maybeSingle();
+  if (!num) return { ok: false, error: 'Number not found in this brand.' };
+  if (!num.signalwire_id) {
+    // Nothing to undo; just clear our flag.
+    await supabase
+      .from('numbers')
+      .update({ inbound_connected_at: null })
+      .eq('id', input.numberId);
+    revalidatePath('/numbers');
+    return { ok: true };
+  }
+  // Clearing voice_url tells the carrier to stop forwarding inbound to us.
+  const update = await setIncomingPhoneNumberVoiceUrl({
+    sid: num.signalwire_id,
+    voiceUrl: '',
+  });
+  if (!update.ok) return { ok: false, error: update.error };
+  await supabase
+    .from('numbers')
+    .update({ inbound_connected_at: null })
+    .eq('id', input.numberId);
   revalidatePath('/numbers');
   return { ok: true };
 }
