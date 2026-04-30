@@ -78,6 +78,16 @@ async function handle(req: NextRequest) {
     url.searchParams.get('from');
 
   const e164 = toRaw ? toE164(toRaw) : null;
+  // Server-side log so SignalWire's exact request shape is visible in
+  // Vercel logs the first time a real call hits.
+  console.log('[inbound-swml] hit', {
+    ct: req.headers.get('content-type'),
+    rawLen: raw.length,
+    body: raw.slice(0, 400),
+    parsedTo: toRaw,
+    parsedFrom: fromRaw,
+    resolvedE164: e164,
+  });
   if (!e164) return swml(HANGUP_SWML);
   const fromNumber = fromRaw ? toE164(fromRaw) ?? fromRaw : 'unknown';
 
@@ -179,20 +189,26 @@ async function handle(req: NextRequest) {
 
   // Compose the SWML response.
   //
-  // - First, try to connect to the routed subscribers in parallel via
-  //   their /private/<reference> Call Fabric addresses. The first browser
-  //   to accept wins; the others auto-cancel.
-  // - If all targets refuse / time out, fall through to a voicemail
-  //   greeting + recording.
-  const sections: Array<Record<string, unknown>> = [];
+  // 1. Explicit answer — SignalWire's pipeline behaves more predictably
+  //    when the script answers the leg before any connect.
+  // 2. Try to bridge the caller to a routed subscriber via Call Fabric.
+  //    Subscribers auto-provisioned via /api/fabric/subscribers/tokens
+  //    don't always have a /private address by default — only /public.
+  //    We pass an array so SignalWire tries both namespaces; the first
+  //    one with an online client wins, the others auto-cancel.
+  // 3. If all targets refuse / time out, the script falls through to a
+  //    voicemail greeting + recording.
+  const sections: Array<Record<string, unknown>> = [{ answer: {} }];
 
   if (ringEmails.length > 0) {
+    const addresses: string[] = [];
+    for (const email of ringEmails) {
+      addresses.push(`/private/${email}`);
+      addresses.push(`/public/${email}`);
+    }
     sections.push({
       connect: {
-        to:
-          ringEmails.length === 1
-            ? `/private/${ringEmails[0]}`
-            : ringEmails.map((e) => `/private/${e}`),
+        to: addresses.length === 1 ? addresses[0] : addresses,
         timeout: route?.ring_timeout_sec ?? 25,
         from: fromNumber !== 'unknown' ? fromNumber : e164,
       },
