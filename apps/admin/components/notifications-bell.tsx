@@ -1,10 +1,13 @@
 'use client';
 
-// Topbar bell. Polls /api/notifications/list every 30s, shows an unread
-// badge, and a dropdown with the latest 50. Clicking an item marks it read
-// and (optionally) navigates to the linked URL.
+// Topbar bell. Subscribes to a Supabase realtime channel on the
+// `notifications` table for instant unread updates, plus a 90s poll as a
+// fallback when the websocket is disconnected. Shows an unread badge and a
+// dropdown with the latest 50. Clicking an item marks it read and
+// (optionally) navigates to the linked URL.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createBrowserClient } from '@leadpilot/db/client';
 import {
   markAllNotificationsRead,
   markNotificationRead,
@@ -40,8 +43,38 @@ export function NotificationsBell() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 30_000);
+    // Fallback poll — realtime usually beats this, but if the websocket
+    // drops (sleep, network blip) we still pick up changes within 90s.
+    const t = setInterval(refresh, 90_000);
     return () => clearInterval(t);
+  }, [refresh]);
+
+  // Realtime — any insert/update on `notifications` for the current
+  // member triggers a refresh. RLS on the notifications table already
+  // restricts what this client can see, so we don't need to filter
+  // server-side; the channel only delivers rows the user can read.
+  useEffect(() => {
+    const supabase = createBrowserClient();
+    const channel = supabase
+      .channel('notifications-bell')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications' },
+        () => {
+          void refresh();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'notifications' },
+        () => {
+          void refresh();
+        },
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
   }, [refresh]);
 
   // Click outside closes the dropdown.
