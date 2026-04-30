@@ -199,9 +199,12 @@ async function handle(req: NextRequest) {
   // 3. On no-answer / refused, fall through to voicemail greeting (top-
   //    level `say` verb — `play.say.text` is NOT valid SWML and was
   //    the reason the previous fallback played silence) + record_call.
+  // SWML's TTS goes through the `play` verb with a `say:` URL scheme. There
+  // is NO top-level `say` action — passing one is silently ignored, which
+  // is what made the call go dead-silent for 20s then hang up.
   const sections: Array<Record<string, unknown>> = [
     { answer: {} },
-    { say: { text: 'Connecting your call.' } },
+    { play: { url: 'say:Connecting your call.' } },
   ];
 
   // Shorter timeout than configured so callers don't sit in silence too
@@ -230,7 +233,7 @@ async function handle(req: NextRequest) {
       "You've reached us. We can't take your call right now — please leave a message after the tone.";
     const vmSig = signVoicemailPath(callId);
     const vmUrl = `${getPublicAppUrl()}/api/swml/voicemail/${callId}/${vmSig}`;
-    sections.push({ say: { text: greeting } });
+    sections.push({ play: { url: `say:${greeting}` } });
     sections.push({
       record_call: {
         format: 'mp3',
