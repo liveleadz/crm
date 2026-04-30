@@ -6,6 +6,8 @@
 // rows are seeded defaults but still fully editable / removable. Drag the
 // grip handle on the left of any row to reorder.
 
+import Link from 'next/link';
+import type { Route } from 'next';
 import { useState, useTransition } from 'react';
 import {
   DndContext,
@@ -121,6 +123,8 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
           isEnabled: true,
           isSystem: false,
           sortOrder: (prev.at(-1)?.sortOrder ?? 0) + 10,
+          mode: 'simple',
+          graph: null,
         },
       ]);
       setEditor({ kind: 'closed' });
@@ -296,7 +300,18 @@ function SortableAutomationRow(props: {
       </div>
 
       <div className="flex items-center gap-1.5">
+        {automation.mode === 'graph' && (
+          <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-400">
+            Visual
+          </span>
+        )}
         <Toggle enabled={automation.isEnabled} onChange={props.onToggle} />
+        <Link
+          href={`/workflows/${automation.id}` as Route}
+          className="rounded-md border border-line bg-canvas px-2.5 py-1 text-[11.5px] hover:bg-surface-2"
+        >
+          Open
+        </Link>
         <button
           type="button"
           onClick={props.onEdit}

@@ -15,6 +15,8 @@ export type AutomationAction =
       assign_to_caller?: boolean;
     };
 
+export type AutomationMode = 'simple' | 'graph';
+
 export type Automation = {
   id: string;
   name: string;
@@ -25,7 +27,144 @@ export type Automation = {
   isEnabled: boolean;
   isSystem: boolean;
   sortOrder: number;
+  mode: AutomationMode;
+  graph: WorkflowGraph | null;
 };
+
+// ---------------------------------------------------------------------------
+// Graph (canvas-mode) types
+// ---------------------------------------------------------------------------
+//
+// A graph is a DAG starting at a single trigger node. Edges may carry a
+// sourceHandle when leaving a branch node, which selects the labelled output
+// (yes / no / none).
+//
+// Action nodes reuse the same AutomationAction shape used by simple mode so
+// existing executors are shared. Wait nodes are first-class (not actions)
+// because they suspend execution by writing to workflow_runs.next_run_at.
+
+export type Position = { x: number; y: number };
+
+export type BranchCondition =
+  | { kind: 'lead_has_tag'; tag_id: string }
+  | { kind: 'lead_in_stage'; stage_id: string }
+  | { kind: 'lead_field_equals'; field: 'do_not_call'; value: boolean }
+  | { kind: 'disposition_equals'; codes: string[] };
+
+export type GraphNode =
+  | {
+      id: string;
+      type: 'trigger';
+      position: Position;
+      data: { trigger_type: string; trigger_config: Record<string, unknown> };
+    }
+  | {
+      id: string;
+      type: 'action';
+      position: Position;
+      data: { action: AutomationAction };
+    }
+  | {
+      id: string;
+      type: 'branch';
+      position: Position;
+      data: { condition: BranchCondition };
+    }
+  | {
+      id: string;
+      type: 'wait';
+      position: Position;
+      data: { duration_minutes: number };
+    }
+  | {
+      id: string;
+      type: 'end';
+      position: Position;
+      data: Record<string, never>;
+    };
+
+export type BranchHandle = 'yes' | 'no' | 'none';
+
+export type GraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: BranchHandle;
+};
+
+export type WorkflowGraph = {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+};
+
+// Build a minimal graph from a simple-mode automation so the visual editor
+// has something to render the first time a user toggles a rule. Lays out
+// nodes in a straight vertical column with 140px spacing.
+export function graphFromSimple(input: {
+  triggerType: string;
+  triggerConfig: Record<string, unknown>;
+  actions: AutomationAction[];
+}): WorkflowGraph {
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
+  const x = 320;
+  let y = 80;
+  const triggerId = 'trigger';
+  nodes.push({
+    id: triggerId,
+    type: 'trigger',
+    position: { x, y },
+    data: { trigger_type: input.triggerType, trigger_config: input.triggerConfig },
+  });
+  let prev = triggerId;
+  for (let i = 0; i < input.actions.length; i++) {
+    y += 140;
+    const id = `a${i + 1}`;
+    nodes.push({
+      id,
+      type: 'action',
+      position: { x, y },
+      data: { action: input.actions[i]! },
+    });
+    edges.push({ id: `${prev}->${id}`, source: prev, target: id });
+    prev = id;
+  }
+  return { nodes, edges };
+}
+
+// Best-effort linearization of a graph back into a simple actions[] for
+// readouts (list view summary, sorting). Walks the trigger's first
+// downstream chain and stops on any branch / wait.
+export function linearizeGraph(graph: WorkflowGraph): AutomationAction[] {
+  if (!graph.nodes.length) return [];
+  const trigger = graph.nodes.find((n) => n.type === 'trigger');
+  if (!trigger) return [];
+  const out: AutomationAction[] = [];
+  const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
+  const outgoing = new Map<string, GraphEdge[]>();
+  for (const e of graph.edges) {
+    const list = outgoing.get(e.source) ?? [];
+    list.push(e);
+    outgoing.set(e.source, list);
+  }
+  let cursor: string | undefined = trigger.id;
+  const seen = new Set<string>();
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor);
+    const next = outgoing.get(cursor)?.[0];
+    if (!next) break;
+    const node = byId.get(next.target);
+    if (!node) break;
+    if (node.type === 'action') {
+      out.push(node.data.action);
+      cursor = node.id;
+    } else {
+      // Branches and waits can't be flattened — stop the readout here.
+      break;
+    }
+  }
+  return out;
+}
 
 export function describeAction(
   action: AutomationAction,
@@ -52,5 +191,35 @@ export function describeAction(
     }
     default:
       return 'Unknown action';
+  }
+}
+
+export function describeBranch(
+  cond: BranchCondition,
+  ctx: {
+    stages: { id: string; name: string }[];
+    tags: { id: string; name: string }[];
+    dispositions: { code: string; label: string }[];
+  },
+): string {
+  switch (cond.kind) {
+    case 'lead_has_tag': {
+      const t = ctx.tags.find((x) => x.id === cond.tag_id);
+      return `Lead has tag "${t?.name ?? 'tag'}"`;
+    }
+    case 'lead_in_stage': {
+      const s = ctx.stages.find((x) => x.id === cond.stage_id);
+      return `Lead is in stage "${s?.name ?? 'stage'}"`;
+    }
+    case 'lead_field_equals':
+      return `Lead.${cond.field} is ${cond.value}`;
+    case 'disposition_equals': {
+      const labels = cond.codes
+        .map((c) => ctx.dispositions.find((d) => d.code === c)?.label ?? c)
+        .join(', ');
+      return `Disposition is ${labels || '(none)'}`;
+    }
+    default:
+      return 'Unknown condition';
   }
 }

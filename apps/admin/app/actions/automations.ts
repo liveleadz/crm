@@ -8,7 +8,8 @@ import { revalidatePath } from 'next/cache';
 import { getActiveBrand } from '@/lib/active-brand';
 import { createServerClient } from '@leadpilot/db/server';
 import type { Json } from '@leadpilot/db/types';
-import type { AutomationAction } from '@/lib/automations';
+import type { AutomationAction, AutomationMode, WorkflowGraph } from '@/lib/automations';
+import { linearizeGraph } from '@/lib/automations';
 
 type Result = { ok: true; id?: string } | { ok: false; error: string };
 
@@ -119,6 +120,80 @@ export async function deleteAutomation(input: { id: string }): Promise<Result> {
   // can prune anything they don't want. The is_system flag is informational
   // (drives the "default" badge in the UI).
   const { error } = await supabase.from('automations').delete().eq('id', input.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/workflows');
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Graph mode
+// ---------------------------------------------------------------------------
+
+function validateGraph(graph: unknown): graph is WorkflowGraph {
+  if (!graph || typeof graph !== 'object') return false;
+  const g = graph as { nodes?: unknown; edges?: unknown };
+  if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) return false;
+  // Must have exactly one trigger.
+  const triggers = g.nodes.filter(
+    (n) => n && typeof n === 'object' && (n as { type?: unknown }).type === 'trigger',
+  );
+  if (triggers.length !== 1) return false;
+  const ids = new Set(g.nodes.map((n) => (n as { id: string }).id));
+  for (const e of g.edges) {
+    if (!e || typeof e !== 'object') return false;
+    const edge = e as { source?: string; target?: string };
+    if (!edge.source || !edge.target) return false;
+    if (!ids.has(edge.source) || !ids.has(edge.target)) return false;
+  }
+  return true;
+}
+
+export async function saveAutomationGraph(input: {
+  id: string;
+  graph: WorkflowGraph;
+}): Promise<Result> {
+  if (!validateGraph(input.graph)) return { ok: false, error: 'Invalid graph.' };
+
+  // Linearize the graph into actions[] for back-compat readouts. If the graph
+  // has branches/waits the trail stops at the first one — that's fine, the
+  // list view shows a "Visual" badge for graph-mode rules anyway.
+  const flat = linearizeGraph(input.graph);
+
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('automations')
+    .update({
+      mode: 'graph',
+      graph: input.graph as unknown as Json,
+      actions: flat as unknown as Json,
+    })
+    .eq('id', input.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/workflows');
+  revalidatePath(`/workflows/${input.id}`);
+  return { ok: true };
+}
+
+export async function setAutomationMode(input: {
+  id: string;
+  mode: AutomationMode;
+}): Promise<Result> {
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('automations')
+    .update({ mode: input.mode })
+    .eq('id', input.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/workflows');
+  revalidatePath(`/workflows/${input.id}`);
+  return { ok: true };
+}
+
+export async function renameAutomation(input: { id: string; name: string }): Promise<Result> {
+  const name = input.name.trim();
+  if (!name) return { ok: false, error: 'Name is required.' };
+  const supabase = await createServerClient();
+  const { error } = await supabase.from('automations').update({ name }).eq('id', input.id);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   return { ok: true };

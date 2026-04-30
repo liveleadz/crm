@@ -139,9 +139,11 @@ export type Database = {
           created_at: string
           created_by: string | null
           description: string | null
+          graph: Json | null
           id: string
           is_enabled: boolean
           is_system: boolean
+          mode: string
           name: string
           sort_order: number
           trigger_config: Json
@@ -154,9 +156,11 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           description?: string | null
+          graph?: Json | null
           id?: string
           is_enabled?: boolean
           is_system?: boolean
+          mode?: string
           name: string
           sort_order?: number
           trigger_config?: Json
@@ -169,9 +173,11 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           description?: string | null
+          graph?: Json | null
           id?: string
           is_enabled?: boolean
           is_system?: boolean
+          mode?: string
           name?: string
           sort_order?: number
           trigger_config?: Json
@@ -1180,6 +1186,7 @@ export type Database = {
       }
       workflow_runs: {
         Row: {
+          automation_id: string | null
           brand_id: string
           current_node_id: string | null
           finished_at: string | null
@@ -1189,9 +1196,10 @@ export type Database = {
           started_at: string
           state: Json
           status: string
-          workflow_id: string
+          workflow_id: string | null
         }
         Insert: {
+          automation_id?: string | null
           brand_id: string
           current_node_id?: string | null
           finished_at?: string | null
@@ -1201,9 +1209,10 @@ export type Database = {
           started_at?: string
           state?: Json
           status?: string
-          workflow_id: string
+          workflow_id?: string | null
         }
         Update: {
+          automation_id?: string | null
           brand_id?: string
           current_node_id?: string | null
           finished_at?: string | null
@@ -1213,9 +1222,16 @@ export type Database = {
           started_at?: string
           state?: Json
           status?: string
-          workflow_id?: string
+          workflow_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "workflow_runs_automation_id_fkey"
+            columns: ["automation_id"]
+            isOneToOne: false
+            referencedRelation: "automations"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "workflow_runs_brand_id_fkey"
             columns: ["brand_id"]

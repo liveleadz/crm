@@ -20,6 +20,7 @@
     "@signalwire/js": "^3.30.0",
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.46.1",
+    "@xyflow/react": "^12.10.2",
     "next": "^15.1.0",
     "papaparse": "^5.5.3",
     "react": "^19.0.0",
