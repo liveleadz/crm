@@ -272,6 +272,19 @@ async function importLeadsInner(input: {
   const valid = mapped.filter((m) => m.errors.length === 0);
   const invalidCount = mapped.length - valid.length;
 
+  // Per-row diagnostics — surfaces row index + every error/warning so the
+  // wizard's done screen can show "Row 47: bad phone "abc"". Capped at
+  // 200 entries to keep the action response bounded.
+  const rowReports: { row: number; errors: string[]; warnings: string[] }[] = [];
+  for (let i = 0; i < mapped.length; i += 1) {
+    const m = mapped[i];
+    if (!m) continue;
+    if (m.errors.length === 0 && m.warnings.length === 0) continue;
+    if (rowReports.length >= 200) break;
+    // Header is row 1 in the source CSV; data starts at row 2.
+    rowReports.push({ row: i + 2, errors: m.errors, warnings: m.warnings });
+  }
+
   if (valid.length === 0) {
     return {
       ok: false as const,
@@ -329,6 +342,7 @@ async function importLeadsInner(input: {
       invalid: invalidCount,
       skippedDuplicate,
       errors: mapped.flatMap((m) => (m.errors[0] ? [m.errors[0]] : [])).slice(0, 50),
+      rowReports,
     };
   }
 
@@ -481,6 +495,7 @@ async function importLeadsInner(input: {
     tagsCreated,
     tagAttachments,
     errors: mapped.flatMap((m) => (m.errors[0] ? [m.errors[0]] : [])).slice(0, 50),
+    rowReports,
   };
 }
 

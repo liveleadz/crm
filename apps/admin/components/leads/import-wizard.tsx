@@ -18,11 +18,14 @@ import type { CustomField } from '@/lib/lists';
 
 type Step = 'upload' | 'map' | 'preview' | 'done';
 
+type RowReport = { row: number; errors: string[]; warnings: string[] };
+
 type Result = {
   inserted: number;
   invalid: number;
   skippedDuplicate: number;
   errors: string[];
+  rowReports: RowReport[];
   listId: string | null;
   listName: string | null;
 };
@@ -200,8 +203,9 @@ export function ImportWizard({
         invalid: res.invalid,
         skippedDuplicate: res.skippedDuplicate,
         errors: res.errors,
+        rowReports: res.rowReports ?? [],
         listId: res.listId,
-        listName: res.listName ?? null,
+        listName: 'listName' in res ? (res.listName ?? null) : null,
       });
       setStep('done');
       // No router.refresh() — the action's revalidatePath('/leads')
@@ -588,17 +592,8 @@ export function ImportWizard({
             {result.invalid > 0 &&
               ` ${result.invalid.toLocaleString()} invalid row${result.invalid === 1 ? '' : 's'}.`}
           </p>
-          {result.errors.length > 0 && (
-            <details className="mt-4">
-              <summary className="cursor-pointer text-[11.5px] text-txt-3">
-                Show first {result.errors.length} error{result.errors.length === 1 ? '' : 's'}
-              </summary>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-[11.5px] text-hp">
-                {result.errors.map((e, i) => (
-                  <li key={i}>{e}</li>
-                ))}
-              </ul>
-            </details>
+          {result.rowReports.length > 0 && (
+            <RowReportTable rows={result.rowReports} />
           )}
           <div className="mt-6 flex gap-2">
             <button
@@ -618,6 +613,113 @@ export function ImportWizard({
         </div>
       )}
     </div>
+  );
+}
+
+// Per-row diagnostics shown on the Done screen. Splits rows into
+// "skipped" (errors block insert) vs "imported with warnings" (e.g. bad
+// phone format — row inserted, field nulled). Includes a CSV download
+// so the agent can share/repair the source file.
+function RowReportTable({ rows }: { rows: RowReport[] }) {
+  const skipped = rows.filter((r) => r.errors.length > 0);
+  const warned = rows.filter((r) => r.errors.length === 0 && r.warnings.length > 0);
+
+  function downloadCsv() {
+    const header = ['Row', 'Status', 'Messages'];
+    const escape = (v: string) =>
+      /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    const lines = [header.join(',')];
+    for (const r of rows) {
+      const status = r.errors.length > 0 ? 'Skipped' : 'Imported with warnings';
+      const messages = [...r.errors, ...r.warnings].join('; ');
+      lines.push([String(r.row), status, messages].map(escape).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `import-row-report_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <details className="mt-4 rounded-xl border border-line bg-canvas/50">
+      <summary className="cursor-pointer px-4 py-2.5 text-[11.5px] text-txt-2">
+        <span className="font-medium">Row report</span>
+        <span className="ml-2 text-txt-3">
+          {skipped.length > 0 && (
+            <>
+              {skipped.length} skipped
+              {warned.length > 0 && ' · '}
+            </>
+          )}
+          {warned.length > 0 && <>{warned.length} with warnings</>}
+        </span>
+      </summary>
+      <div className="border-t border-line">
+        <div className="flex items-center justify-between px-4 py-2 text-[11px] text-txt-3">
+          <span>Source row numbers (1-indexed; row 1 = header).</span>
+          <button
+            type="button"
+            onClick={downloadCsv}
+            className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] font-medium text-txt-2 hover:bg-canvas"
+          >
+            Download CSV
+          </button>
+        </div>
+        <div className="max-h-72 overflow-auto">
+          <table className="w-full text-[11.5px]">
+            <thead>
+              <tr className="border-y border-line bg-surface text-left text-[10.5px] uppercase tracking-wide text-txt-3">
+                <th className="px-4 py-1.5 font-semibold">Row</th>
+                <th className="px-4 py-1.5 font-semibold">Status</th>
+                <th className="px-4 py-1.5 font-semibold">Messages</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const isError = r.errors.length > 0;
+                return (
+                  <tr key={i} className="border-b border-line last:border-b-0">
+                    <td className="px-4 py-1.5 align-top tabular-nums text-txt-2">
+                      {r.row}
+                    </td>
+                    <td className="px-4 py-1.5 align-top">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          isError
+                            ? 'bg-hp/10 text-hp'
+                            : 'bg-amber-500/10 text-amber-600'
+                        }`}
+                      >
+                        {isError ? 'Skipped' : 'Warning'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-1.5 align-top text-txt-2">
+                      <ul className="space-y-0.5">
+                        {r.errors.map((e, j) => (
+                          <li key={`e${j}`} className="text-hp">
+                            {e}
+                          </li>
+                        ))}
+                        {r.warnings.map((w, j) => (
+                          <li key={`w${j}`} className="text-txt-3">
+                            {w}
+                          </li>
+                        ))}
+                      </ul>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
   );
 }
 

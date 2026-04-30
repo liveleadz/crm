@@ -23,6 +23,8 @@ export async function exportAgentReportCsv(input: {
   range: ReportRange;
   agentId?: string | null;
   direction?: DirectionFilter;
+  fromIso?: string | null;
+  toIso?: string | null;
 }): Promise<{ ok: true; csv: string; filename: string } | { ok: false; error: string }> {
   try {
     const active = await getActiveBrand();
@@ -31,6 +33,8 @@ export async function exportAgentReportCsv(input: {
       range: input.range,
       agentId: input.agentId ?? null,
       direction: input.direction ?? 'all',
+      fromIso: input.fromIso ?? null,
+      toIso: input.toIso ?? null,
     });
 
     const header = [

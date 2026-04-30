@@ -11,10 +11,14 @@ export function ExportButton({
   range,
   agentId,
   direction,
+  fromDate,
+  toDate,
 }: {
   range: ReportRange;
   agentId: string | null;
   direction: DirectionFilter;
+  fromDate: string | null;
+  toDate: string | null;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +26,19 @@ export function ExportButton({
   function trigger() {
     setError(null);
     startTransition(async () => {
-      const res = await exportAgentReportCsv({ range, agentId, direction });
+      const fromIso = fromDate
+        ? new Date(`${fromDate}T00:00:00.000Z`).toISOString()
+        : null;
+      const toIso = toDate
+        ? new Date(`${toDate}T23:59:59.999Z`).toISOString()
+        : null;
+      const res = await exportAgentReportCsv({
+        range,
+        agentId,
+        direction,
+        fromIso,
+        toIso,
+      });
       if (!res.ok) {
         setError(res.error);
         return;

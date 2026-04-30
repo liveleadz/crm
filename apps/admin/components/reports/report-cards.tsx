@@ -11,6 +11,7 @@ import {
   formatDuration,
   formatPct,
 } from '@/lib/reports';
+import { AgentDrillLink } from './agent-drill-link';
 
 export function KpiCards({ kpis }: { kpis: ReportKpis }) {
   const tiles: Array<{
@@ -80,7 +81,13 @@ export function KpiCards({ kpis }: { kpis: ReportKpis }) {
   );
 }
 
-export function AgentTable({ rows }: { rows: AgentRow[] }) {
+export function AgentTable({
+  rows,
+  activeAgentId,
+}: {
+  rows: AgentRow[];
+  activeAgentId: string | null;
+}) {
   if (rows.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-line-2 bg-surface p-8 text-center text-[12px] text-txt-3">
@@ -90,12 +97,18 @@ export function AgentTable({ rows }: { rows: AgentRow[] }) {
   }
   return (
     <div className="overflow-hidden rounded-2xl border border-line bg-surface">
-      <div className="border-b border-line bg-canvas px-5 py-3">
-        <h3 className="text-[13.5px] font-semibold">Per-agent breakdown</h3>
-        <p className="text-[11.5px] text-txt-3">
-          Sorted by call volume. Avg talk time is the average over connected
-          calls.
-        </p>
+      <div className="flex items-start justify-between border-b border-line bg-canvas px-5 py-3">
+        <div>
+          <h3 className="text-[13.5px] font-semibold">Per-agent breakdown</h3>
+          <p className="text-[11.5px] text-txt-3">
+            Sorted by call volume. Click an agent to drill in.
+          </p>
+        </div>
+        {activeAgentId && (
+          <AgentDrillLink agentId={null} className="text-[11px] text-teal hover:underline">
+            Clear filter
+          </AgentDrillLink>
+        )}
       </div>
       <table className="w-full text-[12.5px]">
         <thead>
@@ -116,10 +129,15 @@ export function AgentTable({ rows }: { rows: AgentRow[] }) {
               className="border-b border-line last:border-b-0 hover:bg-canvas/40"
             >
               <td className="px-5 py-2">
-                <div className="font-medium">{r.name}</div>
-                {r.email && r.email !== r.name && (
-                  <div className="text-[11px] text-txt-3">{r.email}</div>
-                )}
+                <AgentDrillLink
+                  agentId={activeAgentId === r.memberId ? null : r.memberId}
+                  className="block hover:text-teal"
+                >
+                  <div className="font-medium">{r.name}</div>
+                  {r.email && r.email !== r.name && (
+                    <div className="text-[11px] text-txt-3">{r.email}</div>
+                  )}
+                </AgentDrillLink>
               </td>
               <td className="px-5 py-2 text-right tabular-nums">
                 {r.calls.toLocaleString()}
