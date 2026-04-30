@@ -25,9 +25,10 @@ type Props = {
   stages: StageRef[];
   tags: TagRef[];
   dispositions: DispositionRef[];
+  members?: { id: string; full_name: string | null; email: string }[];
 };
 
-export function AutomationEditor({ initial, stages, tags, dispositions }: Props) {
+export function AutomationEditor({ initial, stages, tags, dispositions, members }: Props) {
   const router = useRouter();
   const [view, setView] = useState<'standard' | 'visual'>(
     initial.mode === 'graph' ? 'visual' : 'standard',
@@ -150,6 +151,8 @@ export function AutomationEditor({ initial, stages, tags, dispositions }: Props)
               stages,
               tags,
               dispositions,
+              members,
+              automation: { id: initial.id, webhookToken: initial.webhookToken },
             }}
             onChange={onCanvasChange}
           />

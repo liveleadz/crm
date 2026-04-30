@@ -4,10 +4,17 @@
 // per-type form that mutates the underlying GraphNode via onChange. The
 // canvas itself owns the node state — this panel is dumb.
 
+import { useState, useTransition } from 'react';
+import { regenerateWebhookToken } from '@/app/actions/automations';
 import type {
   AutomationAction,
   BranchCondition,
   GraphNode,
+  HttpMethod,
+  LeadFieldKey,
+  MemberRole,
+  WaitMode,
+  WaitNodeData,
 } from '@/lib/automation-types';
 
 type Props = {
@@ -16,6 +23,8 @@ type Props = {
     stages: { id: string; name: string }[];
     tags: { id: string; name: string }[];
     dispositions: { code: string; label: string }[];
+    members?: { id: string; full_name: string | null; email: string }[];
+    automation?: { id: string; webhookToken: string | null };
   };
   onChange: (next: GraphNode) => void;
   onDelete: () => void;
@@ -94,9 +103,44 @@ function TriggerEditor({
   ctx: Props['ctx'];
   onChange: (n: GraphNode) => void;
 }) {
-  if (node.data.trigger_type !== 'disposition_set') {
-    return <p className="text-[12px] text-txt-3">Trigger: {node.data.trigger_type}</p>;
+  const triggerType = node.data.trigger_type;
+  function setKind(kind: string) {
+    onChange({
+      ...node,
+      data: {
+        trigger_type: kind,
+        trigger_config: kind === 'disposition_set' ? { codes: [] } : {},
+      },
+    });
   }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <Label>Trigger type</Label>
+        <select value={triggerType} onChange={(e) => setKind(e.target.value)} className={inputCls}>
+          <option value="disposition_set">When call disposition is set</option>
+          <option value="webhook_received">When webhook is received</option>
+        </select>
+      </div>
+
+      {triggerType === 'disposition_set' && (
+        <DispositionTriggerFields node={node} ctx={ctx} onChange={onChange} />
+      )}
+      {triggerType === 'webhook_received' && <WebhookTriggerFields ctx={ctx} />}
+    </div>
+  );
+}
+
+function DispositionTriggerFields({
+  node,
+  ctx,
+  onChange,
+}: {
+  node: Extract<GraphNode, { type: 'trigger' }>;
+  ctx: Props['ctx'];
+  onChange: (n: GraphNode) => void;
+}) {
   const codes = Array.isArray(node.data.trigger_config.codes)
     ? (node.data.trigger_config.codes as string[])
     : [];
@@ -140,6 +184,83 @@ function TriggerEditor({
   );
 }
 
+function WebhookTriggerFields({ ctx }: { ctx: Props['ctx'] }) {
+  const [pending, startTransition] = useTransition();
+  const [token, setToken] = useState(ctx.automation?.webhookToken ?? null);
+  const [copied, setCopied] = useState(false);
+
+  const origin =
+    typeof window !== 'undefined' ? window.location.origin : 'https://your-app.example';
+  const url = token ? `${origin}/api/webhooks/automation/${token}` : null;
+
+  async function regen() {
+    if (!ctx.automation?.id) return;
+    startTransition(async () => {
+      const res = await regenerateWebhookToken({ id: ctx.automation!.id });
+      if (res.ok) {
+        // The action revalidated the page; until the parent rerenders we
+        // optimistically clear the token and prompt a save.
+        setToken(null);
+        // Force a soft reload so loadAutomation picks up the new token.
+        if (typeof window !== 'undefined') window.location.reload();
+      }
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      {!token ? (
+        <p className="text-[12px] text-txt-3">
+          Save the workflow once to generate a public webhook URL. Trigger config is empty for
+          this kind — the URL itself is the trigger.
+        </p>
+      ) : (
+        <>
+          <Label>Webhook URL</Label>
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              readOnly
+              value={url ?? ''}
+              className={`${inputCls} flex-1 font-mono text-[11px]`}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                if (!url) return;
+                try {
+                  await navigator.clipboard.writeText(url);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1200);
+                } catch {
+                  /* ignore */
+                }
+              }}
+              className="rounded-md border border-line bg-canvas px-2 py-1.5 text-[11.5px] hover:bg-surface-2"
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="text-[11px] text-txt-3">
+            POST any JSON body. Pass <code className="rounded bg-canvas px-1">lead_id</code> to
+            scope the run to a specific lead. Reference the body in templates with{' '}
+            <code className="rounded bg-canvas px-1">{'{{webhook.body.field}}'}</code>.
+          </p>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={regen}
+            className="rounded-md border border-hp/30 bg-hp/5 px-2.5 py-1 text-[11.5px] text-hp hover:bg-hp/10 disabled:opacity-50"
+          >
+            {pending ? 'Regenerating…' : 'Regenerate token'}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Action
 // ---------------------------------------------------------------------------
@@ -175,6 +296,21 @@ function ActionEditor({
       case 'create_task':
         next = { kind: 'create_task', title: 'Follow up', task_kind: 'call', assign_to_caller: true };
         break;
+      case 'send_email':
+        next = { kind: 'send_email', to: 'lead', subject: 'Following up', body: 'Hi {{lead.first_name}},\n\n' };
+        break;
+      case 'send_sms':
+        next = { kind: 'send_sms', to: 'lead', body: 'Hi {{lead.first_name}}, ' };
+        break;
+      case 'send_notification':
+        next = { kind: 'send_notification', recipient_kind: 'caller', title: 'Workflow update' };
+        break;
+      case 'http_request':
+        next = { kind: 'http_request', method: 'POST', url: '', headers: [], body_template: '{}' };
+        break;
+      case 'update_lead_field':
+        next = { kind: 'update_lead_field', field: 'first_name', value: '' };
+        break;
     }
     onChange({ ...node, data: { action: next } });
   }
@@ -188,10 +324,21 @@ function ActionEditor({
           onChange={(e) => changeKind(e.target.value as AutomationAction['kind'])}
           className={inputCls}
         >
-          <option value="move_stage">Move lead to stage</option>
-          <option value="mark_dnc">Mark Do Not Call</option>
-          <option value="add_tag">Add tag</option>
-          <option value="create_task">Create task</option>
+          <optgroup label="Communication">
+            <option value="send_email">Send email</option>
+            <option value="send_sms">Send SMS</option>
+            <option value="send_notification">Notify team (in-app)</option>
+          </optgroup>
+          <optgroup label="Lead actions">
+            <option value="move_stage">Move lead to stage</option>
+            <option value="add_tag">Add tag</option>
+            <option value="mark_dnc">Mark Do Not Call</option>
+            <option value="create_task">Create task</option>
+            <option value="update_lead_field">Update lead field</option>
+          </optgroup>
+          <optgroup label="Integration">
+            <option value="http_request">HTTP request</option>
+          </optgroup>
         </select>
       </div>
 
@@ -319,7 +466,407 @@ function ActionEditor({
           </label>
         </div>
       )}
+
+      {action.kind === 'send_email' && (
+        <SendEmailEditor action={action} patch={patch} />
+      )}
+      {action.kind === 'send_sms' && (
+        <SendSmsEditor action={action} patch={patch} />
+      )}
+      {action.kind === 'send_notification' && (
+        <SendNotificationEditor action={action} ctx={ctx} patch={patch} />
+      )}
+      {action.kind === 'http_request' && (
+        <HttpRequestEditor action={action} patch={patch} />
+      )}
+      {action.kind === 'update_lead_field' && (
+        <UpdateLeadFieldEditor action={action} patch={patch} />
+      )}
+
+      <TokensHint />
     </div>
+  );
+}
+
+function SendEmailEditor({
+  action,
+  patch,
+}: {
+  action: Extract<AutomationAction, { kind: 'send_email' }>;
+  patch: (p: Partial<AutomationAction>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label>Recipient</Label>
+        <select
+          value={action.to}
+          onChange={(e) => patch({ to: e.target.value as 'lead' | 'literal' } as Partial<AutomationAction>)}
+          className={inputCls}
+        >
+          <option value="lead">Lead's email</option>
+          <option value="literal">Specific address</option>
+        </select>
+      </div>
+      {action.to === 'literal' && (
+        <div>
+          <Label>To</Label>
+          <input
+            type="text"
+            value={action.literal_to ?? ''}
+            onChange={(e) => patch({ literal_to: e.target.value } as Partial<AutomationAction>)}
+            placeholder="ops@example.com"
+            className={inputCls}
+          />
+        </div>
+      )}
+      <div>
+        <Label>Subject</Label>
+        <input
+          type="text"
+          value={action.subject}
+          onChange={(e) => patch({ subject: e.target.value } as Partial<AutomationAction>)}
+          className={inputCls}
+        />
+      </div>
+      <div>
+        <Label>Body</Label>
+        <textarea
+          rows={6}
+          value={action.body}
+          onChange={(e) => patch({ body: e.target.value } as Partial<AutomationAction>)}
+          className={`${inputCls} resize-y font-mono text-[12px]`}
+        />
+      </div>
+      <p className="text-[11px] text-txt-3">
+        Queued in the message outbox. Hooks up to your email provider when{' '}
+        <code className="rounded bg-canvas px-1">RESEND_API_KEY</code> is configured.
+      </p>
+    </div>
+  );
+}
+
+function SendSmsEditor({
+  action,
+  patch,
+}: {
+  action: Extract<AutomationAction, { kind: 'send_sms' }>;
+  patch: (p: Partial<AutomationAction>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label>Recipient</Label>
+        <select
+          value={action.to}
+          onChange={(e) => patch({ to: e.target.value as 'lead' | 'literal' } as Partial<AutomationAction>)}
+          className={inputCls}
+        >
+          <option value="lead">Lead's phone</option>
+          <option value="literal">Specific number</option>
+        </select>
+      </div>
+      {action.to === 'literal' && (
+        <div>
+          <Label>To (E.164)</Label>
+          <input
+            type="text"
+            value={action.literal_to ?? ''}
+            onChange={(e) => patch({ literal_to: e.target.value } as Partial<AutomationAction>)}
+            placeholder="+15555550123"
+            className={inputCls}
+          />
+        </div>
+      )}
+      <div>
+        <Label>Message</Label>
+        <textarea
+          rows={4}
+          value={action.body}
+          onChange={(e) => patch({ body: e.target.value } as Partial<AutomationAction>)}
+          className={`${inputCls} resize-y`}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SendNotificationEditor({
+  action,
+  ctx,
+  patch,
+}: {
+  action: Extract<AutomationAction, { kind: 'send_notification' }>;
+  ctx: Props['ctx'];
+  patch: (p: Partial<AutomationAction>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label>Recipient</Label>
+        <select
+          value={action.recipient_kind}
+          onChange={(e) =>
+            patch({
+              recipient_kind: e.target.value as Extract<AutomationAction, { kind: 'send_notification' }>['recipient_kind'],
+            } as Partial<AutomationAction>)
+          }
+          className={inputCls}
+        >
+          <option value="caller">The agent who took the call</option>
+          <option value="lead_owner">Lead's owner</option>
+          <option value="role">Everyone with a role</option>
+          <option value="member">A specific member</option>
+        </select>
+      </div>
+      {action.recipient_kind === 'role' && (
+        <div>
+          <Label>Role</Label>
+          <select
+            value={action.role ?? 'manager'}
+            onChange={(e) => patch({ role: e.target.value as MemberRole } as Partial<AutomationAction>)}
+            className={inputCls}
+          >
+            <option value="owner">Owner</option>
+            <option value="admin">Admin</option>
+            <option value="manager">Manager</option>
+            <option value="agent">Agent</option>
+            <option value="viewer">Viewer</option>
+          </select>
+        </div>
+      )}
+      {action.recipient_kind === 'member' && ctx.members && ctx.members.length > 0 && (
+        <div>
+          <Label>Member</Label>
+          <select
+            value={action.member_id ?? ''}
+            onChange={(e) => patch({ member_id: e.target.value } as Partial<AutomationAction>)}
+            className={inputCls}
+          >
+            <option value="">Pick someone</option>
+            {ctx.members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.full_name || m.email}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div>
+        <Label>Title</Label>
+        <input
+          type="text"
+          value={action.title}
+          onChange={(e) => patch({ title: e.target.value } as Partial<AutomationAction>)}
+          className={inputCls}
+        />
+      </div>
+      <div>
+        <Label>Body (optional)</Label>
+        <textarea
+          rows={3}
+          value={action.body ?? ''}
+          onChange={(e) => patch({ body: e.target.value } as Partial<AutomationAction>)}
+          className={`${inputCls} resize-y`}
+        />
+      </div>
+      <div>
+        <Label>Link URL (optional)</Label>
+        <input
+          type="text"
+          value={action.link_url ?? ''}
+          onChange={(e) => patch({ link_url: e.target.value } as Partial<AutomationAction>)}
+          placeholder="/leads/{{webhook.body.lead_id}}"
+          className={inputCls}
+        />
+      </div>
+    </div>
+  );
+}
+
+function HttpRequestEditor({
+  action,
+  patch,
+}: {
+  action: Extract<AutomationAction, { kind: 'http_request' }>;
+  patch: (p: Partial<AutomationAction>) => void;
+}) {
+  const headers = action.headers ?? [];
+  function setHeader(i: number, key: 'key' | 'value', v: string) {
+    const next = headers.slice();
+    next[i] = { ...next[i], [key]: v } as { key: string; value: string };
+    patch({ headers: next } as Partial<AutomationAction>);
+  }
+  function addHeader() {
+    patch({ headers: [...headers, { key: '', value: '' }] } as Partial<AutomationAction>);
+  }
+  function removeHeader(i: number) {
+    const next = headers.slice();
+    next.splice(i, 1);
+    patch({ headers: next } as Partial<AutomationAction>);
+  }
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-[90px_1fr] gap-2">
+        <div>
+          <Label>Method</Label>
+          <select
+            value={action.method}
+            onChange={(e) => patch({ method: e.target.value as HttpMethod } as Partial<AutomationAction>)}
+            className={inputCls}
+          >
+            <option value="POST">POST</option>
+            <option value="GET">GET</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+        </div>
+        <div>
+          <Label>URL</Label>
+          <input
+            type="text"
+            value={action.url}
+            onChange={(e) => patch({ url: e.target.value } as Partial<AutomationAction>)}
+            placeholder="https://hooks.example.com/abc"
+            className={inputCls}
+          />
+        </div>
+      </div>
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <Label>Headers</Label>
+          <button
+            type="button"
+            onClick={addHeader}
+            className="text-[11.5px] text-teal hover:underline"
+          >
+            + Add header
+          </button>
+        </div>
+        <div className="space-y-1.5">
+          {headers.map((h, i) => (
+            <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
+              <input
+                type="text"
+                value={h.key}
+                onChange={(e) => setHeader(i, 'key', e.target.value)}
+                placeholder="Authorization"
+                className={inputCls}
+              />
+              <input
+                type="text"
+                value={h.value}
+                onChange={(e) => setHeader(i, 'value', e.target.value)}
+                placeholder="Bearer …"
+                className={inputCls}
+              />
+              <button
+                type="button"
+                onClick={() => removeHeader(i)}
+                className="grid h-7 w-7 place-items-center rounded-md text-txt-3 hover:bg-hp/10 hover:text-hp"
+                aria-label="Remove header"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+      {action.method !== 'GET' && (
+        <div>
+          <Label>Body (template)</Label>
+          <textarea
+            rows={5}
+            value={action.body_template ?? ''}
+            onChange={(e) => patch({ body_template: e.target.value } as Partial<AutomationAction>)}
+            placeholder='{ "lead_id": "{{lead.email}}" }'
+            className={`${inputCls} resize-y font-mono text-[11.5px]`}
+          />
+        </div>
+      )}
+      <p className="text-[11px] text-txt-3">
+        Private IPs (10/8, 172.16/12, 192.168/16, 127/8) are blocked. 5s timeout, retry once on
+        5xx.
+      </p>
+    </div>
+  );
+}
+
+function UpdateLeadFieldEditor({
+  action,
+  patch,
+}: {
+  action: Extract<AutomationAction, { kind: 'update_lead_field' }>;
+  patch: (p: Partial<AutomationAction>) => void;
+}) {
+  const isCustom = action.field.startsWith('custom.');
+  const customKey = isCustom ? action.field.slice('custom.'.length) : '';
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label>Field</Label>
+        <select
+          value={isCustom ? '__custom' : action.field}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === '__custom') {
+              patch({ field: 'custom.' as LeadFieldKey } as Partial<AutomationAction>);
+            } else {
+              patch({ field: v as LeadFieldKey } as Partial<AutomationAction>);
+            }
+          }}
+          className={inputCls}
+        >
+          <option value="first_name">first_name</option>
+          <option value="last_name">last_name</option>
+          <option value="email">email</option>
+          <option value="phone">phone</option>
+          <option value="notes">notes</option>
+          <option value="__custom">Custom field…</option>
+        </select>
+      </div>
+      {isCustom && (
+        <div>
+          <Label>Custom field key</Label>
+          <input
+            type="text"
+            value={customKey}
+            onChange={(e) =>
+              patch({ field: `custom.${e.target.value}` as LeadFieldKey } as Partial<AutomationAction>)
+            }
+            placeholder="lead_score"
+            className={inputCls}
+          />
+        </div>
+      )}
+      <div>
+        <Label>Value</Label>
+        <input
+          type="text"
+          value={action.value}
+          onChange={(e) => patch({ value: e.target.value } as Partial<AutomationAction>)}
+          placeholder="{{lead.first_name}} (Sale)"
+          className={inputCls}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TokensHint() {
+  return (
+    <details className="rounded-lg border border-line bg-canvas/50 p-2 text-[11px] text-txt-3">
+      <summary className="cursor-pointer text-txt-2">Available tokens</summary>
+      <div className="mt-1.5 space-y-0.5 font-mono">
+        <div>{'{{lead.first_name}} {{lead.last_name}} {{lead.full_name}}'}</div>
+        <div>{'{{lead.email}} {{lead.phone}} {{lead.stage}}'}</div>
+        <div>{'{{brand.name}}'}</div>
+        <div>{'{{trigger.disposition}} {{trigger.callback_at}}'}</div>
+        <div>{'{{webhook.body.<json-path>}}'}</div>
+      </div>
+    </details>
   );
 }
 
@@ -477,27 +1024,122 @@ function WaitEditor({
   node: Extract<GraphNode, { type: 'wait' }>;
   onChange: (n: GraphNode) => void;
 }) {
+  const data = node.data as WaitNodeData;
+  const mode: WaitMode = (data as { mode?: WaitMode }).mode ?? 'fixed_minutes';
+  function setMode(next: WaitMode) {
+    let nextData: WaitNodeData;
+    switch (next) {
+      case 'fixed_minutes':
+        nextData = { mode: 'fixed_minutes', duration_minutes: 5 };
+        break;
+      case 'until_callback_time':
+        nextData = { mode: 'until_callback_time' };
+        break;
+      case 'until_datetime':
+        nextData = { mode: 'until_datetime', iso_at: '' };
+        break;
+      case 'business_days':
+        nextData = { mode: 'business_days', days: 1 };
+        break;
+    }
+    onChange({ ...node, data: nextData });
+  }
   return (
-    <div>
-      <Label>Wait duration (minutes)</Label>
-      <input
-        type="number"
-        min={0}
-        value={node.data.duration_minutes}
-        onChange={(e) =>
-          onChange({
-            ...node,
-            data: { duration_minutes: Math.max(0, Number(e.target.value) || 0) },
-          })
-        }
-        className={inputCls}
-      />
-      <p className="mt-2 text-[11px] text-txt-3">
+    <div className="space-y-3">
+      <div>
+        <Label>Wait until</Label>
+        <select value={mode} onChange={(e) => setMode(e.target.value as WaitMode)} className={inputCls}>
+          <option value="fixed_minutes">A fixed amount of time</option>
+          <option value="until_callback_time">The lead's callback time</option>
+          <option value="until_datetime">A specific date &amp; time</option>
+          <option value="business_days">N business days from now</option>
+        </select>
+      </div>
+
+      {mode === 'fixed_minutes' && (
+        <div>
+          <Label>Minutes</Label>
+          <input
+            type="number"
+            min={0}
+            value={(data as { duration_minutes: number }).duration_minutes}
+            onChange={(e) =>
+              onChange({
+                ...node,
+                data: {
+                  mode: 'fixed_minutes',
+                  duration_minutes: Math.max(0, Number(e.target.value) || 0),
+                },
+              })
+            }
+            className={inputCls}
+          />
+        </div>
+      )}
+
+      {mode === 'until_callback_time' && (
+        <p className="text-[11.5px] text-txt-3">
+          Pauses until the call's <code className="rounded bg-canvas px-1">callback_at</code>{' '}
+          timestamp. If the call had no callback set, this falls through with no delay.
+        </p>
+      )}
+
+      {mode === 'until_datetime' && (
+        <div>
+          <Label>Resume at (local time)</Label>
+          <input
+            type="datetime-local"
+            value={toLocalInput((data as { iso_at: string }).iso_at)}
+            onChange={(e) =>
+              onChange({
+                ...node,
+                data: {
+                  mode: 'until_datetime',
+                  iso_at: e.target.value ? new Date(e.target.value).toISOString() : '',
+                },
+              })
+            }
+            className={inputCls}
+          />
+        </div>
+      )}
+
+      {mode === 'business_days' && (
+        <div>
+          <Label>Days (Mon–Fri)</Label>
+          <input
+            type="number"
+            min={0}
+            value={(data as { days: number }).days}
+            onChange={(e) =>
+              onChange({
+                ...node,
+                data: { mode: 'business_days', days: Math.max(0, Number(e.target.value) || 0) },
+              })
+            }
+            className={inputCls}
+          />
+        </div>
+      )}
+
+      <p className="text-[11px] text-txt-3">
         Resumed by a 1-minute cron tick — actual execution may happen up to a minute after the
-        configured duration.
+        configured time.
       </p>
     </div>
   );
+}
+
+function toLocalInput(iso: string | undefined): string {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return '';
+  }
 }
 
 // ---------------------------------------------------------------------------

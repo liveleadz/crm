@@ -2,6 +2,18 @@
 // server-only loader file so client UI can import describeAction without
 // pulling the Supabase server client into the browser bundle.
 
+export type MemberRole = 'owner' | 'admin' | 'manager' | 'agent' | 'viewer';
+
+export type LeadFieldKey =
+  | 'first_name'
+  | 'last_name'
+  | 'email'
+  | 'phone'
+  | 'notes'
+  | `custom.${string}`;
+
+export type HttpMethod = 'POST' | 'GET' | 'PUT' | 'PATCH' | 'DELETE';
+
 export type AutomationAction =
   | { kind: 'move_stage'; stage_id: string }
   | { kind: 'mark_dnc' }
@@ -13,6 +25,40 @@ export type AutomationAction =
       due_in_minutes?: number;
       use_callback_at?: boolean;
       assign_to_caller?: boolean;
+    }
+  | {
+      kind: 'send_email';
+      to: 'lead' | 'literal';
+      literal_to?: string;
+      subject: string;
+      body: string;
+    }
+  | {
+      kind: 'send_sms';
+      to: 'lead' | 'literal';
+      literal_to?: string;
+      body: string;
+    }
+  | {
+      kind: 'send_notification';
+      recipient_kind: 'caller' | 'lead_owner' | 'role' | 'member';
+      role?: MemberRole;
+      member_id?: string;
+      title: string;
+      body?: string;
+      link_url?: string;
+    }
+  | {
+      kind: 'http_request';
+      method: HttpMethod;
+      url: string;
+      headers?: Array<{ key: string; value: string }>;
+      body_template?: string;
+    }
+  | {
+      kind: 'update_lead_field';
+      field: LeadFieldKey;
+      value: string;
     };
 
 export type AutomationMode = 'simple' | 'graph';
@@ -29,7 +75,16 @@ export type Automation = {
   sortOrder: number;
   mode: AutomationMode;
   graph: WorkflowGraph | null;
+  webhookToken: string | null;
 };
+
+export type WaitMode = 'fixed_minutes' | 'until_callback_time' | 'until_datetime' | 'business_days';
+
+export type WaitNodeData =
+  | { mode?: 'fixed_minutes'; duration_minutes: number }
+  | { mode: 'until_callback_time' }
+  | { mode: 'until_datetime'; iso_at: string }
+  | { mode: 'business_days'; days: number };
 
 // ---------------------------------------------------------------------------
 // Graph (canvas-mode) types
@@ -74,7 +129,7 @@ export type GraphNode =
       id: string;
       type: 'wait';
       position: Position;
-      data: { duration_minutes: number };
+      data: WaitNodeData;
     }
   | {
       id: string;
@@ -189,9 +244,90 @@ export function describeAction(
           : 'no due date';
       return `Create task "${action.title}" (${when})`;
     }
+    case 'send_email': {
+      const to = action.to === 'lead' ? 'lead email' : action.literal_to || 'recipient';
+      return `Send email to ${to}${action.subject ? ` — "${action.subject}"` : ''}`;
+    }
+    case 'send_sms': {
+      const to = action.to === 'lead' ? 'lead phone' : action.literal_to || 'recipient';
+      return `Send SMS to ${to}`;
+    }
+    case 'send_notification': {
+      const who =
+        action.recipient_kind === 'caller'
+          ? 'caller'
+          : action.recipient_kind === 'lead_owner'
+            ? 'lead owner'
+            : action.recipient_kind === 'role'
+              ? `${action.role ?? 'role'}s`
+              : 'member';
+      return `Notify ${who}: "${action.title}"`;
+    }
+    case 'http_request': {
+      return `${action.method} ${action.url || '(no URL)'}`;
+    }
+    case 'update_lead_field': {
+      return `Set lead.${action.field} = ${truncate(action.value, 28)}`;
+    }
     default:
       return 'Unknown action';
   }
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '\u2026';
+}
+
+export function describeWait(data: WaitNodeData): string {
+  const mode: WaitMode = (data as { mode?: WaitMode }).mode ?? 'fixed_minutes';
+  switch (mode) {
+    case 'fixed_minutes': {
+      const minutes = (data as { duration_minutes: number }).duration_minutes ?? 0;
+      if (!minutes) return 'No delay';
+      if (minutes < 60) return `${minutes} min`;
+      const h = Math.floor(minutes / 60);
+      const m = minutes % 60;
+      if (m === 0) return `${h} hr`;
+      return `${h}h ${m}m`;
+    }
+    case 'until_callback_time':
+      return 'Until callback time';
+    case 'until_datetime': {
+      const iso = (data as { iso_at: string }).iso_at;
+      if (!iso) return 'Until specific time';
+      try {
+        const d = new Date(iso);
+        return `Until ${d.toLocaleString()}`;
+      } catch {
+        return 'Until specific time';
+      }
+    }
+    case 'business_days': {
+      const days = (data as { days: number }).days ?? 1;
+      return `${days} business day${days === 1 ? '' : 's'}`;
+    }
+    default:
+      return 'Wait';
+  }
+}
+
+export function describeTrigger(
+  triggerType: string,
+  config: Record<string, unknown>,
+  dispositions: { code: string; label: string }[],
+): string {
+  if (triggerType === 'disposition_set') {
+    const codes = Array.isArray(config.codes) ? (config.codes as string[]) : [];
+    const labels = codes.map((c) => dispositions.find((d) => d.code === c)?.label ?? c);
+    return labels.length === 0
+      ? 'When disposition is set'
+      : `When disposition is ${labels.join(', ')}`;
+  }
+  if (triggerType === 'webhook_received') {
+    return 'When webhook is received';
+  }
+  return `Trigger: ${triggerType}`;
 }
 
 export function describeBranch(

@@ -13,18 +13,33 @@ import { linearizeGraph } from '@/lib/automations';
 
 type Result = { ok: true; id?: string } | { ok: false; error: string };
 
+const KNOWN_ACTION_KINDS = new Set([
+  'move_stage',
+  'mark_dnc',
+  'add_tag',
+  'create_task',
+  'send_email',
+  'send_sms',
+  'send_notification',
+  'http_request',
+  'update_lead_field',
+]);
+
 function validateActions(actions: unknown): actions is AutomationAction[] {
   if (!Array.isArray(actions)) return false;
   return actions.every((a) => {
     if (!a || typeof a !== 'object') return false;
     const k = (a as { kind?: unknown }).kind;
-    return (
-      k === 'move_stage' ||
-      k === 'mark_dnc' ||
-      k === 'add_tag' ||
-      k === 'create_task'
-    );
+    return typeof k === 'string' && KNOWN_ACTION_KINDS.has(k);
   });
+}
+
+function generateWebhookToken(): string {
+  // 32-char hex; collision rate is negligible. We index unique partial in
+  // SQL to prevent any pathological collision at insert time.
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 export async function createAutomation(input: {
@@ -62,6 +77,7 @@ export async function createAutomation(input: {
       trigger_config: input.triggerConfig as unknown as Json,
       actions: input.actions as unknown as Json,
       sort_order: nextSort,
+      webhook_token: input.triggerType === 'webhook_received' ? generateWebhookToken() : null,
     })
     .select('id')
     .single();
@@ -85,6 +101,20 @@ export async function updateAutomation(input: {
   if (input.actions.length === 0) return { ok: false, error: 'Add at least one action.' };
 
   const supabase = await createServerClient();
+  // Generate a token on first switch into webhook_received if the row doesn't
+  // already have one. We don't drop the token when switching back so the URL
+  // can be reused if the user toggles trigger types.
+  let webhookTokenPatch: { webhook_token: string } | undefined;
+  if (input.triggerType === 'webhook_received') {
+    const { data: row } = await supabase
+      .from('automations')
+      .select('webhook_token')
+      .eq('id', input.id)
+      .maybeSingle();
+    if (!row?.webhook_token) {
+      webhookTokenPatch = { webhook_token: generateWebhookToken() };
+    }
+  }
   const { error } = await supabase
     .from('automations')
     .update({
@@ -93,10 +123,24 @@ export async function updateAutomation(input: {
       trigger_type: input.triggerType,
       trigger_config: input.triggerConfig as unknown as Json,
       actions: input.actions as unknown as Json,
+      ...(webhookTokenPatch ?? {}),
     })
     .eq('id', input.id);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
+  revalidatePath(`/workflows/${input.id}`);
+  return { ok: true };
+}
+
+export async function regenerateWebhookToken(input: { id: string }): Promise<Result> {
+  const supabase = await createServerClient();
+  const token = generateWebhookToken();
+  const { error } = await supabase
+    .from('automations')
+    .update({ webhook_token: token })
+    .eq('id', input.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/workflows/${input.id}`);
   return { ok: true };
 }
 
@@ -159,13 +203,39 @@ export async function saveAutomationGraph(input: {
   // list view shows a "Visual" badge for graph-mode rules anyway.
   const flat = linearizeGraph(input.graph);
 
+  // Mirror the trigger node's type onto automations.trigger_type so the
+  // dispatcher's index-based filter (brand_id, trigger_type) remains accurate.
+  const triggerNode = input.graph.nodes.find((n) => n.type === 'trigger');
+  const triggerType =
+    triggerNode && triggerNode.type === 'trigger' ? triggerNode.data.trigger_type : null;
+  const triggerConfig =
+    triggerNode && triggerNode.type === 'trigger' ? triggerNode.data.trigger_config : null;
+
   const supabase = await createServerClient();
+
+  // If the trigger is webhook_received and the row doesn't have a token yet,
+  // mint one as part of the same write so the URL is available immediately.
+  let webhookTokenPatch: { webhook_token: string } | undefined;
+  if (triggerType === 'webhook_received') {
+    const { data: row } = await supabase
+      .from('automations')
+      .select('webhook_token')
+      .eq('id', input.id)
+      .maybeSingle();
+    if (!row?.webhook_token) {
+      webhookTokenPatch = { webhook_token: generateWebhookToken() };
+    }
+  }
+
   const { error } = await supabase
     .from('automations')
     .update({
       mode: 'graph',
       graph: input.graph as unknown as Json,
       actions: flat as unknown as Json,
+      ...(triggerType ? { trigger_type: triggerType } : {}),
+      ...(triggerConfig ? { trigger_config: triggerConfig as unknown as Json } : {}),
+      ...(webhookTokenPatch ?? {}),
     })
     .eq('id', input.id);
   if (error) return { ok: false, error: error.message };

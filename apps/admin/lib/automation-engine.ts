@@ -104,3 +104,74 @@ function matches(config: Record<string, unknown>, input: AutomationTriggerInput)
   }
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Webhook-triggered runs
+// ---------------------------------------------------------------------------
+//
+// Entry point for `webhook_received` automations. Called from the public
+// /api/webhooks/automation/[token] route. The route resolves the automation
+// via the unique webhook_token, then hands it off here so all the engine
+// niceties (graph execution, simple-mode fallback, error capture) are shared
+// with the disposition-driven path.
+
+export type WebhookRunInput = {
+  automation: {
+    id: string;
+    name: string;
+    mode: string;
+    actions: AutomationAction[];
+    graph: WorkflowGraph | null;
+    brandId: string;
+  };
+  body: unknown;
+  headers: Record<string, string>;
+};
+
+export async function runWebhookAutomation(input: WebhookRunInput): Promise<void> {
+  const { automation, body, headers } = input;
+
+  // If the body carries a lead_id and it belongs to the same brand, surface
+  // it through ctx.leadId so lead-bound actions (move_stage, send_email to
+  // lead, etc.) work out of the box.
+  let leadId: string | null = null;
+  if (typeof body === 'object' && body !== null) {
+    const candidate = (body as { lead_id?: unknown }).lead_id;
+    if (typeof candidate === 'string' && candidate.length > 0) {
+      const supabase = await createServerClient();
+      const { data: lead } = await supabase
+        .from('leads')
+        .select('id')
+        .eq('id', candidate)
+        .eq('brand_id', automation.brandId)
+        .maybeSingle();
+      if (lead) leadId = lead.id;
+    }
+  }
+
+  const ctx = {
+    brandId: automation.brandId,
+    leadId,
+    memberId: null,
+    trigger: { kind: 'webhook_received' as const },
+    webhook: { body, headers },
+  };
+
+  if (automation.mode === 'graph' && automation.graph) {
+    try {
+      await startGraphRun({ automationId: automation.id, graph: automation.graph, ctx });
+    } catch (e) {
+      console.error('[webhook:graph]', automation.name, (e as Error).message);
+    }
+    return;
+  }
+
+  // Simple mode fallback — actions[] in order.
+  for (const action of automation.actions) {
+    try {
+      await executeAction(action, ctx);
+    } catch (e) {
+      console.error('[webhook]', automation.name, action.kind, (e as Error).message);
+    }
+  }
+}

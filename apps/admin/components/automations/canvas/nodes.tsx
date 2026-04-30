@@ -7,17 +7,25 @@
 
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
-import { describeAction, describeBranch } from '@/lib/automation-types';
+import {
+  describeAction,
+  describeBranch,
+  describeTrigger as describeTriggerShared,
+  describeWait,
+} from '@/lib/automation-types';
 import type {
   AutomationAction,
   BranchCondition,
   GraphNode,
+  WaitNodeData,
 } from '@/lib/automation-types';
 
 export type CanvasContext = {
   stages: { id: string; name: string }[];
   tags: { id: string; name: string }[];
   dispositions: { code: string; label: string }[];
+  members?: { id: string; full_name: string | null; email: string }[];
+  automation?: { id: string; webhookToken: string | null };
 };
 
 // React Flow's NodeProps generic carries our GraphNode shape so node-specific
@@ -30,7 +38,7 @@ const HANDLE_BASE =
 // Wraps the canvas context onto each node renderer via a module-level setter
 // because React Flow nodeTypes is registered by reference and can't take
 // extra props. The editor sets ctx once on mount.
-let CTX: CanvasContext = { stages: [], tags: [], dispositions: [] };
+let CTX: CanvasContext = { stages: [], tags: [], dispositions: [], members: [] };
 export function setCanvasContext(ctx: CanvasContext) {
   CTX = ctx;
 }
@@ -71,18 +79,25 @@ function Card({
 }
 
 export function TriggerNode({ data, selected }: NodeProps & { data: NodeData<'trigger'> }) {
-  const summary = describeTrigger(data.trigger_type, data.trigger_config, CTX.dispositions);
+  const summary = describeTriggerShared(data.trigger_type, data.trigger_config, CTX.dispositions);
+  const isWebhook = data.trigger_type === 'webhook_received';
   return (
     <>
       <Card
         selected={selected}
-        accent="bg-teal/15 text-teal"
+        accent={isWebhook ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400' : 'bg-teal/15 text-teal'}
         title="Trigger"
         subtitle={summary}
         icon={
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" strokeLinejoin="round" />
-          </svg>
+          isWebhook ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M5 12a7 7 0 1114 0M3 16h18M8 20h8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" strokeLinejoin="round" />
+            </svg>
+          )
         }
       />
       <Handle type="source" position={Position.Bottom} className={HANDLE_BASE} />
@@ -91,7 +106,8 @@ export function TriggerNode({ data, selected }: NodeProps & { data: NodeData<'tr
 }
 
 export function ActionNode({ data, selected }: NodeProps & { data: NodeData<'action'> }) {
-  const summary = describeAction(data.action as AutomationAction, {
+  const action = data.action as AutomationAction;
+  const summary = describeAction(action, {
     stages: CTX.stages,
     tags: CTX.tags,
   });
@@ -100,10 +116,10 @@ export function ActionNode({ data, selected }: NodeProps & { data: NodeData<'act
       <Handle type="target" position={Position.Top} className={HANDLE_BASE} />
       <Card
         selected={selected}
-        accent="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-        title={titleForAction(data.action.kind)}
+        accent={accentForAction(action.kind)}
+        title={titleForAction(action.kind)}
         subtitle={summary}
-        icon={iconForAction(data.action.kind)}
+        icon={iconForAction(action.kind)}
       />
       <Handle type="source" position={Position.Bottom} className={HANDLE_BASE} />
     </>
@@ -154,7 +170,6 @@ export function BranchNode({ data, selected }: NodeProps & { data: NodeData<'bra
 }
 
 export function WaitNode({ data, selected }: NodeProps & { data: NodeData<'wait'> }) {
-  const minutes = data.duration_minutes ?? 0;
   return (
     <>
       <Handle type="target" position={Position.Top} className={HANDLE_BASE} />
@@ -162,7 +177,7 @@ export function WaitNode({ data, selected }: NodeProps & { data: NodeData<'wait'
         selected={selected}
         accent="bg-amber-500/15 text-amber-600 dark:text-amber-400"
         title="Wait"
-        subtitle={formatDuration(minutes)}
+        subtitle={describeWait(data as WaitNodeData)}
         icon={
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <circle cx="12" cy="12" r="9" />
@@ -194,19 +209,6 @@ export function EndNode({ selected }: NodeProps) {
 
 // ---------------------------------------------------------------------------
 
-function describeTrigger(
-  kind: string,
-  cfg: Record<string, unknown>,
-  dispositions: { code: string; label: string }[],
-): string {
-  if (kind === 'disposition_set') {
-    const codes = Array.isArray(cfg.codes) ? (cfg.codes as string[]) : [];
-    const labels = codes.map((c) => dispositions.find((d) => d.code === c)?.label ?? c);
-    return labels.length === 0 ? 'When disposition is set' : `When disposition is ${labels.join(', ')}`;
-  }
-  return `Trigger: ${kind}`;
-}
-
 function titleForAction(kind: AutomationAction['kind']): string {
   switch (kind) {
     case 'move_stage':
@@ -217,6 +219,31 @@ function titleForAction(kind: AutomationAction['kind']): string {
       return 'Add tag';
     case 'create_task':
       return 'Create task';
+    case 'send_email':
+      return 'Send email';
+    case 'send_sms':
+      return 'Send SMS';
+    case 'send_notification':
+      return 'Send notification';
+    case 'http_request':
+      return 'HTTP request';
+    case 'update_lead_field':
+      return 'Update lead';
+  }
+}
+
+function accentForAction(kind: AutomationAction['kind']): string {
+  switch (kind) {
+    case 'send_email':
+    case 'send_sms':
+    case 'send_notification':
+      return 'bg-sky-500/15 text-sky-600 dark:text-sky-400';
+    case 'http_request':
+      return 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400';
+    case 'update_lead_field':
+      return 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400';
+    default:
+      return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400';
   }
 }
 
@@ -250,14 +277,38 @@ function iconForAction(kind: AutomationAction['kind']): React.ReactNode {
           <path d="M9 11l3 3L22 4" />
         </svg>
       );
+    case 'send_email':
+      return (
+        <svg {...common}>
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <path d="M3 7l9 7 9-7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'send_sms':
+      return (
+        <svg {...common}>
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'send_notification':
+      return (
+        <svg {...common}>
+          <path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'http_request':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18" />
+        </svg>
+      );
+    case 'update_lead_field':
+      return (
+        <svg {...common}>
+          <path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4z" strokeLinejoin="round" />
+        </svg>
+      );
   }
 }
 
-function formatDuration(minutes: number): string {
-  if (!minutes) return 'No delay';
-  if (minutes < 60) return `${minutes} min`;
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (m === 0) return `${h} hr`;
-  return `${h}h ${m}m`;
-}

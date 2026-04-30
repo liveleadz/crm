@@ -16,6 +16,18 @@ async function loadStages(brandId: string) {
   return (data ?? []).map((s) => ({ id: s.id, name: s.name }));
 }
 
+async function loadMembers(brandId: string) {
+  const supabase = await createServerClient();
+  const { data } = await supabase
+    .from('brand_members')
+    .select('member_id, members!inner(id, full_name, email)')
+    .eq('brand_id', brandId);
+  if (!data) return [];
+  return data
+    .map((row) => row.members as { id: string; full_name: string | null; email: string } | null)
+    .filter((m): m is { id: string; full_name: string | null; email: string } => !!m);
+}
+
 export default async function AutomationEditorPage({
   params,
 }: {
@@ -25,11 +37,12 @@ export default async function AutomationEditorPage({
   const active = await getActiveBrand();
   if (!active) notFound();
 
-  const [automation, stages, tagsWithCounts, dispositions] = await Promise.all([
+  const [automation, stages, tagsWithCounts, dispositions, members] = await Promise.all([
     loadAutomation(id),
     loadStages(active.id),
     loadBrandTagsWithCounts(active.id),
     loadDispositions(active.id),
+    loadMembers(active.id),
   ]);
   if (!automation) notFound();
 
@@ -39,6 +52,7 @@ export default async function AutomationEditorPage({
       stages={stages}
       tags={tagsWithCounts.map((t) => ({ id: t.id, name: t.name }))}
       dispositions={dispositions.map((d) => ({ code: d.code, label: d.label }))}
+      members={members}
     />
   );
 }

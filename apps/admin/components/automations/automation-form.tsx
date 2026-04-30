@@ -556,5 +556,17 @@ function labelFor(kind: AutomationAction['kind']): string {
       return 'Add tag';
     case 'create_task':
       return 'Create task';
+    case 'send_email':
+      return 'Send email';
+    case 'send_sms':
+      return 'Send SMS';
+    case 'send_notification':
+      return 'Notify team';
+    case 'http_request':
+      return 'HTTP request';
+    case 'update_lead_field':
+      return 'Update lead field';
+    default:
+      return 'Action';
   }
 }

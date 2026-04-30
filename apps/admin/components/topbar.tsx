@@ -1,4 +1,5 @@
 import { BrandSwitcher } from './brand-switcher';
+import { NotificationsBell } from './notifications-bell';
 import { ThemeToggle } from './theme-toggle';
 import { UserMenu } from './user-menu';
 import type { ActiveBrand } from '@/lib/active-brand';
@@ -42,6 +43,7 @@ export function Topbar({
       </div>
 
       <div className="flex items-center gap-2">
+        <NotificationsBell />
         <ThemeToggle />
         <UserMenu email={email} fullName={fullName} />
       </div>

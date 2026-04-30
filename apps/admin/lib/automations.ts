@@ -21,7 +21,7 @@ export { describeAction, describeBranch, graphFromSimple, linearizeGraph } from 
 // Trigger types known to the engine. Add new entries here when wiring more
 // integration points (e.g. lead_created, task_completed). The DB column is
 // free-form text so unknown values silently no-op rather than blocking saves.
-export type AutomationTriggerType = 'disposition_set';
+export type AutomationTriggerType = 'disposition_set' | 'webhook_received';
 
 export type DispositionTriggerConfig = {
   // Disposition codes that should fire this automation. Matched against
@@ -30,7 +30,7 @@ export type DispositionTriggerConfig = {
 };
 
 const COLUMNS =
-  'id, name, description, trigger_type, trigger_config, actions, is_enabled, is_system, sort_order, mode, graph';
+  'id, name, description, trigger_type, trigger_config, actions, is_enabled, is_system, sort_order, mode, graph, webhook_token';
 
 function rowToAutomation(a: {
   id: string;
@@ -44,6 +44,7 @@ function rowToAutomation(a: {
   sort_order: number;
   mode: string;
   graph: unknown;
+  webhook_token?: string | null;
 }): Automation {
   return {
     id: a.id,
@@ -57,6 +58,7 @@ function rowToAutomation(a: {
     sortOrder: a.sort_order,
     mode: (a.mode === 'graph' ? 'graph' : 'simple') as AutomationMode,
     graph: a.graph ? (a.graph as unknown as WorkflowGraph) : null,
+    webhookToken: a.webhook_token ?? null,
   };
 }
 

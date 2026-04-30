@@ -9,6 +9,13 @@ import type { GraphNode, AutomationAction, BranchCondition } from '@/lib/automat
 
 export type PickerKind = 'action' | 'branch' | 'wait';
 
+const COMM_ACCENT = 'bg-sky-500/15 text-sky-600 dark:text-sky-400';
+const DATA_ACCENT = 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400';
+const INTEGRATION_ACCENT = 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400';
+const ACTION_ACCENT = 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400';
+const LOGIC_ACCENT = 'bg-violet-500/15 text-violet-600 dark:text-violet-400';
+const WAIT_ACCENT = 'bg-amber-500/15 text-amber-600 dark:text-amber-400';
+
 const OPTIONS: Array<{
   group: string;
   items: Array<{
@@ -22,14 +29,56 @@ const OPTIONS: Array<{
   }>;
 }> = [
   {
-    group: 'Actions',
+    group: 'Communication',
+    items: [
+      {
+        kind: 'action',
+        actionKind: 'send_email',
+        label: 'Send email',
+        description: 'Email the lead or a specific address (queued for sending).',
+        accent: COMM_ACCENT,
+        icon: (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <path d="M3 7l9 7 9-7" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ),
+      },
+      {
+        kind: 'action',
+        actionKind: 'send_sms',
+        label: 'Send SMS',
+        description: "Text the lead or a specific phone number.",
+        accent: COMM_ACCENT,
+        icon: (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" strokeLinejoin="round" />
+          </svg>
+        ),
+      },
+      {
+        kind: 'action',
+        actionKind: 'send_notification',
+        label: 'Notify team',
+        description: 'In-app notification to caller, lead owner, role, or member.',
+        accent: COMM_ACCENT,
+        icon: (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    group: 'Lead actions',
     items: [
       {
         kind: 'action',
         actionKind: 'move_stage',
         label: 'Move stage',
         description: 'Send the lead to a different pipeline stage.',
-        accent: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+        accent: ACTION_ACCENT,
         icon: (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
@@ -41,7 +90,7 @@ const OPTIONS: Array<{
         actionKind: 'add_tag',
         label: 'Add tag',
         description: 'Tag the lead for filtering / segmentation.',
-        accent: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+        accent: ACTION_ACCENT,
         icon: (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <path d="M20.59 13.41L13.42 20.58a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" />
@@ -53,7 +102,7 @@ const OPTIONS: Array<{
         actionKind: 'mark_dnc',
         label: 'Mark Do Not Call',
         description: "Set the lead's do_not_call flag.",
-        accent: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+        accent: ACTION_ACCENT,
         icon: (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <circle cx="12" cy="12" r="9" />
@@ -66,11 +115,41 @@ const OPTIONS: Array<{
         actionKind: 'create_task',
         label: 'Create task',
         description: 'Schedule a task on the lead for an agent.',
-        accent: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+        accent: ACTION_ACCENT,
         icon: (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <rect x="3" y="4" width="18" height="18" rx="2" />
             <path d="M9 11l3 3L22 4" />
+          </svg>
+        ),
+      },
+      {
+        kind: 'action',
+        actionKind: 'update_lead_field',
+        label: 'Update lead field',
+        description: 'Set a lead field (name, email, phone, notes, custom).',
+        accent: DATA_ACCENT,
+        icon: (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4z" strokeLinejoin="round" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    group: 'Integration',
+    items: [
+      {
+        kind: 'action',
+        actionKind: 'http_request',
+        label: 'HTTP request',
+        description: 'Outbound webhook (POST/GET/PUT/PATCH/DELETE).',
+        accent: INTEGRATION_ACCENT,
+        icon: (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18" />
           </svg>
         ),
       },
@@ -84,7 +163,7 @@ const OPTIONS: Array<{
         branchKind: 'disposition_equals',
         label: 'Branch — disposition',
         description: 'Different paths based on the call disposition.',
-        accent: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+        accent: LOGIC_ACCENT,
         icon: (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <path d="M3 6h2l5 12h4M9 18l5-12h7" strokeLinecap="round" strokeLinejoin="round" />
@@ -96,7 +175,7 @@ const OPTIONS: Array<{
         branchKind: 'lead_in_stage',
         label: 'Branch — lead stage',
         description: "Check the lead's current pipeline stage.",
-        accent: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+        accent: LOGIC_ACCENT,
         icon: (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <path d="M3 6h2l5 12h4M9 18l5-12h7" strokeLinecap="round" strokeLinejoin="round" />
@@ -108,7 +187,7 @@ const OPTIONS: Array<{
         branchKind: 'lead_has_tag',
         label: 'Branch — has tag',
         description: 'Check whether the lead carries a specific tag.',
-        accent: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+        accent: LOGIC_ACCENT,
         icon: (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <path d="M3 6h2l5 12h4M9 18l5-12h7" strokeLinecap="round" strokeLinejoin="round" />
@@ -119,7 +198,7 @@ const OPTIONS: Array<{
         kind: 'wait',
         label: 'Wait',
         description: 'Pause the workflow for a fixed amount of time.',
-        accent: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+        accent: WAIT_ACCENT,
         icon: (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <circle cx="12" cy="12" r="9" />
@@ -162,6 +241,42 @@ export function NodePicker({
             assign_to_caller: true,
           };
           break;
+        case 'send_email':
+          action = {
+            kind: 'send_email',
+            to: 'lead',
+            subject: 'Following up',
+            body: 'Hi {{lead.first_name}},\n\n',
+          };
+          break;
+        case 'send_sms':
+          action = {
+            kind: 'send_sms',
+            to: 'lead',
+            body: 'Hi {{lead.first_name}}, ',
+          };
+          break;
+        case 'send_notification':
+          action = {
+            kind: 'send_notification',
+            recipient_kind: 'caller',
+            title: 'Workflow update',
+          };
+          break;
+        case 'http_request':
+          action = {
+            kind: 'http_request',
+            method: 'POST',
+            url: '',
+            headers: [],
+            body_template: '{}',
+          };
+          break;
+        case 'update_lead_field':
+          action = { kind: 'update_lead_field', field: 'first_name', value: '' };
+          break;
+        default:
+          return;
       }
       onPick({ type: 'action', data: { action } });
       return;

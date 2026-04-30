@@ -149,6 +149,7 @@ export type Database = {
           trigger_config: Json
           trigger_type: string
           updated_at: string
+          webhook_token: string | null
         }
         Insert: {
           actions?: Json
@@ -166,6 +167,7 @@ export type Database = {
           trigger_config?: Json
           trigger_type: string
           updated_at?: string
+          webhook_token?: string | null
         }
         Update: {
           actions?: Json
@@ -183,6 +185,7 @@ export type Database = {
           trigger_config?: Json
           trigger_type?: string
           updated_at?: string
+          webhook_token?: string | null
         }
         Relationships: [
           {
@@ -736,6 +739,139 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      message_outbox: {
+        Row: {
+          attempts: number
+          automation_run_id: string | null
+          body: string
+          brand_id: string
+          channel: string
+          created_at: string
+          error: string | null
+          from_addr: string | null
+          id: string
+          lead_id: string | null
+          provider_message_id: string | null
+          sent_at: string | null
+          status: string
+          subject: string | null
+          to_addr: string
+        }
+        Insert: {
+          attempts?: number
+          automation_run_id?: string | null
+          body: string
+          brand_id: string
+          channel: string
+          created_at?: string
+          error?: string | null
+          from_addr?: string | null
+          id?: string
+          lead_id?: string | null
+          provider_message_id?: string | null
+          sent_at?: string | null
+          status?: string
+          subject?: string | null
+          to_addr: string
+        }
+        Update: {
+          attempts?: number
+          automation_run_id?: string | null
+          body?: string
+          brand_id?: string
+          channel?: string
+          created_at?: string
+          error?: string | null
+          from_addr?: string | null
+          id?: string
+          lead_id?: string | null
+          provider_message_id?: string | null
+          sent_at?: string | null
+          status?: string
+          subject?: string | null
+          to_addr?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_outbox_automation_run_id_fkey"
+            columns: ["automation_run_id"]
+            isOneToOne: false
+            referencedRelation: "workflow_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_outbox_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_outbox_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      notifications: {
+        Row: {
+          body: string | null
+          brand_id: string
+          created_at: string
+          data: Json | null
+          id: string
+          kind: string
+          link_url: string | null
+          read_at: string | null
+          recipient_member_id: string | null
+          recipient_role: Database["public"]["Enums"]["member_role"] | null
+          title: string
+        }
+        Insert: {
+          body?: string | null
+          brand_id: string
+          created_at?: string
+          data?: Json | null
+          id?: string
+          kind: string
+          link_url?: string | null
+          read_at?: string | null
+          recipient_member_id?: string | null
+          recipient_role?: Database["public"]["Enums"]["member_role"] | null
+          title: string
+        }
+        Update: {
+          body?: string | null
+          brand_id?: string
+          created_at?: string
+          data?: Json | null
+          id?: string
+          kind?: string
+          link_url?: string | null
+          read_at?: string | null
+          recipient_member_id?: string | null
+          recipient_role?: Database["public"]["Enums"]["member_role"] | null
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_recipient_member_id_fkey"
+            columns: ["recipient_member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       numbers: {
         Row: {

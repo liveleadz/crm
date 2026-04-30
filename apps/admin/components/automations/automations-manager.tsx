@@ -120,6 +120,7 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
         sortOrder: (prev.at(-1)?.sortOrder ?? 0) + 10,
         mode: 'simple',
         graph: null,
+        webhookToken: null,
       },
     ]);
     setEditor({ kind: 'closed' });
