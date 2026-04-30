@@ -122,7 +122,7 @@ export default async function ReportsPage({
           initialFromDate={fromDate}
           initialToDate={toDate}
         />
-        <KpiCards kpis={report.kpis} />
+        <KpiCards kpis={report.kpis} prevKpis={report.prevKpis} />
         <TrendChart points={report.trend} />
         <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
           <AgentTable rows={report.byAgent} activeAgentId={agentId} />

@@ -13,42 +13,109 @@ import {
 } from '@/lib/reports';
 import { AgentDrillLink } from './agent-drill-link';
 
-export function KpiCards({ kpis }: { kpis: ReportKpis }) {
+// % delta from prev to current. Returns null when prev is 0 (avoid
+// "+Infinity") and the current is 0; otherwise null when prev is 0 and
+// current is non-zero is rendered as "new" upstream.
+function pctDelta(curr: number, prev: number): number | null {
+  if (prev === 0) return curr === 0 ? null : Number.POSITIVE_INFINITY;
+  return (curr - prev) / prev;
+}
+
+function DeltaBadge({
+  curr,
+  prev,
+  goodWhenUp = true,
+}: {
+  curr: number;
+  prev: number;
+  goodWhenUp?: boolean;
+}) {
+  const d = pctDelta(curr, prev);
+  if (d === null) return null;
+  if (!Number.isFinite(d)) {
+    // Prev was zero; show absolute count instead of an ∞%.
+    return (
+      <span className="inline-flex items-center gap-0.5 rounded-full bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-txt-3">
+        new
+      </span>
+    );
+  }
+  const up = d > 0;
+  const flat = Math.abs(d) < 0.005;
+  const positive = flat ? false : goodWhenUp ? up : !up;
+  const cls = flat
+    ? 'bg-canvas text-txt-3'
+    : positive
+      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+      : 'bg-hp/10 text-hp';
+  const arrow = flat ? '→' : up ? '↑' : '↓';
+  return (
+    <span className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${cls}`}>
+      <span aria-hidden>{arrow}</span>
+      <span>{Math.abs(d * 100).toFixed(d >= 0.1 ? 0 : 1)}%</span>
+    </span>
+  );
+}
+
+export function KpiCards({
+  kpis,
+  prevKpis,
+}: {
+  kpis: ReportKpis;
+  prevKpis: ReportKpis | null;
+}) {
   const tiles: Array<{
     label: string;
     value: string;
     sub?: string;
     tone?: 'default' | 'teal' | 'amber';
+    curr: number;
+    prev: number;
+    goodWhenUp?: boolean;
   }> = [
     {
       label: 'Total calls',
       value: kpis.totalCalls.toLocaleString(),
       sub: `${kpis.inboundCalls.toLocaleString()} in · ${kpis.outboundCalls.toLocaleString()} out`,
+      curr: kpis.totalCalls,
+      prev: prevKpis?.totalCalls ?? 0,
     },
     {
       label: 'Connected',
       value: kpis.connectedCalls.toLocaleString(),
       sub: formatPct(kpis.connectRate) + ' connect rate',
       tone: 'teal',
+      curr: kpis.connectedCalls,
+      prev: prevKpis?.connectedCalls ?? 0,
     },
     {
       label: 'Avg talk time',
       value: formatDuration(kpis.avgTalkSec),
       sub: `${formatDuration(kpis.totalTalkSec)} total`,
+      curr: kpis.avgTalkSec,
+      prev: prevKpis?.avgTalkSec ?? 0,
     },
     {
       label: 'Sales',
       value: kpis.salesCount.toLocaleString(),
       sub: formatPct(kpis.salesRate) + ' close rate',
       tone: 'amber',
+      curr: kpis.salesCount,
+      prev: prevKpis?.salesCount ?? 0,
     },
     {
       label: 'Voicemails',
       value: kpis.voicemailCount.toLocaleString(),
+      // More voicemails = fewer connects; surface a lower count as good.
+      curr: kpis.voicemailCount,
+      prev: prevKpis?.voicemailCount ?? 0,
+      goodWhenUp: false,
     },
     {
       label: 'Callbacks scheduled',
       value: kpis.callbackCount.toLocaleString(),
+      curr: kpis.callbackCount,
+      prev: prevKpis?.callbackCount ?? 0,
     },
   ];
   return (
@@ -58,9 +125,14 @@ export function KpiCards({ kpis }: { kpis: ReportKpis }) {
           key={t.label}
           className="rounded-2xl border border-line bg-surface p-4"
         >
-          <p className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
-            {t.label}
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+              {t.label}
+            </p>
+            {prevKpis && (
+              <DeltaBadge curr={t.curr} prev={t.prev} goodWhenUp={t.goodWhenUp} />
+            )}
+          </div>
           <p
             className={`mt-1 text-[20px] font-semibold ${
               t.tone === 'teal'

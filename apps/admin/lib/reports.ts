@@ -65,6 +65,9 @@ export type CallReport = {
   fromIso: string;
   toIso: string;
   kpis: ReportKpis;
+  /** KPIs over the equal-length window immediately preceding the current
+   * range. Null when the loader was not asked to compute it. */
+  prevKpis: ReportKpis | null;
   byAgent: AgentRow[];
   byDisposition: DispositionRow[];
   trend: TrendPoint[];
@@ -86,6 +89,47 @@ function rangeBounds(filter: ReportFilter): { fromIso: string; toIso: string } {
   const from = new Date(now - days * DAY_MS);
   const to = new Date(now);
   return { fromIso: from.toISOString(), toIso: to.toISOString() };
+}
+
+// KPI roll-up over a flat set of rows. Extracted so the prev-period
+// loader can reuse it without re-implementing the headline math.
+type CallRow = {
+  direction: string | null;
+  disposition: string | null;
+  duration_sec: number | null;
+};
+
+function computeKpis(rows: CallRow[]): ReportKpis {
+  let inboundCalls = 0;
+  let outboundCalls = 0;
+  let connectedCalls = 0;
+  let totalTalkSec = 0;
+  let salesCount = 0;
+  let voicemailCount = 0;
+  let callbackCount = 0;
+  for (const r of rows) {
+    if (r.direction === 'inbound') inboundCalls += 1;
+    else outboundCalls += 1;
+    if (r.disposition && CONNECTED_CODES.has(r.disposition)) connectedCalls += 1;
+    if (r.disposition === 'sale') salesCount += 1;
+    if (r.disposition === 'voicemail') voicemailCount += 1;
+    if (r.disposition === 'callback') callbackCount += 1;
+    totalTalkSec += r.duration_sec ?? 0;
+  }
+  const totalCalls = rows.length;
+  return {
+    totalCalls,
+    inboundCalls,
+    outboundCalls,
+    connectedCalls,
+    connectRate: totalCalls > 0 ? connectedCalls / totalCalls : 0,
+    totalTalkSec,
+    avgTalkSec: connectedCalls > 0 ? Math.round(totalTalkSec / connectedCalls) : 0,
+    salesCount,
+    salesRate: totalCalls > 0 ? salesCount / totalCalls : 0,
+    voicemailCount,
+    callbackCount,
+  };
 }
 
 function bucketDate(iso: string): string {
@@ -141,44 +185,7 @@ export async function loadCallReport(
   }
 
   // ---------- KPIs ----------
-  let inboundCalls = 0;
-  let outboundCalls = 0;
-  let connectedCalls = 0;
-  let totalTalkSec = 0;
-  let salesCount = 0;
-  let voicemailCount = 0;
-  let callbackCount = 0;
-
-  for (const r of rows) {
-    if (r.direction === 'inbound') inboundCalls += 1;
-    else outboundCalls += 1;
-    if (r.disposition && CONNECTED_CODES.has(r.disposition)) connectedCalls += 1;
-    if (r.disposition === 'sale') salesCount += 1;
-    if (r.disposition === 'voicemail') voicemailCount += 1;
-    if (r.disposition === 'callback') callbackCount += 1;
-    totalTalkSec += r.duration_sec ?? 0;
-  }
-
-  const totalCalls = rows.length;
-  const connectRate = totalCalls > 0 ? connectedCalls / totalCalls : 0;
-  const salesRate = totalCalls > 0 ? salesCount / totalCalls : 0;
-  // Avg talk over connected calls only — averaging in zero-duration
-  // missed calls would suppress the headline number to noise.
-  const avgTalkSec = connectedCalls > 0 ? Math.round(totalTalkSec / connectedCalls) : 0;
-
-  const kpis: ReportKpis = {
-    totalCalls,
-    inboundCalls,
-    outboundCalls,
-    connectedCalls,
-    connectRate,
-    totalTalkSec,
-    avgTalkSec,
-    salesCount,
-    salesRate,
-    voicemailCount,
-    callbackCount,
-  };
+  const kpis = computeKpis(rows);
 
   // ---------- By agent ----------
   type AgentAgg = {
@@ -257,7 +264,31 @@ export async function loadCallReport(
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .map(([date, v]) => ({ date, calls: v.calls, connects: v.connects }));
 
-  return { fromIso, toIso, kpis, byAgent, byDisposition, trend };
+  // ---------- Prev-period KPIs ----------
+  // Same length immediately preceding the current window. We only need
+  // the headline numbers, so the query selects just enough columns to
+  // run computeKpis(); per-agent/per-disposition aggregates are skipped.
+  const startMsBound = new Date(fromIso).getTime();
+  const endMsBound = new Date(toIso).getTime();
+  const windowMs = Math.max(1, endMsBound - startMsBound);
+  const prevToIso = new Date(startMsBound - 1).toISOString();
+  const prevFromIso = new Date(startMsBound - 1 - windowMs).toISOString();
+
+  let prevQuery = supabase
+    .from('calls')
+    .select('direction, disposition, duration_sec')
+    .eq('brand_id', brandId)
+    .gte('started_at', prevFromIso)
+    .lte('started_at', prevToIso)
+    .limit(50_000);
+  if (filter.agentId) prevQuery = prevQuery.eq('member_id', filter.agentId);
+  if (filter.direction && filter.direction !== 'all') {
+    prevQuery = prevQuery.eq('direction', filter.direction);
+  }
+  const { data: prevRows } = await prevQuery;
+  const prevKpis = computeKpis(prevRows ?? []);
+
+  return { fromIso, toIso, kpis, prevKpis, byAgent, byDisposition, trend };
 }
 
 // Friendly disposition labels — keep in sync with /lib/dispositions.

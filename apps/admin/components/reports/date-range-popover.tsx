@@ -109,6 +109,60 @@ export function DateRangePopover({
     });
   }
 
+  // Quick presets — one click sets common ranges. All windows are
+  // inclusive of today as the end date.
+  const PRESETS: { label: string; build: () => { from: string; to: string } }[] = [
+    {
+      label: '7d',
+      build: () => {
+        const t = new Date();
+        const f = new Date(t.getTime() - 6 * 86_400_000);
+        return {
+          from: toIso(f.getFullYear(), f.getMonth(), f.getDate()),
+          to: toIso(t.getFullYear(), t.getMonth(), t.getDate()),
+        };
+      },
+    },
+    {
+      label: 'MTD',
+      build: () => {
+        const t = new Date();
+        return {
+          from: toIso(t.getFullYear(), t.getMonth(), 1),
+          to: toIso(t.getFullYear(), t.getMonth(), t.getDate()),
+        };
+      },
+    },
+    {
+      label: 'QTD',
+      build: () => {
+        const t = new Date();
+        const qm = Math.floor(t.getMonth() / 3) * 3;
+        return {
+          from: toIso(t.getFullYear(), qm, 1),
+          to: toIso(t.getFullYear(), t.getMonth(), t.getDate()),
+        };
+      },
+    },
+    {
+      label: 'YTD',
+      build: () => {
+        const t = new Date();
+        return {
+          from: toIso(t.getFullYear(), 0, 1),
+          to: toIso(t.getFullYear(), t.getMonth(), t.getDate()),
+        };
+      },
+    },
+  ];
+
+  function applyPreset(p: (typeof PRESETS)[number]) {
+    const next = p.build();
+    onChange(next);
+    setPendingFrom(null);
+    setOpen(false);
+  }
+
   // Build the 6×7 grid for the current view month.
   const cells = useMemo(() => {
     const firstDow = new Date(view.y, view.m, 1).getDay();
@@ -144,6 +198,18 @@ export function DateRangePopover({
       </button>
       {open && (
         <div className="absolute left-0 top-full z-30 mt-1 w-[260px] rounded-xl border border-line bg-surface p-3 shadow-lg">
+          <div className="mb-2 flex flex-wrap gap-1">
+            {PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => applyPreset(p)}
+                className="rounded-md border border-line bg-canvas px-2 py-0.5 text-[10.5px] font-medium text-txt-2 hover:border-teal/40 hover:text-teal"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
           <div className="mb-2 flex items-center justify-between">
             <button
               type="button"
