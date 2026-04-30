@@ -5,6 +5,7 @@ import { KpiCards } from '@/components/dashboard/kpi-cards';
 import { PipelineByStage } from '@/components/dashboard/pipeline-by-stage';
 import { RecentCalls } from '@/components/dashboard/recent-calls';
 import { TodaysAppointments } from '@/components/dashboard/todays-appointments';
+import { DashboardRealtimeRefresher } from '@/components/dashboard/realtime-refresher';
 
 export default async function DashboardPage() {
   const active = await getActiveBrand();
@@ -14,6 +15,7 @@ export default async function DashboardPage() {
   return (
     <>
       <PageHeader title="Dashboard" subtitle={`${active.name} — last 7 days`} />
+      <DashboardRealtimeRefresher />
       <div className="flex-1 space-y-5 overflow-auto p-6">
         <KpiCards kpis={kpis} />
 
