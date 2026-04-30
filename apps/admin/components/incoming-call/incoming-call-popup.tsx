@@ -1,34 +1,35 @@
 'use client';
 
-// In-app popup that fires when an inbound call is ringing for this member.
-// Two states: pre-answer (Answer / Reject) and in-call (timer + Hang up).
-// Designed for depth: layered shadow, 1px high-contrast border, a subtle
-// gradient on the avatar, slight scale-in on mount. No glass / glow —
-// keeps consistent with the platform's neobrutalism-minimal feel while
-// still feeling alive and important.
+// In-app popup that fires when an inbound call is ringing, then stays
+// up through the in-call timer, then surfaces the disposition picker
+// after hangup so no inbound slips through without an outcome.
+//
+// Visual is intentionally restrained: caller info only on the ringing
+// view (name + phone), no verbose labels. Depth comes from layered
+// shadow + 1px ring, not glow.
 
 import { useEffect, useState } from 'react';
 import { useIncomingCall } from './incoming-call-provider';
+import { DispositionPicker } from '@/components/dialer/disposition-picker';
 
 export function IncomingCallPopup() {
-  const { pending, status, answer, reject, hangup } = useIncomingCall();
+  const { pending, status, dispositions, answer, reject, hangup, closeWrapUp } =
+    useIncomingCall();
 
-  // Show the popup if there's a pending call OR we're connected/connecting
-  // to one (so the agent has a hang-up affordance during the call).
   const visible =
-    pending !== null || status.kind === 'connecting' || status.kind === 'in_call';
+    pending !== null ||
+    status.kind === 'connecting' ||
+    status.kind === 'in_call' ||
+    status.kind === 'wrap_up';
 
   if (!visible) return null;
 
   return (
     <div className="pointer-events-none fixed inset-x-0 top-4 z-[100] flex justify-center px-4 sm:top-6">
-      <div
-        className="pointer-events-auto w-full max-w-sm origin-top animate-[incoming-call-in_240ms_cubic-bezier(0.2,0.9,0.3,1.2)] rounded-2xl border border-line bg-surface shadow-[0_10px_40px_-10px_rgba(0,0,0,0.45),0_2px_8px_-2px_rgba(0,0,0,0.4)] ring-1 ring-black/40"
-      >
-        {pending && status.kind !== 'in_call' ? (
+      <div className="pointer-events-auto w-full max-w-sm origin-top animate-[incoming-call-in_240ms_cubic-bezier(0.2,0.9,0.3,1.2)] rounded-2xl border border-line bg-surface shadow-[0_10px_40px_-10px_rgba(0,0,0,0.45),0_2px_8px_-2px_rgba(0,0,0,0.4)] ring-1 ring-black/40">
+        {pending && status.kind !== 'in_call' && status.kind !== 'wrap_up' ? (
           <PreAnswer
             from={pending.fromNumber}
-            to={pending.toNumber}
             leadName={pending.leadName}
             connecting={status.kind === 'connecting'}
             error={status.kind === 'error' ? status.message : null}
@@ -37,6 +38,12 @@ export function IncomingCallPopup() {
           />
         ) : status.kind === 'in_call' ? (
           <InCall startedAt={status.startedAt} onHangup={hangup} />
+        ) : status.kind === 'wrap_up' ? (
+          <WrapUp
+            callId={status.callId}
+            dispositions={dispositions}
+            onClose={closeWrapUp}
+          />
         ) : null}
       </div>
       <style jsx global>{`
@@ -61,7 +68,6 @@ export function IncomingCallPopup() {
 
 function PreAnswer({
   from,
-  to,
   leadName,
   connecting,
   error,
@@ -69,7 +75,6 @@ function PreAnswer({
   onReject,
 }: {
   from: string;
-  to: string;
   leadName: string | null;
   connecting: boolean;
   error: string | null;
@@ -77,7 +82,7 @@ function PreAnswer({
   onReject: () => void;
 }) {
   const headline = leadName || formatPhone(from);
-  const subline = leadName ? formatPhone(from) : 'Unknown caller';
+  const subline = leadName ? formatPhone(from) : null;
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -89,14 +94,10 @@ function PreAnswer({
           {initials(headline)}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[10.5px] font-semibold uppercase tracking-wider text-teal">
-            Inbound call · ringing
-          </div>
-          <div className="mt-0.5 truncate text-[14.5px] font-semibold text-txt-1">{headline}</div>
-          <div className="truncate font-mono text-[11.5px] text-txt-3">
-            {subline}
-            {to ? <span className="text-txt-3"> → {formatPhone(to)}</span> : null}
-          </div>
+          <div className="truncate text-[14.5px] font-semibold text-txt-1">{headline}</div>
+          {subline && (
+            <div className="truncate font-mono text-[11.5px] text-txt-3">{subline}</div>
+          )}
         </div>
       </div>
 
@@ -146,13 +147,8 @@ function InCall({ startedAt, onHangup }: { startedAt: number; onHangup: () => vo
           <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" />
         </svg>
       </div>
-      <div className="flex-1">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-teal">
-          In call
-        </div>
-        <div className="mt-0.5 font-mono text-[14px] tabular-nums text-txt-1">
-          {mm}:{ss}
-        </div>
+      <div className="flex-1 font-mono text-[14px] tabular-nums text-txt-1">
+        {mm}:{ss}
       </div>
       <button
         type="button"
@@ -161,6 +157,27 @@ function InCall({ startedAt, onHangup }: { startedAt: number; onHangup: () => vo
       >
         Hang up
       </button>
+    </div>
+  );
+}
+
+function WrapUp({
+  callId,
+  dispositions,
+  onClose,
+}: {
+  callId: string;
+  dispositions: import('@/components/dialer/disposition-picker').DispositionChoice[];
+  onClose: () => void;
+}) {
+  return (
+    <div className="p-4">
+      <DispositionPicker
+        callId={callId}
+        choices={dispositions}
+        onSaved={onClose}
+        onCancel={onClose}
+      />
     </div>
   );
 }

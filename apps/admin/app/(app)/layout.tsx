@@ -6,6 +6,7 @@ import { IncomingCallProvider } from '@/components/incoming-call/incoming-call-p
 import { IncomingCallPopup } from '@/components/incoming-call/incoming-call-popup';
 import { getActiveBrand, getMembershipBrands } from '@/lib/active-brand';
 import { getCurrentBrandRole } from '@/lib/team';
+import { loadDispositions } from '@/lib/dispositions';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerClient();
@@ -35,10 +36,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     (user.user_metadata?.name as string | undefined) ??
     null;
 
-  const role = await getCurrentBrandRole(active.id);
+  const [role, dispositions] = await Promise.all([
+    getCurrentBrandRole(active.id),
+    loadDispositions(active.id),
+  ]);
 
   return (
-    <IncomingCallProvider>
+    <IncomingCallProvider
+      dispositions={dispositions.map((d) => ({ code: d.code, label: d.label, tone: d.tone }))}
+    >
       <div className="flex h-screen flex-col">
         <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />
         <div className="flex min-h-0 flex-1">

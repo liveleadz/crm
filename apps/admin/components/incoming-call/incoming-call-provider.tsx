@@ -13,6 +13,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { SignalWire, type SignalWireClient } from '@signalwire/js';
+import { claimRecentInboundCall } from '@/app/actions/dialer';
+import type { DispositionChoice } from '@/components/dialer/disposition-picker';
 
 export type IncomingCall = {
   fromNumber: string;
@@ -25,14 +27,17 @@ type Status =
   | { kind: 'idle' }
   | { kind: 'connecting' }
   | { kind: 'in_call'; startedAt: number }
+  | { kind: 'wrap_up'; callId: string }
   | { kind: 'error'; message: string };
 
 type Ctx = {
   pending: IncomingCall | null;
   status: Status;
+  dispositions: DispositionChoice[];
   answer: () => Promise<void>;
   reject: () => Promise<void>;
   hangup: () => Promise<void>;
+  closeWrapUp: () => void;
 };
 
 const IncomingCallContext = createContext<Ctx | null>(null);
@@ -64,12 +69,19 @@ type ActiveSession = {
   hangup?: () => Promise<unknown>;
 };
 
-export function IncomingCallProvider({ children }: { children: React.ReactNode }) {
+export function IncomingCallProvider({
+  children,
+  dispositions,
+}: {
+  children: React.ReactNode;
+  dispositions: DispositionChoice[];
+}) {
   const [pending, setPending] = useState<IncomingCall | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const clientRef = useRef<SignalWireClient | null>(null);
   const inviteRef = useRef<LooseInvite | null>(null);
   const sessionRef = useRef<ActiveSession | null>(null);
+  const callIdRef = useRef<string | null>(null);
 
   // Boot a long-lived SignalWire client and register for incoming calls.
   useEffect(() => {
@@ -136,16 +148,36 @@ export function IncomingCallProvider({ children }: { children: React.ReactNode }
     if (!invite || !invite.accept) return;
     setStatus({ kind: 'connecting' });
     try {
-      // No rootElement / video — audio-only WebRTC. The SDK's internal
-      // <audio> element handles playback.
       const session = (await invite.accept({
         audio: true,
         video: false,
         negotiateVideo: false,
       })) as ActiveSession;
       sessionRef.current = session;
+      // Map this SDK invite to our internal call row so disposition can be
+      // saved against the right call when the agent hangs up.
+      void claimRecentInboundCall().then((res) => {
+        if (res.ok) {
+          callIdRef.current = res.callId;
+          setPending((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  fromNumber: res.fromNumber || prev.fromNumber,
+                  toNumber: res.toNumber || prev.toNumber,
+                  leadName: res.leadName || prev.leadName,
+                }
+              : prev,
+          );
+        }
+      });
       session.on?.('destroy', () => {
-        setStatus({ kind: 'idle' });
+        const cid = callIdRef.current;
+        if (cid) {
+          setStatus({ kind: 'wrap_up', callId: cid });
+        } else {
+          setStatus({ kind: 'idle' });
+        }
         sessionRef.current = null;
       });
       setStatus({ kind: 'in_call', startedAt: Date.now() });
@@ -170,12 +202,24 @@ export function IncomingCallProvider({ children }: { children: React.ReactNode }
   }, []);
 
   const hangup = useCallback(async () => {
+    const cid = callIdRef.current;
     await cleanup();
-    setStatus({ kind: 'idle' });
+    if (cid) {
+      setStatus({ kind: 'wrap_up', callId: cid });
+    } else {
+      setStatus({ kind: 'idle' });
+    }
   }, [cleanup]);
 
+  const closeWrapUp = useCallback(() => {
+    callIdRef.current = null;
+    setStatus({ kind: 'idle' });
+  }, []);
+
   return (
-    <IncomingCallContext.Provider value={{ pending, status, answer, reject, hangup }}>
+    <IncomingCallContext.Provider
+      value={{ pending, status, dispositions, answer, reject, hangup, closeWrapUp }}
+    >
       {children}
     </IncomingCallContext.Provider>
   );

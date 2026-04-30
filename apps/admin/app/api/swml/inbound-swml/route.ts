@@ -212,11 +212,27 @@ async function handle(req: NextRequest) {
   // long when no agent is online — voicemail kicks in faster.
   const connectTimeout = Math.min(route?.ring_timeout_sec ?? 25, 15);
 
+  // Build the voicemail action list (only run when connect doesn't bridge).
+  const voicemailActions: Array<Record<string, unknown>> = [];
+  if ((route?.voicemail_enabled ?? true) && callId) {
+    const greeting =
+      route?.voicemail_greeting ??
+      "You've reached us. We can't take your call right now — please leave a message after the tone.";
+    const vmSig = signVoicemailPath(callId);
+    const vmUrl = `${getPublicAppUrl()}/api/swml/voicemail/${callId}/${vmSig}`;
+    voicemailActions.push({ play: { url: `say:${greeting}` } });
+    voicemailActions.push({
+      record_call: {
+        format: 'mp3',
+        beep: true,
+        max_length: 180,
+        end_silence_timeout: 5,
+        status_url: vmUrl,
+      },
+    });
+  }
+
   if (ringEmails.length > 0) {
-    // Look up each subscriber's actual address. SignalWire auto-names the
-    // subscriber resource using the LOCAL-PART of the email, not the full
-    // email — so "/private/<email>" routes to nowhere and the connect
-    // silently times out. The Fabric API gives us the right address.
     const lookups = await Promise.all(
       ringEmails.map((email) => findSubscriberAudioAddress(email)),
     );
@@ -226,40 +242,41 @@ async function handle(req: NextRequest) {
       if (addr) {
         addresses.push(addr);
       } else {
-        // Fall back to a best-guess local-part address. Won't always
-        // match but lets the test surface the symptom in logs.
         const localPart = email.split('@')[0];
         if (localPart) addresses.push(`/private/${localPart}`);
       }
     });
     console.log('[inbound-swml] dispatching to', addresses);
     if (addresses.length > 0) {
-      sections.push({
+      // Connect bridges the caller to the agent. On no-answer / failure,
+      // route to voicemail via connect.result so the voicemail prompt only
+      // plays when nobody picked up. On a successful bridge, the call ends
+      // when either side hangs up and we fall through to the final hangup
+      // (NOT to voicemail) — fixing the bug where answered calls were
+      // followed by the voicemail prompt + recording.
+      const connectAction: Record<string, unknown> = {
         connect: {
           to: addresses.length === 1 ? addresses[0] : addresses,
           timeout: connectTimeout,
           from: fromNumber !== 'unknown' ? fromNumber : e164,
         },
-      });
+      };
+      if (voicemailActions.length > 0) {
+        const failureBranch = { execute: voicemailActions };
+        (connectAction.connect as Record<string, unknown>).result = {
+          no_answer: failureBranch,
+          failed: failureBranch,
+          busy: failureBranch,
+          canceled: failureBranch,
+        };
+      }
+      sections.push(connectAction);
+    } else if (voicemailActions.length > 0) {
+      // No targets at all — go straight to voicemail.
+      sections.push(...voicemailActions);
     }
-  }
-
-  if ((route?.voicemail_enabled ?? true) && callId) {
-    const greeting =
-      route?.voicemail_greeting ??
-      "You've reached us. We can't take your call right now — please leave a message after the tone.";
-    const vmSig = signVoicemailPath(callId);
-    const vmUrl = `${getPublicAppUrl()}/api/swml/voicemail/${callId}/${vmSig}`;
-    sections.push({ play: { url: `say:${greeting}` } });
-    sections.push({
-      record_call: {
-        format: 'mp3',
-        beep: true,
-        max_length: 180,
-        end_silence_timeout: 5,
-        status_url: vmUrl,
-      },
-    });
+  } else if (voicemailActions.length > 0) {
+    sections.push(...voicemailActions);
   }
 
   sections.push({ hangup: { reason: 'normal' } });

@@ -98,6 +98,55 @@ export async function prepareCall(input: {
   };
 }
 
+// Claim the most recent inbound call for the active brand for the current
+// member. Used by the IncomingCallPopup to map an SDK invite back to our
+// internal call row so disposition/note can be saved against the right
+// call when the agent hangs up.
+export async function claimRecentInboundCall(): Promise<
+  | {
+      ok: true;
+      callId: string;
+      fromNumber: string;
+      toNumber: string;
+      leadId: string | null;
+      leadName: string | null;
+    }
+  | { ok: false; error: string }
+> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const profile = await getMyProfile();
+  if (!profile) return { ok: false, error: 'Not authenticated.' };
+  const supabase = await createServerClient();
+  const since = new Date(Date.now() - 120_000).toISOString();
+  const { data: call } = await supabase
+    .from('calls')
+    .select('id, from_number, to_number, lead_id, leads(first_name, last_name)')
+    .eq('brand_id', active.id)
+    .eq('direction', 'inbound')
+    .gte('started_at', since)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!call) return { ok: false, error: 'No recent inbound call.' };
+  await supabase
+    .from('calls')
+    .update({ member_id: profile.id, needs_disposition: true })
+    .eq('id', call.id);
+  const lead = call.leads as { first_name: string | null; last_name: string | null } | null;
+  const leadName = lead
+    ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null
+    : null;
+  return {
+    ok: true,
+    callId: call.id,
+    fromNumber: call.from_number,
+    toNumber: call.to_number,
+    leadId: call.lead_id,
+    leadName,
+  };
+}
+
 export async function attachSignalwireCallId(input: {
   callId: string;
   signalwireCallId: string;
