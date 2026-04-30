@@ -1,61 +1,15 @@
 'use server';
 
-// CRUD + sync for /numbers. The sync action pulls phone numbers from the
-// SignalWire account and upserts them into the brand's `numbers` table so
-// admins don't have to copy E.164 strings from the SignalWire console.
+// CRUD for /numbers. The bulk-sync-from-SignalWire action was removed
+// intentionally to prevent accidentally importing every number on the
+// SignalWire project (some of which may belong to another dialer). Numbers
+// are now added by hand or by reusing the existing import workflow.
 
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
-import { listSignalWirePhoneNumbers } from '@/lib/signalwire';
 
 type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
-
-export async function syncSignalWireNumbers(): Promise<
-  Result<{ added: number; updated: number; total: number }>
-> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
-
-  const sw = await listSignalWirePhoneNumbers();
-  if (!sw.ok) return { ok: false, error: sw.error };
-
-  const supabase = await createServerClient();
-  const { data: existing } = await supabase
-    .from('numbers')
-    .select('id, e164, signalwire_id')
-    .eq('brand_id', active.id);
-
-  const byE164 = new Map((existing ?? []).map((r) => [r.e164, r]));
-  let added = 0;
-  let updated = 0;
-
-  for (const n of sw.data) {
-    if (!n.number) continue;
-    const e164 = n.number.startsWith('+') ? n.number : `+${n.number.replace(/\D/g, '')}`;
-    const found = byE164.get(e164);
-    if (!found) {
-      const { error } = await supabase.from('numbers').insert({
-        brand_id: active.id,
-        e164,
-        signalwire_id: n.id,
-        label: n.name ?? null,
-        active: true,
-      });
-      if (!error) added++;
-    } else if (found.signalwire_id !== n.id) {
-      // Backfill the SignalWire id so future renames/deletions can be reconciled.
-      const { error } = await supabase
-        .from('numbers')
-        .update({ signalwire_id: n.id })
-        .eq('id', found.id);
-      if (!error) updated++;
-    }
-  }
-
-  revalidatePath('/numbers');
-  return { ok: true, added, updated, total: sw.data.length };
-}
 
 export async function updateNumberLabel(input: {
   id: string;

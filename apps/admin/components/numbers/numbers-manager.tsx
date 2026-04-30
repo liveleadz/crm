@@ -6,58 +6,27 @@
 // toggle. Admins can also pull fresh numbers from SignalWire on demand.
 
 import { useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
 import {
   bulkDeleteNumbers,
   deleteNumber,
   setA2pCampaignId,
   setNumberActive,
-  syncSignalWireNumbers,
   updateNumberLabel,
 } from '@/app/actions/numbers';
 import type { NumberWithHealth } from '@/lib/numbers';
 
 type Props = {
   initial: NumberWithHealth[];
-  swReady: boolean;
 };
 
-export function NumbersManager({ initial, swReady }: Props) {
-  const router = useRouter();
+export function NumbersManager({ initial }: Props) {
   const [items, setItems] = useState<NumberWithHealth[]>(initial);
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
 
   function patch(id: string, fn: (n: NumberWithHealth) => NumberWithHealth) {
     setItems((prev) => prev.map((n) => (n.id === id ? fn(n) : n)));
-  }
-
-  async function onSync() {
-    if (!swReady) {
-      setError(
-        'SignalWire credentials missing on the server. Set SIGNALWIRE_PROJECT_ID, SIGNALWIRE_TOKEN, and SIGNALWIRE_SPACE_URL.',
-      );
-      return;
-    }
-    setError(null);
-    setInfo(null);
-    setSyncing(true);
-    const res = await syncSignalWireNumbers();
-    setSyncing(false);
-    if (!res.ok) {
-      setError(res.error);
-      return;
-    }
-    setInfo(
-      res.added > 0 || res.updated > 0
-        ? `Synced ${res.total} number${res.total === 1 ? '' : 's'} — ${res.added} added, ${res.updated} updated.`
-        : `Already in sync (${res.total} number${res.total === 1 ? '' : 's'} on SignalWire).`,
-    );
-    // Re-fetch the server data so the new rows show up with health attached.
-    router.refresh();
   }
 
   function toggleSelected(id: string) {
@@ -155,41 +124,13 @@ export function NumbersManager({ initial, swReady }: Props) {
         />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-[12.5px] text-txt-3">
-          Pull numbers you bought in SignalWire into this brand and set how they’re used.
-        </div>
-        <button
-          type="button"
-          disabled={syncing}
-          onClick={onSync}
-          className="inline-flex items-center gap-2 rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
-        >
-          {syncing ? (
-            <>
-              <Spinner /> Syncing…
-            </>
-          ) : (
-            <>Sync from SignalWire</>
-          )}
-        </button>
+      <div className="text-[12.5px] text-txt-3">
+        Numbers attached to this brand. Edit labels, A2P campaign id, and active state inline.
       </div>
 
-      {!swReady && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-700 dark:text-amber-400">
-          SignalWire credentials are not configured on the server, so syncing is disabled. Set
-          SIGNALWIRE_PROJECT_ID, SIGNALWIRE_TOKEN, and SIGNALWIRE_SPACE_URL in Vercel to enable
-          it.
-        </div>
-      )}
       {error && (
         <div className="rounded-lg border border-hp/40 bg-hp/10 px-3 py-2 text-[12px] text-hp">
           {error}
-        </div>
-      )}
-      {info && (
-        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-700 dark:text-emerald-400">
-          {info}
         </div>
       )}
 
@@ -217,8 +158,7 @@ export function NumbersManager({ initial, swReady }: Props) {
       <div className="overflow-hidden rounded-xl border border-line bg-surface">
         {items.length === 0 ? (
           <div className="px-4 py-12 text-center text-[12.5px] text-txt-3">
-            No numbers in this brand yet. Buy numbers in your SignalWire console, then click{' '}
-            <span className="font-medium text-txt-2">Sync from SignalWire</span> to import them.
+            No numbers attached to this brand.
           </div>
         ) : (
           <table className="w-full table-fixed border-collapse text-left text-[12.5px]">
@@ -411,15 +351,6 @@ function InlineInput({
       }}
       className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-[12.5px] outline-none hover:border-line focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
     />
-  );
-}
-
-function Spinner() {
-  return (
-    <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-      <circle cx="12" cy="12" r="9" opacity="0.25" />
-      <path d="M21 12a9 9 0 00-9-9" strokeLinecap="round" />
-    </svg>
   );
 }
 

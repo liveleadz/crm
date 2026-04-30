@@ -15,21 +15,16 @@ export default async function NumbersPage() {
   }
 
   const numbers = await loadNumbersWithHealth(active.id);
-  const swReady = !!(
-    process.env.SIGNALWIRE_PROJECT_ID &&
-    process.env.SIGNALWIRE_TOKEN &&
-    process.env.SIGNALWIRE_SPACE_URL
-  );
 
   const subtitle =
     numbers.length === 0
-      ? 'Phone numbers, A2P campaigns, routing — sync from SignalWire to get started.'
+      ? 'Phone numbers, A2P campaigns, routing.'
       : `${numbers.length} number${numbers.length === 1 ? '' : 's'} · ${numbers.filter((n) => n.active).length} active`;
 
   return (
     <>
       <PageHeader title="Numbers & Routing" subtitle={subtitle} />
-      <NumbersManager initial={numbers} swReady={swReady} />
+      <NumbersManager initial={numbers} />
     </>
   );
 }
