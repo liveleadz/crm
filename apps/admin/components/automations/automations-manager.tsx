@@ -26,7 +26,6 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useRouter } from 'next/navigation';
 import {
   bulkDeleteAutomations,
   bulkSetAutomationsEnabled,
@@ -49,7 +48,6 @@ type Props = {
 };
 
 export function AutomationsManager({ initial, stages, tags, dispositions }: Props) {
-  const router = useRouter();
   const [items, setItems] = useState<Automation[]>(initial);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -102,19 +100,20 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
   }
 
   // Canvas-first creation: drops a blank workflow with no trigger configured
-  // and lands the user directly in the visual editor. The trigger is picked
-  // inside the canvas via the trigger node's right-side panel.
+  // and lands the user directly in the visual editor. The action redirects
+  // server-side, so the browser navigates without a separate router round
+  // trip — feels instant. We only get a return value on the error branch.
   async function newBlankWorkflow() {
     if (creating) return;
     setError(null);
     setCreating(true);
     const res = await createBlankAutomation();
-    setCreating(false);
-    if (!res.ok || !res.id) {
-      setError(res.ok ? 'Could not create workflow.' : res.error);
-      return;
+    if (res && !res.ok) {
+      setCreating(false);
+      setError(res.error);
     }
-    router.push(`/workflows/${res.id}` as Route);
+    // On success the action redirects, the page tears down, and creating
+    // stays true through the unmount — fine.
   }
 
   // 5px activation distance avoids hijacking clicks on the toggle / Open

@@ -5,6 +5,7 @@
 // operate on the wrong brand.
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import { getActiveBrand } from '@/lib/active-brand';
 import { createServerClient } from '@leadpilot/db/server';
 import type { Json } from '@leadpilot/db/types';
@@ -88,16 +89,21 @@ export async function createAutomation(input: {
   return { ok: true, id: data.id };
 }
 
-// Canvas-first creation. Drops the row immediately with a placeholder name
-// and an empty graph (just a trigger node). Caller is expected to redirect
-// to /workflows/[id] right after, where the full visual editor takes over.
-// Skips action validation since there are zero actions at this point.
+// Canvas-first creation. Drops the row immediately with a *truly empty*
+// graph (no trigger node yet) and redirects server-side to the editor.
+// The redirect saves the client-side router round-trip — the response
+// arrives already pointed at the new workflow, which makes the click feel
+// instant. Trigger picking happens inside the canvas via "+ Add first
+// step".
 export async function createBlankAutomation(input?: {
   triggerType?: string;
-}): Promise<Result> {
+}): Promise<Result | never> {
   const active = await getActiveBrand();
   if (!active) return { ok: false, error: 'No active brand.' };
 
+  // The placeholder trigger_type just keeps the dispatcher's index-based
+  // filter sane until the user picks one in the canvas. The matches() call
+  // returns false on empty config, so the row never fires until configured.
   const triggerType = input?.triggerType ?? 'disposition_set';
 
   const supabase = await createServerClient();
@@ -110,21 +116,10 @@ export async function createBlankAutomation(input?: {
     .maybeSingle();
   const nextSort = (maxRow?.sort_order ?? 0) + 10;
 
-  // Default empty graph: a single trigger node, no edges, no actions.
-  const blankGraph = {
-    nodes: [
-      {
-        id: 'trigger',
-        type: 'trigger',
-        position: { x: 320, y: 80 },
-        data: {
-          trigger_type: triggerType,
-          trigger_config: triggerType === 'disposition_set' ? { codes: [] } : {},
-        },
-      },
-    ],
-    edges: [],
-  };
+  // Truly empty graph — no trigger node. The canvas starts blank with a
+  // single "+ Add first step" pill; that picker is where the trigger gets
+  // chosen.
+  const blankGraph: WorkflowGraph = { nodes: [], edges: [] };
 
   const { data, error } = await supabase
     .from('automations')
@@ -133,7 +128,7 @@ export async function createBlankAutomation(input?: {
       name: 'Untitled workflow',
       description: null,
       trigger_type: triggerType,
-      trigger_config: blankGraph.nodes[0]!.data.trigger_config as unknown as Json,
+      trigger_config: {} as unknown as Json,
       actions: [] as unknown as Json,
       sort_order: nextSort,
       mode: 'graph',
@@ -143,10 +138,13 @@ export async function createBlankAutomation(input?: {
     })
     .select('id')
     .single();
-  if (error) return { ok: false, error: error.message };
+  if (error || !data) return { ok: false, error: error?.message ?? 'Insert failed.' };
 
   revalidatePath('/workflows');
-  return { ok: true, id: data.id };
+  // Server-side redirect — Next.js converts this into a navigation in the
+  // server-action response so the browser doesn't have to do a separate
+  // router.push round trip. Result: button feels instant.
+  redirect(`/workflows/${data.id}`);
 }
 
 export async function updateAutomation(input: {
@@ -239,11 +237,13 @@ function validateGraph(graph: unknown): graph is WorkflowGraph {
   if (!graph || typeof graph !== 'object') return false;
   const g = graph as { nodes?: unknown; edges?: unknown };
   if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) return false;
-  // Must have exactly one trigger.
+  // Empty graph is valid — represents a brand-new workflow that hasn't
+  // chosen a trigger yet. Once any nodes exist, at most one of them may
+  // be a trigger.
   const triggers = g.nodes.filter(
     (n) => n && typeof n === 'object' && (n as { type?: unknown }).type === 'trigger',
   );
-  if (triggers.length !== 1) return false;
+  if (triggers.length > 1) return false;
   const ids = new Set(g.nodes.map((n) => (n as { id: string }).id));
   for (const e of g.edges) {
     if (!e || typeof e !== 'object') return false;

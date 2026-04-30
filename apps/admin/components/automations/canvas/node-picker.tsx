@@ -7,7 +7,7 @@
 
 import type { GraphNode, AutomationAction, BranchCondition } from '@/lib/automation-types';
 
-export type PickerKind = 'action' | 'branch' | 'wait';
+export type PickerKind = 'action' | 'branch' | 'wait' | 'trigger';
 
 const COMM_ACCENT = 'bg-sky-500/15 text-sky-600 dark:text-sky-400';
 const DATA_ACCENT = 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400';
@@ -15,19 +15,53 @@ const INTEGRATION_ACCENT = 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-40
 const ACTION_ACCENT = 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400';
 const LOGIC_ACCENT = 'bg-violet-500/15 text-violet-600 dark:text-violet-400';
 const WAIT_ACCENT = 'bg-amber-500/15 text-amber-600 dark:text-amber-400';
+const TRIGGER_ACCENT = 'bg-teal/15 text-teal';
 
-const OPTIONS: Array<{
-  group: string;
-  items: Array<{
-    kind: PickerKind;
-    actionKind?: AutomationAction['kind'];
-    branchKind?: BranchCondition['kind'];
-    label: string;
-    description: string;
-    accent: string;
-    icon: React.ReactNode;
-  }>;
-}> = [
+type PickerItem = {
+  kind: PickerKind;
+  actionKind?: AutomationAction['kind'];
+  branchKind?: BranchCondition['kind'];
+  triggerType?: string;
+  label: string;
+  description: string;
+  accent: string;
+  icon: React.ReactNode;
+};
+
+type PickerGroup = { group: string; items: PickerItem[] };
+
+// Triggers group — shown only when the canvas has no trigger node yet.
+const TRIGGER_GROUP: PickerGroup = {
+  group: 'Triggers',
+  items: [
+    {
+      kind: 'trigger',
+      triggerType: 'disposition_set',
+      label: 'When call disposition is set',
+      description: 'Fires after an agent dispositions a call.',
+      accent: TRIGGER_ACCENT,
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      kind: 'trigger',
+      triggerType: 'webhook_received',
+      label: 'When webhook is received',
+      description: 'Exposes a unique URL — POST any JSON to fire.',
+      accent: 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="M5 12a7 7 0 1114 0M3 16h18M8 20h8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+  ],
+};
+
+const OPTIONS: PickerGroup[] = [
   {
     group: 'Communication',
     items: [
@@ -226,14 +260,36 @@ const OPTIONS: Array<{
 
 export function NodePicker({
   ctx,
+  mode = 'append',
   onCancel,
   onPick,
 }: {
   ctx: { stages: { id: string; name: string }[]; tags: { id: string; name: string }[] };
+  // 'first-step' surfaces the Triggers group at the top of the picker so a
+  // brand-new canvas can choose its trigger without leaving the picker.
+  // 'append' is the normal mid-graph insert flow (no triggers — only actions
+  // / branches / waits).
+  mode?: 'first-step' | 'append';
   onCancel: () => void;
   onPick: (node: Omit<GraphNode, 'id' | 'position'>) => void;
 }) {
-  function pick(opt: (typeof OPTIONS)[number]['items'][number]) {
+  // First-step mode prepends the Triggers group to the regular menu so the
+  // user can pick either the trigger itself or jump straight to a first
+  // action (the canvas will auto-prepend a default trigger in that case).
+  const groups = mode === 'first-step' ? [TRIGGER_GROUP, ...OPTIONS] : OPTIONS;
+
+  function pick(opt: PickerItem) {
+    if (opt.kind === 'trigger') {
+      const t = opt.triggerType ?? 'disposition_set';
+      onPick({
+        type: 'trigger',
+        data: {
+          trigger_type: t,
+          trigger_config: t === 'disposition_set' ? { codes: [] } : {},
+        },
+      });
+      return;
+    }
     if (opt.kind === 'action') {
       const k = opt.actionKind!;
       let action: AutomationAction;
@@ -354,7 +410,7 @@ export function NodePicker({
           </button>
         </div>
         <div className="max-h-[60vh] overflow-y-auto">
-          {OPTIONS.map((g) => (
+          {groups.map((g) => (
             <div key={g.group} className="px-2 py-2">
               <div className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
                 {g.group}

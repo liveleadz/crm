@@ -199,8 +199,13 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
     setSelectedId(id);
   }
 
-  // The trigger node always has a single + handle (terminal edge case for
-  // empty graphs). Render an explicit append button anchored to the canvas.
+  // Two states matter for the entry-point UI:
+  //   - hasTrigger: any trigger node at all? When false the canvas is
+  //     completely blank; we render only a centered "+ Add first step"
+  //     pill that opens the picker in trigger-mode.
+  //   - hasOutgoingFromTrigger: trigger exists but no actions wired up yet.
+  //     We keep the same pill below the trigger as a fallback affordance.
+  const hasTrigger = nodes.some((n) => n.type === 'trigger');
   const hasOutgoingFromTrigger = edges.some((e) => e.source === 'trigger');
 
   // Identify nodes whose downstream slot is empty so we can render an explicit
@@ -253,6 +258,55 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
   }
   function appendBelowTrigger() {
     appendAfter('trigger');
+  }
+
+  // First-step entry: when the canvas is empty (no trigger yet), the picker
+  // opens with the Triggers section at the top. Picking a trigger seeds the
+  // canvas with a single trigger card — subsequent + buttons take over.
+  function openFirstStepPicker() {
+    setPickerEdgeId(`__first_step__`);
+  }
+  function placeFirstStep(rawNode: Omit<GraphNode, 'id' | 'position'>) {
+    if (rawNode.type === 'trigger') {
+      const triggerNode: Node = {
+        id: 'trigger',
+        type: 'trigger',
+        position: { x: 320, y: 80 },
+        data: rawNode.data,
+      };
+      setNodes(() => [triggerNode]);
+      setEdges(() => []);
+      setPickerEdgeId(null);
+      setSelectedId('trigger');
+      return;
+    }
+    // User picked an action / branch / wait first — auto-prepend a default
+    // trigger so the workflow is well-formed, then chain the picked step.
+    const triggerNode: Node = {
+      id: 'trigger',
+      type: 'trigger',
+      position: { x: 320, y: 80 },
+      data: { trigger_type: 'disposition_set', trigger_config: { codes: [] } },
+    };
+    const childId = `n_${Math.random().toString(36).slice(2, 9)}`;
+    const childNode: Node = {
+      id: childId,
+      type: rawNode.type,
+      position: { x: triggerNode.position.x, y: triggerNode.position.y + 160 },
+      data: rawNode.data,
+    };
+    setNodes(() => [triggerNode, childNode]);
+    setEdges(() => [
+      {
+        id: `trigger->${childId}`,
+        source: 'trigger',
+        target: childId,
+        type: 'plus-edge',
+        data: edgeData(null, openPickerRef),
+      },
+    ]);
+    setPickerEdgeId(null);
+    setSelectedId(childId);
   }
 
   return (
@@ -311,13 +365,24 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
         />
       </ReactFlow>
 
-      {!hasOutgoingFromTrigger && (
+      {!hasTrigger && (
+        <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center">
+          <button
+            type="button"
+            onClick={openFirstStepPicker}
+            className="pointer-events-auto rounded-full border border-dashed border-line bg-canvas px-5 py-2.5 text-[13px] font-medium text-txt-2 shadow-sm transition-colors hover:border-teal hover:text-teal"
+          >
+            + Add first step
+          </button>
+        </div>
+      )}
+      {hasTrigger && !hasOutgoingFromTrigger && (
         <button
           type="button"
           onClick={appendBelowTrigger}
           className="absolute left-1/2 top-[200px] z-20 -translate-x-1/2 rounded-full border border-dashed border-line bg-canvas px-4 py-2 text-[12px] font-medium text-txt-2 shadow-sm hover:border-teal hover:text-teal"
         >
-          + Add first step
+          + Add next step
         </button>
       )}
 
@@ -334,9 +399,12 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
       {pickerEdgeId && (
         <NodePicker
           ctx={ctx}
+          mode={pickerEdgeId === '__first_step__' ? 'first-step' : 'append'}
           onCancel={() => setPickerEdgeId(null)}
           onPick={(node) => {
-            if (pickerEdgeId === '__append_trigger__') {
+            if (pickerEdgeId === '__first_step__') {
+              placeFirstStep(node);
+            } else if (pickerEdgeId === '__append_trigger__') {
               insertAfterTrigger(node);
             } else if (pickerEdgeId.startsWith('__append_after__')) {
               insertAfter(pickerEdgeId.slice('__append_after__'.length), node);
