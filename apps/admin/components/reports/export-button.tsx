@@ -1,0 +1,55 @@
+'use client';
+
+// Export button — pulls the per-agent CSV via a server action and
+// triggers a browser download.
+
+import { useState, useTransition } from 'react';
+import { exportAgentReportCsv } from '@/app/actions/reports';
+import type { ReportRange, DirectionFilter } from '@/lib/reports';
+
+export function ExportButton({
+  range,
+  agentId,
+  direction,
+}: {
+  range: ReportRange;
+  agentId: string | null;
+  direction: DirectionFilter;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function trigger() {
+    setError(null);
+    startTransition(async () => {
+      const res = await exportAgentReportCsv({ range, agentId, direction });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      const blob = new Blob([res.csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = res.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  return (
+    <div className="inline-flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={trigger}
+        disabled={pending}
+        className="rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-txt-2 hover:bg-canvas disabled:opacity-50"
+      >
+        {pending ? 'Preparing…' : 'Export CSV'}
+      </button>
+      {error && <span className="text-[10.5px] text-hp">{error}</span>}
+    </div>
+  );
+}
