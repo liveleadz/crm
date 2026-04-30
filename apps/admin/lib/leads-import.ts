@@ -50,7 +50,11 @@ export function autoMapHeader(header: string): MappingTarget {
   for (const [re, target] of AUTO_RULES) {
     if (re.test(h)) return target;
   }
-  return '__custom__';
+  // Unrecognized headers default to skip (no data captured) instead of
+  // custom field so importing a 70-column CSV doesn't auto-stash 60+
+  // arbitrary fields into leads.custom. Users can opt into custom
+  // capture per-column from the dropdown.
+  return '__skip__';
 }
 
 export function autoMapHeaders(headers: string[]): FieldMapping {

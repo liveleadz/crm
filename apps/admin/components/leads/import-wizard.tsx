@@ -87,6 +87,20 @@ export function ImportWizard({
     setMapping((m) => ({ ...m, [header]: target }));
   }
 
+  // Bulk-flip every "custom field (header key)" entry to skip — useful
+  // for wide CSVs where the user only wants the recognized lead
+  // columns. Lead-column and explicit `custom:<slug>` mappings are
+  // preserved.
+  function skipAllCustom() {
+    setMapping((m) => {
+      const next: FieldMapping = { ...m };
+      for (const [k, v] of Object.entries(next)) {
+        if (v === '__custom__') next[k] = '__skip__';
+      }
+      return next;
+    });
+  }
+
   // Open the inline "+ New custom field" input for a given header.
   function openCreate(header: string) {
     setCreatingFor(header);
@@ -230,7 +244,13 @@ export function ImportWizard({
 
       {step === 'map' && (
         <div className="space-y-4">
-          <MapSummary mapping={mapping} headers={headers} validCount={validCount} totalRows={rows.length} />
+          <MapSummary
+            mapping={mapping}
+            headers={headers}
+            validCount={validCount}
+            totalRows={rows.length}
+            onSkipCustom={skipAllCustom}
+          />
           <div className="rounded-2xl border border-line bg-surface">
             <div className="flex items-center justify-between border-b border-line px-5 py-3">
               <div>
@@ -249,106 +269,110 @@ export function ImportWizard({
                 Use different file
               </button>
             </div>
-            <table className="w-full text-[12.5px]">
-              <thead>
-                <tr className="border-b border-line bg-canvas text-left text-[10.5px] uppercase tracking-wide text-txt-3">
-                  <th className="px-5 py-2 font-semibold">CSV header</th>
-                  <th className="px-5 py-2 font-semibold">Sample</th>
-                  <th className="px-5 py-2 font-semibold">Maps to</th>
-                </tr>
-              </thead>
-              <tbody>
-                {headers.map((h) => {
-                  const sample = rows[0]?.[h] ?? '';
-                  const value = mapping[h] ?? '__skip__';
-                  const isCreating = creatingFor === h;
-                  return (
-                    <tr key={h} className="border-b border-line last:border-b-0">
-                      <td className="px-5 py-2.5 font-medium">{h}</td>
-                      <td className="px-5 py-2.5 text-txt-3">
-                        <span className="line-clamp-1">{sample || '—'}</span>
-                      </td>
-                      <td className="px-5 py-2.5">
-                        {isCreating ? (
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              autoFocus
-                              value={newFieldLabel}
-                              onChange={(e) => setNewFieldLabel(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  commitCreate(h);
-                                } else if (e.key === 'Escape') {
-                                  cancelCreate();
-                                }
-                              }}
-                              placeholder="Field name (e.g. Source Campaign)"
-                              className="w-56 rounded-lg border border-line bg-canvas px-2.5 py-1 text-[12px] outline-none focus:border-teal/60"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => commitCreate(h)}
-                              disabled={creating || !newFieldLabel.trim()}
-                              className="rounded-lg bg-teal px-2.5 py-1 text-[11.5px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
-                            >
-                              {creating ? 'Saving…' : 'Save'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={cancelCreate}
-                              className="rounded-lg border border-line bg-canvas px-2.5 py-1 text-[11.5px] text-txt-3 hover:bg-canvas/50"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <select
-                            value={value}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              if (v === '__new_custom__') {
-                                openCreate(h);
-                                return;
+            {/* Grid layout (not a table) so the three columns have
+                fixed widths and the dropdown column is always visible
+                without horizontal scroll, regardless of how long the
+                CSV header or sample values are. */}
+            <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_280px] gap-4 border-b border-line bg-canvas px-5 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3 md:grid">
+              <span>CSV header</span>
+              <span>Sample</span>
+              <span>Maps to</span>
+            </div>
+            <div>
+              {headers.map((h) => {
+                const sample = rows[0]?.[h] ?? '';
+                const value = mapping[h] ?? '__skip__';
+                const isCreating = creatingFor === h;
+                return (
+                  <div
+                    key={h}
+                    className="grid grid-cols-1 gap-2 border-b border-line px-5 py-2.5 text-[12.5px] last:border-b-0 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_280px] md:gap-4 md:py-2"
+                  >
+                    <div className="min-w-0 truncate font-medium" title={h}>
+                      {h}
+                    </div>
+                    <div className="min-w-0 truncate text-txt-3" title={sample}>
+                      {sample || '—'}
+                    </div>
+                    <div className="min-w-0">
+                      {isCreating ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="text"
+                            autoFocus
+                            value={newFieldLabel}
+                            onChange={(e) => setNewFieldLabel(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitCreate(h);
+                              } else if (e.key === 'Escape') {
+                                cancelCreate();
                               }
-                              changeMap(h, v as MappingTarget);
                             }}
-                            className="rounded-lg border border-line bg-canvas px-2 py-1 text-[12px] outline-none focus:border-teal/60"
+                            placeholder="Field name (e.g. Source Campaign)"
+                            className="min-w-0 flex-1 rounded-lg border border-line bg-canvas px-2.5 py-1 text-[12px] outline-none focus:border-teal/60"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => commitCreate(h)}
+                            disabled={creating || !newFieldLabel.trim()}
+                            className="rounded-lg bg-teal px-2.5 py-1 text-[11.5px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
                           >
-                            <option value="__skip__">— Skip —</option>
-                            <option value="__custom__">Custom field (header key)</option>
-                            <optgroup label="Lead column">
-                              {LEAD_COLUMNS.map((c) => (
-                                <option key={c.value} value={c.value}>
-                                  {c.label}
+                            {creating ? 'Saving…' : 'Save'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelCreate}
+                            className="rounded-lg border border-line bg-canvas px-2.5 py-1 text-[11.5px] text-txt-3 hover:bg-canvas/50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <select
+                          value={value}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '__new_custom__') {
+                              openCreate(h);
+                              return;
+                            }
+                            changeMap(h, v as MappingTarget);
+                          }}
+                          className="w-full rounded-lg border border-line bg-canvas px-2 py-1 text-[12px] outline-none focus:border-teal/60"
+                        >
+                          <option value="__skip__">— Skip —</option>
+                          <option value="__custom__">Custom field (header key)</option>
+                          <optgroup label="Lead column">
+                            {LEAD_COLUMNS.map((c) => (
+                              <option key={c.value} value={c.value}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                          {customFields.length > 0 && (
+                            <optgroup label="Custom fields">
+                              {customFields.map((f) => (
+                                <option key={f.id} value={`custom:${f.key}`}>
+                                  {f.label}
                                 </option>
                               ))}
                             </optgroup>
-                            {customFields.length > 0 && (
-                              <optgroup label="Custom fields">
-                                {customFields.map((f) => (
-                                  <option key={f.id} value={`custom:${f.key}`}>
-                                    {f.label}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            <option value="__new_custom__">+ New custom field…</option>
-                          </select>
-                        )}
-                        {/* Hint when target is a custom slug to make it obvious. */}
-                        {!isCreating && isCustomTarget(value) && (
-                          <span className="ml-2 text-[10.5px] text-txt-3">
-                            stored as <code className="font-mono">{value.slice(7)}</code>
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                          )}
+                          <option value="__new_custom__">+ New custom field…</option>
+                        </select>
+                      )}
+                      {!isCreating && isCustomTarget(value) && (
+                        <span className="mt-1 block text-[10.5px] text-txt-3">
+                          stored as <code className="font-mono">{value.slice(7)}</code>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           <div className="rounded-2xl border border-line bg-surface p-5">
@@ -601,11 +625,13 @@ function MapSummary({
   headers,
   validCount,
   totalRows,
+  onSkipCustom,
 }: {
   mapping: FieldMapping;
   headers: string[];
   validCount: number;
   totalRows: number;
+  onSkipCustom: () => void;
 }) {
   let mapped = 0;
   let custom = 0;
@@ -625,6 +651,16 @@ function MapSummary({
       <Pill tone="teal">{mapped} → lead column</Pill>
       <Pill tone="neutral">{custom} → custom</Pill>
       <Pill tone="muted">{skipped} skipped</Pill>
+      {custom > 0 && (
+        <button
+          type="button"
+          onClick={onSkipCustom}
+          className="rounded-full border border-line bg-canvas px-2 py-0.5 text-[11px] font-medium text-txt-2 hover:border-line-2 hover:text-txt-1"
+          title="Set every header-key custom field to Skip — keeps explicit mappings and lead columns"
+        >
+          Skip {custom} custom
+        </button>
+      )}
       <span className="ml-auto text-[12px]">
         <span className={ready ? 'text-teal' : 'text-txt-2'}>
           {validCount.toLocaleString()} of {totalRows.toLocaleString()}
