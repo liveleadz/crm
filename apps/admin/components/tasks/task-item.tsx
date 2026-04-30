@@ -62,11 +62,17 @@ export function TaskItem({
   team,
   onChanged,
   hideLead = false,
+  isSelected,
+  onToggleSelected,
 }: {
   task: TaskRow;
   team: TeamMemberOpt[];
   onChanged: () => void;
   hideLead?: boolean;
+  // Optional checkbox slot for bulk-select on /tasks. Omit to render
+  // without a checkbox (e.g. inside the lead detail drawer).
+  isSelected?: boolean;
+  onToggleSelected?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -98,7 +104,16 @@ export function TaskItem({
   }
 
   return (
-    <li className="group flex items-start gap-3 px-6 py-3 hover:bg-surface/50">
+    <li className={`group flex items-start gap-3 px-6 py-3 hover:bg-surface/50 ${isSelected ? 'bg-teal/5' : ''}`}>
+      {onToggleSelected && (
+        <input
+          type="checkbox"
+          aria-label={`Select ${task.title}`}
+          checked={!!isSelected}
+          onChange={onToggleSelected}
+          className="mt-1 h-3.5 w-3.5 shrink-0 cursor-pointer accent-teal"
+        />
+      )}
       <button
         type="button"
         onClick={() => run(() => (isDone ? reopenTask(task.id) : completeTask(task.id)))}

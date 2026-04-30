@@ -353,3 +353,103 @@ export async function deleteTask(taskId: string) {
   bumpAll(existing?.lead_id ?? null);
   return { ok: true as const };
 }
+
+// ---------------------------------------------------------------------------
+// Bulk operations
+// ---------------------------------------------------------------------------
+//
+// Mirrors the pattern from /actions/leads.ts. All bulk-* task actions are
+// brand-scoped via RLS plus an explicit brand_id filter. They return the
+// effective row count so the UI can give meaningful feedback.
+//
+// Recurrence is intentionally NOT respun on bulk complete — bulk closeout
+// is usually for stale items the user wants out of the way, not a
+// disciplined per-task close. If they need recurrence to spawn, they
+// complete the task individually.
+
+type TasksBulkResult = { ok: true; count: number } | { ok: false; error: string };
+
+function uniqueIds(ids: string[]): string[] {
+  return Array.from(new Set(ids.filter(Boolean)));
+}
+
+export async function bulkCompleteTasks(input: { ids: string[] }): Promise<TasksBulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: 'Not authenticated.' };
+  const { error, count } = await supabase
+    .from('tasks')
+    .update(
+      {
+        status: 'done',
+        completed_at: new Date().toISOString(),
+        completed_by: user.id,
+      },
+      { count: 'exact' },
+    )
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  bumpAll(null);
+  return { ok: true, count: count ?? 0 };
+}
+
+export async function bulkReopenTasks(input: { ids: string[] }): Promise<TasksBulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('tasks')
+    .update(
+      { status: 'open', completed_at: null, completed_by: null },
+      { count: 'exact' },
+    )
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  bumpAll(null);
+  return { ok: true, count: count ?? 0 };
+}
+
+export async function bulkAssignTasks(input: {
+  ids: string[];
+  assigneeId: string | null;
+}): Promise<TasksBulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('tasks')
+    .update({ assignee_id: input.assigneeId }, { count: 'exact' })
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  bumpAll(null);
+  return { ok: true, count: count ?? 0 };
+}
+
+export async function bulkDeleteTasks(input: { ids: string[] }): Promise<TasksBulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('tasks')
+    .delete({ count: 'exact' })
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  bumpAll(null);
+  return { ok: true, count: count ?? 0 };
+}
