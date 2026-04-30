@@ -120,6 +120,7 @@ export default async function LeadsListPage({
           leads={leads}
           stages={stages}
           stageById={Object.fromEntries(stageById)}
+          tagLibrary={tagLibrary}
         />
       )}
     </>

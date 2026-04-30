@@ -4,10 +4,22 @@
 // LeadDetailDrawer (timeline + notes + tags + tasks + scripts already
 // built). Quick actions on each row: call (opens /dialer with prefill),
 // SMS (opens /messages with prefill).
+//
+// Bulk operations: per-row checkboxes + sticky action bar reveal modals
+// for stage move, tag add, DNC/DNE flagging, and delete. Mirrors the
+// pattern shipped on /calls (bulk re-disposition).
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useMemo, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import type { LeadCard, LeadStage } from '@/lib/leads';
+import type { Tag } from '@/lib/tags';
+import {
+  bulkAddTagToLeads,
+  bulkDeleteLeads,
+  bulkMoveLeadsStage,
+  bulkSetLeadsConsent,
+} from '@/app/actions/leads';
 import { LeadDetailDrawer } from './lead-detail-drawer';
 
 type Props = {
@@ -15,10 +27,40 @@ type Props = {
   stages: LeadStage[];
   // Pre-built id -> stage map so we don't rebuild on every render.
   stageById: Record<string, LeadStage>;
+  tagLibrary: Tag[];
 };
 
-export function LeadsTable({ leads, stages, stageById }: Props) {
+type BulkMode = 'stage' | 'tag' | 'consent' | 'delete' | null;
+
+export function LeadsTable({ leads, stages, stageById, tagLibrary }: Props) {
+  const router = useRouter();
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkMode, setBulkMode] = useState<BulkMode>(null);
+
+  const allIds = useMemo(() => leads.map((l) => l.id), [leads]);
+  const allSelected = selected.size > 0 && selected.size === allIds.length;
+  const someSelected = selected.size > 0 && !allSelected;
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(allIds));
+  }
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelected(new Set());
+  }
+  function onBulkDone() {
+    clearSelection();
+    setBulkMode(null);
+    router.refresh();
+  }
 
   if (leads.length === 0) {
     return (
@@ -32,11 +74,68 @@ export function LeadsTable({ leads, stages, stageById }: Props) {
 
   return (
     <>
+      {selected.size > 0 && (
+        <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-line bg-teal/10 px-6 py-2">
+          <span className="text-[12px] font-medium text-teal">
+            {selected.size} selected
+          </span>
+          <span className="mx-1 h-3 w-px bg-teal/30" />
+          <button
+            type="button"
+            onClick={() => setBulkMode('stage')}
+            className="rounded-md border border-teal/40 bg-surface px-2.5 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/15"
+          >
+            Move stage
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkMode('tag')}
+            disabled={tagLibrary.length === 0}
+            className="rounded-md border border-teal/40 bg-surface px-2.5 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/15 disabled:cursor-not-allowed disabled:opacity-50"
+            title={tagLibrary.length === 0 ? 'No tags exist for this brand' : ''}
+          >
+            Add tag
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkMode('consent')}
+            className="rounded-md border border-teal/40 bg-surface px-2.5 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/15"
+          >
+            Mark DNC / DNE
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkMode('delete')}
+            className="rounded-md border border-hp/40 bg-surface px-2.5 py-1 text-[11.5px] font-medium text-hp hover:bg-hp/15"
+          >
+            Delete
+          </button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="ml-auto rounded-md px-2 py-1 text-[11.5px] text-txt-3 hover:text-txt-1"
+          >
+            Clear
+          </button>
+        </div>
+      )}
       <div className="flex-1 overflow-auto">
         <table className="w-full text-[12.5px]">
           <thead className="sticky top-0 z-10 border-b border-line bg-canvas text-left">
             <tr className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
-              <th className="px-6 py-2.5">Name</th>
+              <th className="w-9 pl-6 pr-2 py-2.5">
+                <input
+                  type="checkbox"
+                  aria-label="Select all"
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected;
+                  }}
+                  onChange={toggleAll}
+                  className="h-3.5 w-3.5 cursor-pointer accent-teal"
+                />
+              </th>
+              <th className="px-3 py-2.5">Name</th>
               <th className="px-3 py-2.5">Stage</th>
               <th className="px-3 py-2.5">Phone</th>
               <th className="px-3 py-2.5">Email</th>
@@ -51,13 +150,28 @@ export function LeadsTable({ leads, stages, stageById }: Props) {
               const stage = lead.stageId ? stageById[lead.stageId] : null;
               const fullName = [lead.firstName, lead.lastName].filter(Boolean).join(' ').trim();
               const display = fullName || 'Unnamed lead';
+              const isChecked = selected.has(lead.id);
               return (
                 <tr
                   key={lead.id}
                   onClick={() => setOpenLeadId(lead.id)}
-                  className="cursor-pointer border-b border-line/60 transition-colors hover:bg-surface"
+                  className={`cursor-pointer border-b border-line/60 transition-colors hover:bg-surface ${
+                    isChecked ? 'bg-teal/5' : ''
+                  }`}
                 >
-                  <td className="px-6 py-2.5">
+                  <td
+                    className="w-9 pl-6 pr-2 py-2.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${display}`}
+                      checked={isChecked}
+                      onChange={() => toggleOne(lead.id)}
+                      className="h-3.5 w-3.5 cursor-pointer accent-teal"
+                    />
+                  </td>
+                  <td className="px-3 py-2.5">
                     <div className="font-medium text-txt-1">{display}</div>
                     {(lead.doNotCall || lead.doNotEmail) && (
                       <div className="mt-0.5 flex gap-1">
@@ -161,7 +275,206 @@ export function LeadsTable({ leads, stages, stageById }: Props) {
         stages={stages}
         onClose={() => setOpenLeadId(null)}
       />
+      {bulkMode && (
+        <BulkLeadsModal
+          mode={bulkMode}
+          ids={Array.from(selected)}
+          stages={stages}
+          tagLibrary={tagLibrary}
+          onClose={() => setBulkMode(null)}
+          onDone={onBulkDone}
+        />
+      )}
     </>
+  );
+}
+
+// Single dialog component switches its body based on `mode`. Each branch
+// drives the corresponding bulk server action and closes on success.
+function BulkLeadsModal({
+  mode,
+  ids,
+  stages,
+  tagLibrary,
+  onClose,
+  onDone,
+}: {
+  mode: Exclude<BulkMode, null>;
+  ids: string[];
+  stages: LeadStage[];
+  tagLibrary: Tag[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [stageId, setStageId] = useState<string>(stages[0]?.id ?? '');
+  const [tagId, setTagId] = useState<string>(tagLibrary[0]?.id ?? '');
+  const [doNotCall, setDoNotCall] = useState(true);
+  const [doNotEmail, setDoNotEmail] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+
+  function run() {
+    setError(null);
+    startTransition(async () => {
+      let res: { ok: true; count: number } | { ok: false; error: string };
+      if (mode === 'stage') {
+        if (!stageId) {
+          setError('Pick a stage first.');
+          return;
+        }
+        res = await bulkMoveLeadsStage({ ids, stageId });
+      } else if (mode === 'tag') {
+        if (!tagId) {
+          setError('Pick a tag first.');
+          return;
+        }
+        res = await bulkAddTagToLeads({ ids, tagId });
+      } else if (mode === 'consent') {
+        if (!doNotCall && !doNotEmail) {
+          setError('Pick at least one flag to set.');
+          return;
+        }
+        res = await bulkSetLeadsConsent({
+          ids,
+          doNotCall: doNotCall ? true : undefined,
+          doNotEmail: doNotEmail ? true : undefined,
+        });
+      } else {
+        // delete
+        if (confirmText.trim().toLowerCase() !== 'delete') {
+          setError('Type "delete" to confirm.');
+          return;
+        }
+        res = await bulkDeleteLeads({ ids });
+      }
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      onDone();
+    });
+  }
+
+  const title =
+    mode === 'stage'
+      ? `Move ${ids.length} lead${ids.length === 1 ? '' : 's'} to stage`
+      : mode === 'tag'
+        ? `Add tag to ${ids.length} lead${ids.length === 1 ? '' : 's'}`
+        : mode === 'consent'
+          ? `Set consent flags on ${ids.length} lead${ids.length === 1 ? '' : 's'}`
+          : `Delete ${ids.length} lead${ids.length === 1 ? '' : 's'}`;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-xl border border-line bg-surface p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 text-[14px] font-semibold text-txt-1">{title}</div>
+
+        {mode === 'stage' && (
+          <select
+            value={stageId}
+            onChange={(e) => setStageId(e.target.value)}
+            className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[13px] outline-none focus:border-teal/60"
+          >
+            {stages.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {mode === 'tag' && (
+          <select
+            value={tagId}
+            onChange={(e) => setTagId(e.target.value)}
+            className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[13px] outline-none focus:border-teal/60"
+          >
+            {tagLibrary.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {mode === 'consent' && (
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 rounded-md border border-line bg-canvas px-3 py-2 text-[13px] text-txt-2">
+              <input
+                type="checkbox"
+                checked={doNotCall}
+                onChange={(e) => setDoNotCall(e.target.checked)}
+                className="h-3.5 w-3.5 accent-teal"
+              />
+              Mark Do Not Call
+            </label>
+            <label className="flex items-center gap-2 rounded-md border border-line bg-canvas px-3 py-2 text-[13px] text-txt-2">
+              <input
+                type="checkbox"
+                checked={doNotEmail}
+                onChange={(e) => setDoNotEmail(e.target.checked)}
+                className="h-3.5 w-3.5 accent-teal"
+              />
+              Mark Do Not Email
+            </label>
+            <p className="text-[11.5px] text-txt-3">
+              Flags are added — existing settings on other flags are preserved.
+            </p>
+          </div>
+        )}
+
+        {mode === 'delete' && (
+          <div className="space-y-3">
+            <p className="text-[12.5px] text-txt-2">
+              This permanently removes the selected leads and all their related
+              records. Type <span className="font-mono font-semibold">delete</span> to
+              confirm.
+            </p>
+            <input
+              type="text"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="delete"
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[13px] outline-none focus:border-hp/60"
+            />
+          </div>
+        )}
+
+        {error && (
+          <div className="mt-3 rounded-md border border-hp/40 bg-hp/10 px-3 py-2 text-[12px] text-hp">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-4 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={run}
+            disabled={pending}
+            className={`flex-1 rounded-lg px-3 py-2 text-[13px] font-semibold text-white disabled:opacity-50 ${
+              mode === 'delete' ? 'bg-hp hover:bg-hp/90' : 'bg-teal hover:bg-teal/90'
+            }`}
+          >
+            {pending ? 'Working…' : mode === 'delete' ? 'Delete leads' : 'Apply'}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            className="rounded-lg border border-line px-3 py-2 text-[13px] text-txt-2 hover:bg-canvas"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
