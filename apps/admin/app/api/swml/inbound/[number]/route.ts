@@ -175,9 +175,9 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
     .single();
   const callId = call?.id ?? null;
 
-  // Side effects (notification + automation dispatch) run after the SWML is
-  // composed so they never delay the response. Errors are swallowed — never
-  // block the call.
+  // Side effects (notifications + automation dispatch) run after the SWML
+  // is composed so they never delay the response. Errors are swallowed —
+  // never block the call.
   if (callId) {
     void notifyAndDispatch({
       brandId: numberRow.brand_id,
@@ -186,6 +186,7 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
       leadId,
       leadName,
       leadOwnerId,
+      ringMemberIds: targetMemberIds,
       fromNumber,
       toNumber: e164,
     });
@@ -199,18 +200,27 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
 
   // Build LaML XML response.
   //
-  // NOTE: PSTN-to-mobile parallel-dial is disabled. Inbound calls should
-  // ring the assigned members' BROWSERS (WebRTC) so they can answer with
-  // an in-app popup instead of waking up someone's cell. Until the in-
-  // browser inbound flow lands, every inbound call goes straight to
-  // voicemail — the agent still sees the call + recording in /calls and
-  // the lead owner gets a notification.
-  //
-  // ringNumbers is intentionally ignored here. Routing config is still
-  // read so we know strategy/ring_timeout for when WebRTC ringing ships.
+  // In-browser ringing: drop the caller into a conference room named
+  // inbound-<callId>. The notification we insert via notifyAndDispatch
+  // streams over Supabase realtime to the routed members' browsers; the
+  // IncomingCallProvider shows a popup with Answer/Reject. On Answer the
+  // agent's WebRTC leg joins the same conference and the bridge forms.
+  // If the ring timeout elapses without an answer, execution falls
+  // through to the voicemail flow below.
   void ringNumbers;
   void nextRotationMemberId;
   const verbs: string[] = [];
+  const conferenceName = callId ? `inbound-${callId}` : null;
+  const ring = route?.ring_timeout_sec ?? 25;
+
+  if (conferenceName && targetMemberIds.length > 0) {
+    verbs.push(
+      `<Dial timeout="${ring}" answerOnBridge="true">` +
+        `<Conference startConferenceOnEnter="false" endConferenceOnExit="true" beep="false">` +
+        escapeXml(conferenceName) +
+        `</Conference></Dial>`,
+    );
+  }
 
   if ((route?.voicemail_enabled ?? true) && callId) {
     const greeting =
@@ -255,8 +265,9 @@ function pickString(body: Record<string, unknown>, keys: string[]): string | nul
   return null;
 }
 
-// Auto-notify the lead owner (if matched) and dispatch any call_received
-// automations. Both are best-effort — the inbound call must always proceed.
+// Notify all routed members + the lead owner (deduped) about the inbound
+// call so each browser sees the answer/reject popup, and dispatch any
+// call_received automations. Best-effort — never block the call.
 async function notifyAndDispatch(input: {
   brandId: string;
   callId: string;
@@ -264,22 +275,36 @@ async function notifyAndDispatch(input: {
   leadId: string | null;
   leadName: string | null;
   leadOwnerId: string | null;
+  ringMemberIds: string[];
   fromNumber: string;
   toNumber: string;
 }) {
   const supabase = createAdminClient();
   try {
-    if (input.leadOwnerId) {
+    // Union of routed members and the lead owner (matched lead's owner gets
+    // a popup even if they aren't on the rotation).
+    const recipients = new Set<string>(input.ringMemberIds);
+    if (input.leadOwnerId) recipients.add(input.leadOwnerId);
+    if (recipients.size > 0) {
       const who = input.leadName || input.fromNumber;
-      await supabase.from('notifications').insert({
+      const conferenceName = `inbound-${input.callId}`;
+      const rows = Array.from(recipients).map((memberId) => ({
         brand_id: input.brandId,
-        recipient_member_id: input.leadOwnerId,
+        recipient_member_id: memberId,
         kind: 'inbound_call',
         title: `Inbound call from ${who}`,
         body: `${input.fromNumber} → ${input.toNumber}`,
         link_url: input.leadId ? `/leads/${input.leadId}` : `/calls`,
-        data: { call_id: input.callId, lead_id: input.leadId },
-      });
+        data: {
+          call_id: input.callId,
+          lead_id: input.leadId,
+          lead_name: input.leadName,
+          from_number: input.fromNumber,
+          to_number: input.toNumber,
+          conference_name: conferenceName,
+        },
+      }));
+      await supabase.from('notifications').insert(rows);
     }
   } catch (e) {
     console.error('[inbound:notify]', (e as Error).message);

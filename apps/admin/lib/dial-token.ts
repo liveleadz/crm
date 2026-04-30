@@ -17,8 +17,11 @@ import { createHmac, timingSafeEqual } from 'crypto';
 export type DialTokenPayload = {
   callId: string;
   from: string; // brand caller-ID, E.164
-  to: string; // lead phone, E.164
+  to: string; // lead phone, E.164 — empty when joining a conference
   exp: number; // unix seconds
+  // Inbound-answer flow: when set, the SWML route returns a Connect to a
+  // conference room so the agent's browser bridges with the held caller.
+  conference?: string;
 };
 
 function getSecret(): string {

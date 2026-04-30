@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation';
 import { createServerClient } from '@leadpilot/db/server';
 import { Sidebar } from '@/components/sidebar';
 import { Topbar } from '@/components/topbar';
+import { IncomingCallProvider } from '@/components/incoming-call/incoming-call-provider';
+import { IncomingCallPopup } from '@/components/incoming-call/incoming-call-popup';
 import { getActiveBrand, getMembershipBrands } from '@/lib/active-brand';
 import { getCurrentBrandRole } from '@/lib/team';
 
@@ -36,12 +38,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const role = await getCurrentBrandRole(active.id);
 
   return (
-    <div className="flex h-screen flex-col">
-      <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />
-      <div className="flex min-h-0 flex-1">
-        <Sidebar role={role} />
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">{children}</main>
+    <IncomingCallProvider>
+      <div className="flex h-screen flex-col">
+        <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />
+        <div className="flex min-h-0 flex-1">
+          <Sidebar role={role} />
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">{children}</main>
+        </div>
       </div>
-    </div>
+      <IncomingCallPopup />
+    </IncomingCallProvider>
   );
 }

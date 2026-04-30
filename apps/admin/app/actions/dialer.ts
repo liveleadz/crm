@@ -98,6 +98,75 @@ export async function prepareCall(input: {
   };
 }
 
+// Inbound answer: the agent clicked Answer in the IncomingCallPopup. We
+// validate that the call belongs to this brand, mint a dial token that
+// puts the agent's WebRTC leg into the same conference room as the held
+// PSTN caller, and return everything the dialer client needs to bridge.
+export async function prepareInboundAnswer(input: {
+  callId: string;
+}): Promise<
+  | {
+      ok: true;
+      fabricAddress: string;
+      dialToken: string;
+      conference: string;
+    }
+  | { ok: false; error: string }
+> {
+  if (!process.env.LAML_WEBHOOK_SECRET) {
+    return { ok: false, error: 'LAML_WEBHOOK_SECRET not configured.' };
+  }
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const supabase = await createServerClient();
+  const { data: call } = await supabase
+    .from('calls')
+    .select('id, brand_id, direction, from_number, to_number')
+    .eq('id', input.callId)
+    .eq('brand_id', active.id)
+    .maybeSingle();
+  if (!call) return { ok: false, error: 'Call not found.' };
+  if (call.direction !== 'inbound') {
+    return { ok: false, error: 'Not an inbound call.' };
+  }
+  // Stamp ownership so /calls reflects who picked it up.
+  const profile = await getMyProfile();
+  if (profile) {
+    await supabase
+      .from('calls')
+      .update({ member_id: profile.id })
+      .eq('id', call.id);
+  }
+  const conference = `inbound-${call.id}`;
+  const token = signDialToken({
+    callId: call.id,
+    from: call.from_number,
+    to: '',
+    exp: Math.floor(Date.now() / 1000) + 60,
+    conference,
+  });
+  return {
+    ok: true,
+    fabricAddress: `${FABRIC_ADDRESS}?channel=audio&t=${encodeURIComponent(token)}`,
+    dialToken: token,
+    conference,
+  };
+}
+
+// Mark a notification (typically the inbound_call popup row) as read so the
+// bell badge updates and the popup doesn't re-show on reload.
+export async function markNotificationHandled(input: {
+  notificationId: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('notifications')
+    .update({ read_at: new Date().toISOString() })
+    .eq('id', input.notificationId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 export async function attachSignalwireCallId(input: {
   callId: string;
   signalwireCallId: string;
