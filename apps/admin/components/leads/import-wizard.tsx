@@ -171,7 +171,10 @@ export function ImportWizard({
         listName: res.listName ?? null,
       });
       setStep('done');
-      router.refresh();
+      // No router.refresh() — the action's revalidatePath('/leads')
+      // already invalidates the leads route cache, and refreshing the
+      // current /pipelines/import page would needlessly re-run its
+      // server loaders just to render the same wizard shell.
     });
   }
 

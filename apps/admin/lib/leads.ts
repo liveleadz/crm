@@ -159,6 +159,27 @@ export async function loadLeadDetail(leadId: string, brandId: string) {
   return { lead, timeline };
 }
 
+// Stage-only loader for pages that just need the pipeline shape (e.g. the
+// import wizard). Skips the (potentially expensive) leads + tag join that
+// loadKanban performs, so it stays fast even on brands with thousands of
+// leads.
+export async function loadStages(brandId: string): Promise<LeadStage[]> {
+  const supabase = await createServerClient();
+  const { data } = await supabase
+    .from('stages')
+    .select('id, name, color, position, is_won, is_lost')
+    .eq('brand_id', brandId)
+    .order('position');
+  return (data ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    color: s.color,
+    position: s.position,
+    isWon: s.is_won,
+    isLost: s.is_lost,
+  }));
+}
+
 export async function loadKanban(brandId: string, filter: KanbanFilter = {}) {
   const supabase = await createServerClient();
   let leadsQuery = supabase
