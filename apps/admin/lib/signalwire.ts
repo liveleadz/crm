@@ -117,6 +117,71 @@ export async function lookupCnam(e164: string): Promise<SwResult<CnamLookupResul
 }
 
 /**
+ * Look up the Call Fabric audio address for a Subscriber identified by its
+ * email reference. Auto-provisioned subscribers get a resource address
+ * whose `name` is the local-part of the email (everything before @), NOT
+ * the full email — so a SWML connect.to for "/private/email@host" fails
+ * silently. This helper hits the Fabric API, finds the matching
+ * subscriber resource, and returns its canonical `/private/<name>` address.
+ *
+ * Returns null if no subscriber matches or the API call fails.
+ */
+export async function findSubscriberAudioAddress(email: string): Promise<string | null> {
+  const auth = basicAuth();
+  const space = spaceUrl();
+  if (!auth || !space) return null;
+  const target = email.toLowerCase();
+  let url: string | null = `https://${space}/api/fabric/resources/subscribers?page_size=50`;
+  while (url) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(8_000),
+        cache: 'no-store',
+      });
+    } catch {
+      return null;
+    }
+    if (!res.ok) return null;
+    const json = (await res.json().catch(() => null)) as
+      | {
+          data?: Array<{ id: string; subscriber?: { email?: string } }>;
+          links?: { next?: string | null };
+        }
+      | null;
+    if (!json?.data) return null;
+    const match = json.data.find(
+      (r) => r.subscriber?.email?.toLowerCase() === target,
+    );
+    if (match) {
+      try {
+        const aRes = await fetch(
+          `https://${space}/api/fabric/resources/${match.id}/addresses`,
+          {
+            headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
+            signal: AbortSignal.timeout(8_000),
+            cache: 'no-store',
+          },
+        );
+        if (!aRes.ok) return null;
+        const aJson = (await aRes.json().catch(() => null)) as
+          | { data?: Array<{ name: string; channels?: { audio?: string } }> }
+          | null;
+        const addr = aJson?.data?.[0];
+        if (addr?.channels?.audio) return addr.channels.audio;
+        if (addr?.name) return `/private/${addr.name}`;
+      } catch {
+        return null;
+      }
+      return null;
+    }
+    url = json.links?.next ?? null;
+  }
+  return null;
+}
+
+/**
  * Look up a SignalWire IncomingPhoneNumber SID by its E.164 number. We need
  * the SID to PATCH the number's voice handler (the LaML API addresses
  * numbers by SID, not by phone). Returns null if no match.

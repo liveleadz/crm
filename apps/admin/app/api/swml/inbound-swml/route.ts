@@ -22,6 +22,7 @@ import { createAdminClient } from '@leadpilot/db/admin';
 import { signVoicemailPath } from '@/lib/dial-token';
 import { getPublicAppUrl, toE164 } from '@/lib/dialer';
 import { runAutomations } from '@/lib/automation-engine';
+import { findSubscriberAudioAddress } from '@/lib/signalwire';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -212,19 +213,35 @@ async function handle(req: NextRequest) {
   const connectTimeout = Math.min(route?.ring_timeout_sec ?? 25, 15);
 
   if (ringEmails.length > 0) {
+    // Look up each subscriber's actual address. SignalWire auto-names the
+    // subscriber resource using the LOCAL-PART of the email, not the full
+    // email — so "/private/<email>" routes to nowhere and the connect
+    // silently times out. The Fabric API gives us the right address.
+    const lookups = await Promise.all(
+      ringEmails.map((email) => findSubscriberAudioAddress(email)),
+    );
     const addresses: string[] = [];
-    for (const email of ringEmails) {
-      addresses.push(`/private/${email}`);
-      addresses.push(`/public/${email}`);
-    }
-    console.log('[inbound-swml] dispatching to', addresses);
-    sections.push({
-      connect: {
-        to: addresses.length === 1 ? addresses[0] : addresses,
-        timeout: connectTimeout,
-        from: fromNumber !== 'unknown' ? fromNumber : e164,
-      },
+    ringEmails.forEach((email, i) => {
+      const addr = lookups[i];
+      if (addr) {
+        addresses.push(addr);
+      } else {
+        // Fall back to a best-guess local-part address. Won't always
+        // match but lets the test surface the symptom in logs.
+        const localPart = email.split('@')[0];
+        if (localPart) addresses.push(`/private/${localPart}`);
+      }
     });
+    console.log('[inbound-swml] dispatching to', addresses);
+    if (addresses.length > 0) {
+      sections.push({
+        connect: {
+          to: addresses.length === 1 ? addresses[0] : addresses,
+          timeout: connectTimeout,
+          from: fromNumber !== 'unknown' ? fromNumber : e164,
+        },
+      });
+    }
   }
 
   if ((route?.voicemail_enabled ?? true) && callId) {
