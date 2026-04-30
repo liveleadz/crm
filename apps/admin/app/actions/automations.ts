@@ -87,6 +87,67 @@ export async function createAutomation(input: {
   return { ok: true, id: data.id };
 }
 
+// Canvas-first creation. Drops the row immediately with a placeholder name
+// and an empty graph (just a trigger node). Caller is expected to redirect
+// to /workflows/[id] right after, where the full visual editor takes over.
+// Skips action validation since there are zero actions at this point.
+export async function createBlankAutomation(input?: {
+  triggerType?: string;
+}): Promise<Result> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+
+  const triggerType = input?.triggerType ?? 'disposition_set';
+
+  const supabase = await createServerClient();
+  const { data: maxRow } = await supabase
+    .from('automations')
+    .select('sort_order')
+    .eq('brand_id', active.id)
+    .order('sort_order', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nextSort = (maxRow?.sort_order ?? 0) + 10;
+
+  // Default empty graph: a single trigger node, no edges, no actions.
+  const blankGraph = {
+    nodes: [
+      {
+        id: 'trigger',
+        type: 'trigger',
+        position: { x: 320, y: 80 },
+        data: {
+          trigger_type: triggerType,
+          trigger_config: triggerType === 'disposition_set' ? { codes: [] } : {},
+        },
+      },
+    ],
+    edges: [],
+  };
+
+  const { data, error } = await supabase
+    .from('automations')
+    .insert({
+      brand_id: active.id,
+      name: 'Untitled workflow',
+      description: null,
+      trigger_type: triggerType,
+      trigger_config: blankGraph.nodes[0]!.data.trigger_config as unknown as Json,
+      actions: [] as unknown as Json,
+      sort_order: nextSort,
+      mode: 'graph',
+      graph: blankGraph as unknown as Json,
+      webhook_token: triggerType === 'webhook_received' ? generateWebhookToken() : null,
+      is_enabled: false, // start disabled — author has nothing wired up yet
+    })
+    .select('id')
+    .single();
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath('/workflows');
+  return { ok: true, id: data.id };
+}
+
 export async function updateAutomation(input: {
   id: string;
   name: string;

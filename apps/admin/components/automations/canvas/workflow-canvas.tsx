@@ -13,6 +13,8 @@ import {
   BackgroundVariant,
   Controls,
   MiniMap,
+  NodeToolbar,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   addEdge,
@@ -200,27 +202,44 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
   // The trigger node always has a single + handle (terminal edge case for
   // empty graphs). Render an explicit append button anchored to the canvas.
   const hasOutgoingFromTrigger = edges.some((e) => e.source === 'trigger');
-  function appendBelowTrigger() {
-    setPickerEdgeId(`__append_trigger__`);
+
+  // Identify nodes whose downstream slot is empty so we can render an explicit
+  // "+" toolbar below them. Branches are skipped here because each yes/no
+  // handle has its own slot — we render a hint on the selected branch panel
+  // instead. End nodes never need an appender.
+  const leafNodeIds = useMemo(() => {
+    const sourcesByNode = new Set(edges.map((e) => e.source));
+    const out: string[] = [];
+    for (const n of nodes) {
+      if (!n.type) continue;
+      if (n.type === 'end' || n.type === 'branch') continue;
+      if (n.id === 'trigger') continue; // handled by hasOutgoingFromTrigger
+      if (!sourcesByNode.has(n.id)) out.push(n.id);
+    }
+    return out;
+  }, [nodes, edges]);
+
+  function appendAfter(nodeId: string) {
+    setPickerEdgeId(`__append_after__${nodeId}`);
   }
-  function insertAfterTrigger(rawNode: Omit<GraphNode, 'id' | 'position'>) {
-    const trigger = nodes.find((n) => n.id === 'trigger');
-    if (!trigger) return;
+  function insertAfter(nodeId: string, rawNode: Omit<GraphNode, 'id' | 'position'>) {
+    const source = nodes.find((n) => n.id === nodeId);
+    if (!source) return;
     const id = `n_${Math.random().toString(36).slice(2, 9)}`;
     setNodes((nds) => [
       ...nds,
       {
         id,
         type: rawNode.type,
-        position: { x: trigger.position.x, y: trigger.position.y + 160 },
+        position: { x: source.position.x, y: source.position.y + 160 },
         data: rawNode.data,
       },
     ]);
     setEdges((eds) => [
       ...eds,
       {
-        id: `trigger->${id}`,
-        source: 'trigger',
+        id: `${nodeId}->${id}`,
+        source: nodeId,
         target: id,
         type: 'plus-edge',
         data: edgeData(null, openPickerRef),
@@ -228,6 +247,12 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
     ]);
     setPickerEdgeId(null);
     setSelectedId(id);
+  }
+  function insertAfterTrigger(rawNode: Omit<GraphNode, 'id' | 'position'>) {
+    insertAfter('trigger', rawNode);
+  }
+  function appendBelowTrigger() {
+    appendAfter('trigger');
   }
 
   return (
@@ -240,7 +265,7 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
         onConnect={onConnect}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        defaultEdgeOptions={{ type: 'plus-edge' }}
+        defaultEdgeOptions={{ type: 'plus-edge', animated: true }}
         onNodeClick={(_, n) => setSelectedId(n.id)}
         onPaneClick={() => setSelectedId(null)}
         onInit={(inst) => {
@@ -250,6 +275,27 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
         fitView
         proOptions={{ hideAttribution: true }}
       >
+        {/* "+ append" toolbar attached to each leaf node, sits below the card. */}
+        {leafNodeIds.map((id) => (
+          <NodeToolbar
+            key={`append-${id}`}
+            nodeId={id}
+            position={Position.Bottom}
+            isVisible
+            offset={6}
+          >
+            <button
+              type="button"
+              onClick={() => appendAfter(id)}
+              className="grid h-6 w-6 place-items-center rounded-full border border-line bg-surface text-txt-2 shadow-sm transition-colors hover:border-teal hover:text-teal"
+              aria-label="Add step"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+              </svg>
+            </button>
+          </NodeToolbar>
+        ))}
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="var(--line)" />
         <MiniMap
           pannable
@@ -290,8 +336,13 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
           ctx={ctx}
           onCancel={() => setPickerEdgeId(null)}
           onPick={(node) => {
-            if (pickerEdgeId === '__append_trigger__') insertAfterTrigger(node);
-            else insertOnEdge(node);
+            if (pickerEdgeId === '__append_trigger__') {
+              insertAfterTrigger(node);
+            } else if (pickerEdgeId.startsWith('__append_after__')) {
+              insertAfter(pickerEdgeId.slice('__append_after__'.length), node);
+            } else {
+              insertOnEdge(node);
+            }
           }}
         />
       )}

@@ -42,3 +42,14 @@ body {
   font-feature-settings: 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
 }
+
+/* Workflow canvas: subtle marching-ants animation on connecting lines so the
+ * graph feels alive without being noisy. Used by the custom plus-edge. */
+.lp-flow-edge {
+  animation: lp-flow-dash 1.4s linear infinite;
+}
+@keyframes lp-flow-dash {
+  to {
+    stroke-dashoffset: -10;
+  }
+}

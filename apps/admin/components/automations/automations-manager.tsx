@@ -26,14 +26,14 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { useRouter } from 'next/navigation';
 import {
-  createAutomation,
+  createBlankAutomation,
   deleteAutomation,
   reorderAutomations,
   setAutomationEnabled,
 } from '@/app/actions/automations';
-import { describeAction, type Automation, type AutomationAction } from '@/lib/automation-types';
-import { AutomationForm } from './automation-form';
+import { describeAction, type Automation } from '@/lib/automation-types';
 
 export type StageRef = { id: string; name: string };
 export type TagRef = { id: string; name: string };
@@ -46,13 +46,28 @@ type Props = {
   dispositions: DispositionRef[];
 };
 
-type EditorState = { kind: 'closed' } | { kind: 'create' };
-
 export function AutomationsManager({ initial, stages, tags, dispositions }: Props) {
+  const router = useRouter();
   const [items, setItems] = useState<Automation[]>(initial);
-  const [editor, setEditor] = useState<EditorState>({ kind: 'closed' });
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
   const [, startTransition] = useTransition();
+
+  // Canvas-first creation: drops a blank workflow in graph mode and lands the
+  // user directly in the visual editor. Avoids the modal-form detour the user
+  // didn't want.
+  async function newBlankWorkflow(triggerType: 'disposition_set' | 'webhook_received') {
+    if (creating) return;
+    setError(null);
+    setCreating(true);
+    const res = await createBlankAutomation({ triggerType });
+    setCreating(false);
+    if (!res.ok || !res.id) {
+      setError(res.ok ? 'Could not create workflow.' : res.error);
+      return;
+    }
+    router.push(`/workflows/${res.id}` as Route);
+  }
 
   // 5px activation distance avoids hijacking clicks on the toggle / Open
   // editor / Delete controls that share the row.
@@ -97,49 +112,30 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
     });
   }
 
-  async function handleCreate(values: {
-    name: string;
-    description: string;
-    triggerType: string;
-    triggerConfig: Record<string, unknown>;
-    actions: AutomationAction[];
-  }): Promise<string | null> {
-    const res = await createAutomation(values);
-    if (!res.ok) return res.error;
-    setItems((prev) => [
-      ...prev,
-      {
-        id: res.id ?? `pending-${Date.now()}`,
-        name: values.name.trim(),
-        description: values.description.trim() || null,
-        triggerType: values.triggerType,
-        triggerConfig: values.triggerConfig,
-        actions: values.actions,
-        isEnabled: true,
-        isSystem: false,
-        sortOrder: (prev.at(-1)?.sortOrder ?? 0) + 10,
-        mode: 'simple',
-        graph: null,
-        webhookToken: null,
-      },
-    ]);
-    setEditor({ kind: 'closed' });
-    return null;
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-[12.5px] text-txt-3">
           Triggers fire synchronously when the upstream event happens. Drag the grip to reorder; actions run top-to-bottom.
         </p>
-        <button
-          type="button"
-          onClick={() => setEditor({ kind: 'create' })}
-          className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90"
-        >
-          New automation
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={creating}
+            onClick={() => newBlankWorkflow('webhook_received')}
+            className="rounded-lg border border-line bg-canvas px-3 py-1.5 text-[12px] font-medium hover:bg-surface-2 disabled:opacity-50"
+          >
+            New webhook workflow
+          </button>
+          <button
+            type="button"
+            disabled={creating}
+            onClick={() => newBlankWorkflow('disposition_set')}
+            className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+          >
+            {creating ? 'Creating…' : 'New automation'}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -176,17 +172,6 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
         )}
       </div>
 
-      {editor.kind === 'create' && (
-        <AutomationForm
-          mode="create"
-          initial={null}
-          stages={stages}
-          tags={tags}
-          dispositions={dispositions}
-          onCancel={() => setEditor({ kind: 'closed' })}
-          onSave={handleCreate}
-        />
-      )}
     </div>
   );
 }

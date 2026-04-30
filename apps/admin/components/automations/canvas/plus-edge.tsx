@@ -43,7 +43,16 @@ export function PlusEdge(props: EdgeProps) {
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} style={{ stroke: 'var(--line)', strokeWidth: 1.5 }} />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        style={{
+          stroke: 'var(--line)',
+          strokeWidth: 1,
+          strokeDasharray: '5 5',
+        }}
+        className="lp-flow-edge"
+      />
       <EdgeLabelRenderer>
         <div
           style={{
