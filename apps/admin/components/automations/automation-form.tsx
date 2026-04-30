@@ -74,6 +74,9 @@ export function AutomationForm({
 }: Props) {
   const [name, setName] = useState(initial?.name ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
+  const [triggerType, setTriggerType] = useState<string>(
+    initial?.triggerType ?? 'disposition_set',
+  );
   const [codes, setCodes] = useState<string[]>(() => {
     const c = initial?.triggerConfig?.codes;
     return Array.isArray(c) ? (c as string[]) : [];
@@ -142,7 +145,7 @@ export function AutomationForm({
       setError('Name is required.');
       return;
     }
-    if (codes.length === 0) {
+    if (triggerType === 'disposition_set' && codes.length === 0) {
       setError('Pick at least one disposition for the trigger.');
       return;
     }
@@ -169,8 +172,8 @@ export function AutomationForm({
     const err = await onSave({
       name: name.trim(),
       description: description.trim(),
-      triggerType: 'disposition_set',
-      triggerConfig: { codes },
+      triggerType,
+      triggerConfig: triggerType === 'disposition_set' ? { codes } : {},
       actions: actions.map((row) => row.data),
     });
     setSaving(false);
@@ -234,34 +237,62 @@ export function AutomationForm({
             <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-txt-3">
               Trigger
             </h3>
-            <div className="rounded-xl border border-line bg-canvas p-3">
-              <p className="mb-3 text-[12px] text-txt-2">
-                When a call disposition is set to any of the selected codes:
-              </p>
-              {dispositions.length === 0 ? (
-                <p className="text-[12px] text-txt-3">
-                  No active dispositions. Add some in Settings first.
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {dispositions.map((d) => {
-                    const on = codes.includes(d.code);
-                    return (
-                      <button
-                        type="button"
-                        key={d.code}
-                        onClick={() => toggleCode(d.code)}
-                        className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
-                          on
-                            ? 'border-teal/60 bg-teal/10 text-teal'
-                            : 'border-line bg-surface text-txt-2 hover:border-teal/30'
-                        }`}
-                      >
-                        {d.label}
-                      </button>
-                    );
-                  })}
+            <div className="space-y-3 rounded-xl border border-line bg-canvas p-3">
+              <div>
+                <span className="mb-1.5 block text-[11.5px] font-medium text-txt-2">
+                  Trigger type
+                </span>
+                <select
+                  value={triggerType}
+                  onChange={(e) => setTriggerType(e.target.value)}
+                  className="w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+                >
+                  <option value="disposition_set">When call disposition is set</option>
+                  <option value="webhook_received">When webhook is received</option>
+                </select>
+              </div>
+
+              {triggerType === 'disposition_set' && (
+                <div>
+                  <p className="mb-2 text-[12px] text-txt-2">
+                    Match any of the selected disposition codes:
+                  </p>
+                  {dispositions.length === 0 ? (
+                    <p className="text-[12px] text-txt-3">
+                      No active dispositions. Add some in Settings first.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {dispositions.map((d) => {
+                        const on = codes.includes(d.code);
+                        return (
+                          <button
+                            type="button"
+                            key={d.code}
+                            onClick={() => toggleCode(d.code)}
+                            className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                              on
+                                ? 'border-teal/60 bg-teal/10 text-teal'
+                                : 'border-line bg-surface text-txt-2 hover:border-teal/30'
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
+              )}
+
+              {triggerType === 'webhook_received' && (
+                <p className="text-[12px] text-txt-3">
+                  A unique webhook URL will be generated when you save. POST any JSON to it to
+                  fire this workflow. The body is available to actions as{' '}
+                  <code className="rounded bg-surface px-1">{'{{webhook.body.<key>}}'}</code>.
+                  Pass <code className="rounded bg-surface px-1">lead_id</code> to scope the run
+                  to a specific lead.
+                </p>
               )}
             </div>
           </div>
