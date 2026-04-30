@@ -8,6 +8,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadKanban } from '@/lib/leads';
 import { loadLists } from '@/lib/lists';
 import { loadBrandTags } from '@/lib/tags';
+import { loadTeam } from '@/lib/team';
 import { PageHeader } from '@/components/page-header';
 import { LeadFilters } from '@/components/leads/lead-filters';
 import { ListPills } from '@/components/leads/list-pills';
@@ -41,7 +42,7 @@ export default async function LeadsListPage({
   const excludeDnc = sp.dnc === '1';
   const excludeDne = sp.dne === '1';
 
-  const [{ stages, leads }, lists, tagLibrary] = await Promise.all([
+  const [{ stages, leads }, lists, tagLibrary, team] = await Promise.all([
     loadKanban(active.id, {
       listId: activeListId,
       search,
@@ -52,7 +53,13 @@ export default async function LeadsListPage({
     }),
     loadLists(active.id),
     loadBrandTags(active.id),
+    loadTeam(active.id),
   ]);
+
+  const teamOpts = team.map((t) => ({
+    id: t.memberId,
+    name: t.fullName ?? t.email,
+  }));
 
   const filtersActive =
     !!search || !!source || tagIds.length > 0 || excludeDnc || excludeDne;
@@ -121,6 +128,7 @@ export default async function LeadsListPage({
           stages={stages}
           stageById={Object.fromEntries(stageById)}
           tagLibrary={tagLibrary}
+          team={teamOpts}
         />
       )}
     </>

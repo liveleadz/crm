@@ -16,11 +16,15 @@ import type { LeadCard, LeadStage } from '@/lib/leads';
 import type { Tag } from '@/lib/tags';
 import {
   bulkAddTagToLeads,
+  bulkAssignLeadsOwner,
   bulkDeleteLeads,
   bulkMoveLeadsStage,
+  bulkRemoveTagFromLeads,
   bulkSetLeadsConsent,
 } from '@/app/actions/leads';
 import { LeadDetailDrawer } from './lead-detail-drawer';
+
+export type TeamOpt = { id: string; name: string };
 
 type Props = {
   leads: LeadCard[];
@@ -28,11 +32,19 @@ type Props = {
   // Pre-built id -> stage map so we don't rebuild on every render.
   stageById: Record<string, LeadStage>;
   tagLibrary: Tag[];
+  team: TeamOpt[];
 };
 
-type BulkMode = 'stage' | 'tag' | 'consent' | 'delete' | null;
+type BulkMode =
+  | 'stage'
+  | 'tag-add'
+  | 'tag-remove'
+  | 'consent'
+  | 'owner'
+  | 'delete'
+  | null;
 
-export function LeadsTable({ leads, stages, stageById, tagLibrary }: Props) {
+export function LeadsTable({ leads, stages, stageById, tagLibrary, team }: Props) {
   const router = useRouter();
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -89,12 +101,28 @@ export function LeadsTable({ leads, stages, stageById, tagLibrary }: Props) {
           </button>
           <button
             type="button"
-            onClick={() => setBulkMode('tag')}
+            onClick={() => setBulkMode('tag-add')}
             disabled={tagLibrary.length === 0}
             className="rounded-md border border-teal/40 bg-surface px-2.5 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/15 disabled:cursor-not-allowed disabled:opacity-50"
             title={tagLibrary.length === 0 ? 'No tags exist for this brand' : ''}
           >
             Add tag
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkMode('tag-remove')}
+            disabled={tagLibrary.length === 0}
+            className="rounded-md border border-teal/40 bg-surface px-2.5 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/15 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Remove tag
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkMode('owner')}
+            disabled={team.length === 0}
+            className="rounded-md border border-teal/40 bg-surface px-2.5 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/15 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Assign owner
           </button>
           <button
             type="button"
@@ -281,6 +309,7 @@ export function LeadsTable({ leads, stages, stageById, tagLibrary }: Props) {
           ids={Array.from(selected)}
           stages={stages}
           tagLibrary={tagLibrary}
+          team={team}
           onClose={() => setBulkMode(null)}
           onDone={onBulkDone}
         />
@@ -296,6 +325,7 @@ function BulkLeadsModal({
   ids,
   stages,
   tagLibrary,
+  team,
   onClose,
   onDone,
 }: {
@@ -303,6 +333,7 @@ function BulkLeadsModal({
   ids: string[];
   stages: LeadStage[];
   tagLibrary: Tag[];
+  team: TeamOpt[];
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -310,6 +341,8 @@ function BulkLeadsModal({
   const [error, setError] = useState<string | null>(null);
   const [stageId, setStageId] = useState<string>(stages[0]?.id ?? '');
   const [tagId, setTagId] = useState<string>(tagLibrary[0]?.id ?? '');
+  // Owner picker: empty string means "Unassigned" (null on the server).
+  const [ownerId, setOwnerId] = useState<string>(team[0]?.id ?? '');
   const [doNotCall, setDoNotCall] = useState(true);
   const [doNotEmail, setDoNotEmail] = useState(false);
   const [confirmText, setConfirmText] = useState('');
@@ -324,12 +357,23 @@ function BulkLeadsModal({
           return;
         }
         res = await bulkMoveLeadsStage({ ids, stageId });
-      } else if (mode === 'tag') {
+      } else if (mode === 'tag-add') {
         if (!tagId) {
           setError('Pick a tag first.');
           return;
         }
         res = await bulkAddTagToLeads({ ids, tagId });
+      } else if (mode === 'tag-remove') {
+        if (!tagId) {
+          setError('Pick a tag first.');
+          return;
+        }
+        res = await bulkRemoveTagFromLeads({ ids, tagId });
+      } else if (mode === 'owner') {
+        res = await bulkAssignLeadsOwner({
+          ids,
+          ownerId: ownerId === '' ? null : ownerId,
+        });
       } else if (mode === 'consent') {
         if (!doNotCall && !doNotEmail) {
           setError('Pick at least one flag to set.');
@@ -356,14 +400,19 @@ function BulkLeadsModal({
     });
   }
 
+  const noun = `${ids.length} lead${ids.length === 1 ? '' : 's'}`;
   const title =
     mode === 'stage'
-      ? `Move ${ids.length} lead${ids.length === 1 ? '' : 's'} to stage`
-      : mode === 'tag'
-        ? `Add tag to ${ids.length} lead${ids.length === 1 ? '' : 's'}`
-        : mode === 'consent'
-          ? `Set consent flags on ${ids.length} lead${ids.length === 1 ? '' : 's'}`
-          : `Delete ${ids.length} lead${ids.length === 1 ? '' : 's'}`;
+      ? `Move ${noun} to stage`
+      : mode === 'tag-add'
+        ? `Add tag to ${noun}`
+        : mode === 'tag-remove'
+          ? `Remove tag from ${noun}`
+          : mode === 'owner'
+            ? `Assign owner to ${noun}`
+            : mode === 'consent'
+              ? `Set consent flags on ${noun}`
+              : `Delete ${noun}`;
 
   return (
     <div
@@ -390,7 +439,7 @@ function BulkLeadsModal({
           </select>
         )}
 
-        {mode === 'tag' && (
+        {(mode === 'tag-add' || mode === 'tag-remove') && (
           <select
             value={tagId}
             onChange={(e) => setTagId(e.target.value)}
@@ -399,6 +448,21 @@ function BulkLeadsModal({
             {tagLibrary.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {mode === 'owner' && (
+          <select
+            value={ownerId}
+            onChange={(e) => setOwnerId(e.target.value)}
+            className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[13px] outline-none focus:border-teal/60"
+          >
+            <option value="">— Unassigned —</option>
+            {team.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
               </option>
             ))}
           </select>

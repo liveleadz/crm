@@ -638,3 +638,30 @@ export async function bulkRemoveTagFromLeads(input: {
   revalidatePath('/leads');
   return { ok: true, count: count ?? 0 };
 }
+
+// Assigns (or unassigns when ownerId is null) a single owner to all selected
+// leads. We don't validate ownerId against brand membership here — the FK on
+// leads.owner_id -> members enforces it implicitly, and the brand_id filter
+// ensures the caller can only touch leads they already control.
+export async function bulkAssignLeadsOwner(input: {
+  ids: string[];
+  ownerId: string | null;
+}): Promise<BulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('leads')
+    .update(
+      { owner_id: input.ownerId, updated_at: new Date().toISOString() },
+      { count: 'exact' },
+    )
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/leads');
+  revalidatePath('/dashboard');
+  return { ok: true, count: count ?? 0 };
+}
