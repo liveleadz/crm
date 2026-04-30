@@ -47,9 +47,9 @@ export function PlusEdge(props: EdgeProps) {
         id={id}
         path={edgePath}
         style={{
-          stroke: 'var(--line)',
-          strokeWidth: 1,
-          strokeDasharray: '5 5',
+          stroke: 'rgb(var(--line-2))',
+          strokeWidth: 1.25,
+          strokeLinecap: 'round',
         }}
         className="lp-flow-edge"
       />

@@ -51,6 +51,7 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
   const [items, setItems] = useState<Automation[]>(initial);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [, startTransition] = useTransition();
 
   // Canvas-first creation: drops a blank workflow in graph mode and lands the
@@ -60,6 +61,7 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
     if (creating) return;
     setError(null);
     setCreating(true);
+    setPickerOpen(false);
     const res = await createBlankAutomation({ triggerType });
     setCreating(false);
     if (!res.ok || !res.id) {
@@ -118,25 +120,22 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
         <p className="text-[12.5px] text-txt-3">
           Triggers fire synchronously when the upstream event happens. Drag the grip to reorder; actions run top-to-bottom.
         </p>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            disabled={creating}
-            onClick={() => newBlankWorkflow('webhook_received')}
-            className="rounded-lg border border-line bg-canvas px-3 py-1.5 text-[12px] font-medium hover:bg-surface-2 disabled:opacity-50"
-          >
-            New webhook workflow
-          </button>
-          <button
-            type="button"
-            disabled={creating}
-            onClick={() => newBlankWorkflow('disposition_set')}
-            className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
-          >
-            {creating ? 'Creating…' : 'New automation'}
-          </button>
-        </div>
+        <button
+          type="button"
+          disabled={creating}
+          onClick={() => setPickerOpen(true)}
+          className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+        >
+          {creating ? 'Creating…' : 'New automation'}
+        </button>
       </div>
+
+      {pickerOpen && (
+        <TriggerPicker
+          onCancel={() => setPickerOpen(false)}
+          onPick={(t) => newBlankWorkflow(t)}
+        />
+      )}
 
       {error && (
         <div className="rounded-lg border border-hp/40 bg-hp/10 px-3 py-2 text-[12px] text-hp">
@@ -304,6 +303,88 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean
         }`}
       />
     </button>
+  );
+}
+
+// Small modal that gates the canvas-first create flow on a trigger choice.
+// Two main options + a "skip" link that drops in with a no-op disposition
+// trigger so authors can wire it up later from the canvas.
+function TriggerPicker({
+  onCancel,
+  onPick,
+}: {
+  onCancel: () => void;
+  onPick: (triggerType: 'disposition_set' | 'webhook_received') => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-md overflow-hidden rounded-2xl border border-line bg-surface shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-line px-4 py-3">
+          <h2 className="text-[13px] font-semibold">How should this run?</h2>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Close"
+            className="grid h-7 w-7 place-items-center rounded-md text-txt-3 hover:bg-canvas hover:text-txt-1"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div className="space-y-2 p-3">
+          <button
+            type="button"
+            onClick={() => onPick('disposition_set')}
+            className="flex w-full items-start gap-3 rounded-lg border border-line bg-canvas p-3 text-left hover:border-teal/40"
+          >
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-teal/15 text-teal">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium">When call disposition is set</div>
+              <div className="text-[11.5px] text-txt-3">
+                Fires after an agent dispositions a call (Sale, Callback, etc.).
+              </div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => onPick('webhook_received')}
+            className="flex w-full items-start gap-3 rounded-lg border border-line bg-canvas p-3 text-left hover:border-teal/40"
+          >
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-sky-500/15 text-sky-600 dark:text-sky-400">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M5 12a7 7 0 1114 0M3 16h18M8 20h8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium">When webhook is received</div>
+              <div className="text-[11.5px] text-txt-3">
+                Exposes a unique URL — POST any JSON to fire the workflow.
+              </div>
+            </div>
+          </button>
+        </div>
+        <div className="border-t border-line px-4 py-3 text-center">
+          <button
+            type="button"
+            onClick={() => onPick('disposition_set')}
+            className="text-[11.5px] text-txt-3 hover:text-txt-1 hover:underline"
+          >
+            Set up the trigger later — start with a blank canvas
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
