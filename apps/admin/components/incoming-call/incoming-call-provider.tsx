@@ -69,6 +69,32 @@ type ActiveSession = {
   hangup?: () => Promise<unknown>;
 };
 
+// SignalWire occasionally hands us garbage caller-id strings — most
+// commonly the literal "_undef_" placeholder when no CNAM exists. Strip
+// those so the popup shows nothing rather than meaningless tokens.
+function cleanName(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.toLowerCase() === '_undef_' || trimmed === '-' || trimmed === 'unknown') {
+    return null;
+  }
+  return trimmed;
+}
+
+// Phone fields can come as a bare E.164 ("+12025550000"), a SIP URI
+// ("sip:+15619415323@sip.signalwire.com"), or a TEL URI. Reduce all of
+// them to a plain E.164 string for display.
+function cleanPhone(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  // SIP / TEL URI: strip scheme + @host
+  const sipMatch = trimmed.match(/^(?:sip|sips|tel):([^@;]+)/i);
+  if (sipMatch?.[1]) return decodeURIComponent(sipMatch[1]);
+  return trimmed;
+}
+
 export function IncomingCallProvider({
   children,
   dispositions,
@@ -110,9 +136,10 @@ export function IncomingCallProvider({
               const details = inv.details ?? {};
               inviteRef.current = inv;
               setPending({
-                fromNumber: details.caller_id_number || details.from || 'Unknown',
-                toNumber: details.callee_id_number || details.to || '',
-                leadName: details.caller_id_name || null,
+                fromNumber:
+                  cleanPhone(details.caller_id_number) ?? cleanPhone(details.from) ?? 'Unknown',
+                toNumber: cleanPhone(details.callee_id_number) ?? cleanPhone(details.to) ?? '',
+                leadName: cleanName(details.caller_id_name),
                 receivedAt: Date.now(),
               });
             }) as never,

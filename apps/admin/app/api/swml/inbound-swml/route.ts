@@ -19,7 +19,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
 import { createAdminClient } from '@leadpilot/db/admin';
-import { signVoicemailPath } from '@/lib/dial-token';
+import { signRecordingPath, signVoicemailPath } from '@/lib/dial-token';
 import { getPublicAppUrl, toE164 } from '@/lib/dialer';
 import { runAutomations } from '@/lib/automation-engine';
 import { findSubscriberAudioAddress } from '@/lib/signalwire';
@@ -174,19 +174,30 @@ async function handle(req: NextRequest) {
     .single();
   const callId = callRow?.id ?? null;
 
+  // Dispatch any call_received automations (best-effort). Bell-style
+  // notifications are NOT inserted here — that would alert the agent
+  // about every inbound including ones they answer in real time. Missed-
+  // call / voicemail notifications are inserted in the voicemail
+  // webhook instead, which only fires when the call actually rolled to
+  // voicemail.
   if (callId) {
-    void notifyAndDispatch({
+    void runAutomations({
+      trigger: 'call_received',
       brandId: numberRow.brand_id,
       callId,
       numberId: numberRow.id,
       leadId,
-      leadName,
-      leadOwnerId,
-      ringMemberIds: targetMemberIds,
       fromNumber,
       toNumber: e164,
+    }).catch((e) => {
+      console.error('[inbound-swml:automations]', (e as Error).message);
     });
   }
+  // Suppress unused warnings — these are kept for the voicemail-side
+  // notification once we wire the missed-call path through that webhook.
+  void leadName;
+  void leadOwnerId;
+  void targetMemberIds;
 
   // Compose the SWML response.
   //
@@ -203,10 +214,28 @@ async function handle(req: NextRequest) {
   // SWML's TTS goes through the `play` verb with a `say:` URL scheme. There
   // is NO top-level `say` action — passing one is silently ignored, which
   // is what made the call go dead-silent for 20s then hang up.
+  // Record every call so the agent can replay it from /calls. The
+  // record_call action runs against the inbound (caller) leg; when the
+  // agent's leg connects via the connect verb below, the SDK side is
+  // bridged into the same media path so audio from both ends is captured.
+  // Voicemail uses its own record_call inside connect.result on no-answer.
   const sections: Array<Record<string, unknown>> = [
     { answer: {} },
-    { play: { url: 'say:Connecting your call.' } },
   ];
+  if (callId) {
+    const recSig = signRecordingPath(callId);
+    const recStatusUrl = `${getPublicAppUrl()}/api/swml/recording/${callId}/${recSig}`;
+    sections.push({
+      record_call: {
+        format: 'mp3',
+        stereo: true,
+        direction: 'both',
+        beep: false,
+        status_url: recStatusUrl,
+      },
+    });
+  }
+  sections.push({ play: { url: 'say:Connecting your call.' } });
 
   // Shorter timeout than configured so callers don't sit in silence too
   // long when no agent is online — voicemail kicks in faster.
@@ -304,54 +333,3 @@ function pickTargetsForStrategy(
   return [memberIds[start]!];
 }
 
-async function notifyAndDispatch(input: {
-  brandId: string;
-  callId: string;
-  numberId: string;
-  leadId: string | null;
-  leadName: string | null;
-  leadOwnerId: string | null;
-  ringMemberIds: string[];
-  fromNumber: string;
-  toNumber: string;
-}) {
-  const supabase = createAdminClient();
-  try {
-    const recipients = new Set<string>(input.ringMemberIds);
-    if (input.leadOwnerId) recipients.add(input.leadOwnerId);
-    if (recipients.size > 0) {
-      const who = input.leadName || input.fromNumber;
-      const rows = Array.from(recipients).map((memberId) => ({
-        brand_id: input.brandId,
-        recipient_member_id: memberId,
-        kind: 'inbound_call',
-        title: `Inbound call from ${who}`,
-        body: `${input.fromNumber} → ${input.toNumber}`,
-        link_url: input.leadId ? `/leads/${input.leadId}` : `/calls`,
-        data: {
-          call_id: input.callId,
-          lead_id: input.leadId,
-          lead_name: input.leadName,
-          from_number: input.fromNumber,
-          to_number: input.toNumber,
-        },
-      }));
-      await supabase.from('notifications').insert(rows);
-    }
-  } catch (e) {
-    console.error('[inbound-swml:notify]', (e as Error).message);
-  }
-  try {
-    await runAutomations({
-      trigger: 'call_received',
-      brandId: input.brandId,
-      callId: input.callId,
-      numberId: input.numberId,
-      leadId: input.leadId,
-      fromNumber: input.fromNumber,
-      toNumber: input.toNumber,
-    });
-  } catch (e) {
-    console.error('[inbound-swml:automations]', (e as Error).message);
-  }
-}

@@ -41,7 +41,9 @@ export async function POST(
   const duration = durationRaw ? Number.parseInt(durationRaw, 10) : null;
 
   const supabase = createAdminClient();
-  await supabase
+  // Stamp recording on the call row, return the row so we can use its
+  // brand_id + lead for the missed-call notification.
+  const { data: callRow } = await supabase
     .from('calls')
     .update({
       recording_url: recordingUrl ?? null,
@@ -50,7 +52,48 @@ export async function POST(
       is_voicemail: true,
       disposition: 'voicemail',
     })
-    .eq('id', callId);
+    .eq('id', callId)
+    .select(
+      'brand_id, lead_id, from_number, to_number, leads(first_name, last_name, owner_id)',
+    )
+    .maybeSingle();
+
+  // Insert a "Missed call" bell notification for the matched lead's
+  // owner. Answered calls never roll to this webhook, so we only ping
+  // when the call actually went to voicemail — that fixes the bug
+  // where every inbound (including the ones we picked up) was producing
+  // a "received an inbound call" notification.
+  if (callRow) {
+    const lead = callRow.leads as
+      | { first_name: string | null; last_name: string | null; owner_id: string | null }
+      | null;
+    const ownerId = lead?.owner_id ?? null;
+    if (ownerId) {
+      const leadName = lead
+        ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null
+        : null;
+      const who = leadName || callRow.from_number;
+      try {
+        await supabase.from('notifications').insert({
+          brand_id: callRow.brand_id,
+          recipient_member_id: ownerId,
+          kind: 'inbound_call',
+          title: `Missed call from ${who}`,
+          body: `${callRow.from_number} → ${callRow.to_number} · voicemail recorded`,
+          link_url: callRow.lead_id ? `/leads/${callRow.lead_id}` : `/calls`,
+          data: {
+            call_id: callId,
+            lead_id: callRow.lead_id,
+            from_number: callRow.from_number,
+            to_number: callRow.to_number,
+            is_voicemail: true,
+          },
+        });
+      } catch (e) {
+        console.error('[voicemail:notify]', (e as Error).message);
+      }
+    }
+  }
 
   return NextResponse.json({ ok: true });
 }
