@@ -7,6 +7,7 @@
 import { useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { Route } from 'next';
+import { DateRangePopover } from './date-range-popover';
 
 type AgentOption = { id: string; name: string };
 type RangeKey = '7d' | '30d' | '90d' | 'custom';
@@ -101,23 +102,11 @@ export function ReportFilters({
       </div>
 
       {initialRange === 'custom' && (
-        <div className="flex items-center gap-1.5 text-[11.5px] text-txt-3">
-          <input
-            type="date"
-            value={initialFromDate}
-            max={initialToDate || undefined}
-            onChange={(e) => navigate({ from: e.target.value || null })}
-            className="rounded-md border border-line bg-canvas px-2 py-1 text-[12px] outline-none focus:border-teal/60"
-          />
-          <span aria-hidden>→</span>
-          <input
-            type="date"
-            value={initialToDate}
-            min={initialFromDate || undefined}
-            onChange={(e) => navigate({ to: e.target.value || null })}
-            className="rounded-md border border-line bg-canvas px-2 py-1 text-[12px] outline-none focus:border-teal/60"
-          />
-        </div>
+        <DateRangePopover
+          fromIso={initialFromDate}
+          toIso={initialToDate}
+          onChange={({ from, to }) => navigate({ from, to })}
+        />
       )}
 
       <label className="flex items-center gap-2 text-[11.5px] text-txt-3">
