@@ -1,0 +1,342 @@
+'use client';
+
+// Manager-only CRUD for the brand's automations. Each row is a trigger →
+// actions rule that the engine fires synchronously after the upstream
+// server action persists. Toggle off to disable without deleting; system
+// rows are seeded defaults but still fully editable / removable.
+
+import { useState, useTransition } from 'react';
+import {
+  createAutomation,
+  deleteAutomation,
+  reorderAutomations,
+  setAutomationEnabled,
+  updateAutomation,
+} from '@/app/actions/automations';
+import { describeAction, type Automation, type AutomationAction } from '@/lib/automation-types';
+import { AutomationForm } from './automation-form';
+
+export type StageRef = { id: string; name: string };
+export type TagRef = { id: string; name: string };
+export type DispositionRef = { code: string; label: string };
+
+type Props = {
+  initial: Automation[];
+  stages: StageRef[];
+  tags: TagRef[];
+  dispositions: DispositionRef[];
+};
+
+type EditorState =
+  | { kind: 'closed' }
+  | { kind: 'create' }
+  | { kind: 'edit'; automation: Automation };
+
+export function AutomationsManager({ initial, stages, tags, dispositions }: Props) {
+  const [items, setItems] = useState<Automation[]>(initial);
+  const [editor, setEditor] = useState<EditorState>({ kind: 'closed' });
+  const [error, setError] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+
+  function toggleEnabled(id: string, enabled: boolean) {
+    setError(null);
+    setItems((prev) => prev.map((a) => (a.id === id ? { ...a, isEnabled: enabled } : a)));
+    startTransition(async () => {
+      const res = await setAutomationEnabled({ id, enabled });
+      if (!res.ok) setError(res.error);
+    });
+  }
+
+  function move(id: string, dir: -1 | 1) {
+    const idx = items.findIndex((a) => a.id === id);
+    const next = idx + dir;
+    if (idx < 0 || next < 0 || next >= items.length) return;
+    const reordered = [...items];
+    const [moved] = reordered.splice(idx, 1);
+    if (!moved) return;
+    reordered.splice(next, 0, moved);
+    setItems(reordered);
+    startTransition(async () => {
+      const res = await reorderAutomations({ ids: reordered.map((a) => a.id) });
+      if (!res.ok) setError(res.error);
+    });
+  }
+
+  function remove(a: Automation) {
+    setError(null);
+    if (!window.confirm(`Delete "${a.name}"? This can't be undone.`)) return;
+    startTransition(async () => {
+      const res = await deleteAutomation({ id: a.id });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setItems((prev) => prev.filter((x) => x.id !== a.id));
+    });
+  }
+
+  async function handleSave(values: {
+    name: string;
+    description: string;
+    triggerType: string;
+    triggerConfig: Record<string, unknown>;
+    actions: AutomationAction[];
+  }): Promise<string | null> {
+    if (editor.kind === 'create') {
+      const res = await createAutomation(values);
+      if (!res.ok) return res.error;
+      // Optimistic — server-generated id unknown until next reload, append
+      // a placeholder so the new row shows immediately.
+      setItems((prev) => [
+        ...prev,
+        {
+          id: res.id ?? `pending-${Date.now()}`,
+          name: values.name.trim(),
+          description: values.description.trim() || null,
+          triggerType: values.triggerType,
+          triggerConfig: values.triggerConfig,
+          actions: values.actions,
+          isEnabled: true,
+          isSystem: false,
+          sortOrder: (prev.at(-1)?.sortOrder ?? 0) + 10,
+        },
+      ]);
+      setEditor({ kind: 'closed' });
+      return null;
+    }
+    if (editor.kind === 'edit') {
+      const res = await updateAutomation({ id: editor.automation.id, ...values });
+      if (!res.ok) return res.error;
+      setItems((prev) =>
+        prev.map((a) =>
+          a.id === editor.automation.id
+            ? {
+                ...a,
+                name: values.name.trim(),
+                description: values.description.trim() || null,
+                triggerType: values.triggerType,
+                triggerConfig: values.triggerConfig,
+                actions: values.actions,
+              }
+            : a,
+        ),
+      );
+      setEditor({ kind: 'closed' });
+      return null;
+    }
+    return null;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-[12.5px] text-txt-3">
+          Triggers fire synchronously when the upstream event happens. Actions run in order; failures are logged but don't block the original save.
+        </p>
+        <button
+          type="button"
+          onClick={() => setEditor({ kind: 'create' })}
+          className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90"
+        >
+          New automation
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-hp/40 bg-hp/10 px-3 py-2 text-[12px] text-hp">
+          {error}
+        </div>
+      )}
+
+      <div className="overflow-hidden rounded-xl border border-line bg-surface">
+        {items.length === 0 ? (
+          <div className="px-4 py-10 text-center text-[12.5px] text-txt-3">
+            No automations yet. Create one to react to call dispositions.
+          </div>
+        ) : (
+          items.map((a, i) => (
+            <AutomationRow
+              key={a.id}
+              automation={a}
+              isFirst={i === 0}
+              isLast={i === items.length - 1}
+              stages={stages}
+              tags={tags}
+              dispositions={dispositions}
+              onToggle={(enabled) => toggleEnabled(a.id, enabled)}
+              onMove={(dir) => move(a.id, dir)}
+              onEdit={() => setEditor({ kind: 'edit', automation: a })}
+              onDelete={() => remove(a)}
+            />
+          ))
+        )}
+      </div>
+
+      {editor.kind !== 'closed' && (
+        <AutomationForm
+          mode={editor.kind}
+          initial={editor.kind === 'edit' ? editor.automation : null}
+          stages={stages}
+          tags={tags}
+          dispositions={dispositions}
+          onCancel={() => setEditor({ kind: 'closed' })}
+          onSave={handleSave}
+        />
+      )}
+    </div>
+  );
+}
+
+function AutomationRow({
+  automation,
+  isFirst,
+  isLast,
+  stages,
+  tags,
+  dispositions,
+  onToggle,
+  onMove,
+  onEdit,
+  onDelete,
+}: {
+  automation: Automation;
+  isFirst: boolean;
+  isLast: boolean;
+  stages: StageRef[];
+  tags: TagRef[];
+  dispositions: DispositionRef[];
+  onToggle: (enabled: boolean) => void;
+  onMove: (dir: -1 | 1) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="grid grid-cols-[60px_1fr_auto] items-start gap-3 border-b border-line/60 px-3 py-3 last:border-b-0">
+      <div className="mt-1 flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onMove(-1)}
+          disabled={isFirst}
+          aria-label="Move up"
+          className="grid h-6 w-6 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1 disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m18 15-6-6-6 6" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove(1)}
+          disabled={isLast}
+          aria-label="Move down"
+          className="grid h-6 w-6 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1 disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <h3 className="truncate text-[13px] font-medium">{automation.name}</h3>
+          {automation.isSystem && (
+            <span className="rounded-full border border-line bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-txt-3">
+              Default
+            </span>
+          )}
+          {!automation.isEnabled && (
+            <span className="rounded-full border border-hp/30 bg-hp/10 px-1.5 py-0.5 text-[10px] font-medium text-hp">
+              Off
+            </span>
+          )}
+        </div>
+        <div className="mt-1 text-[11.5px] text-txt-3">
+          <TriggerSummary
+            triggerType={automation.triggerType}
+            config={automation.triggerConfig}
+            dispositions={dispositions}
+          />
+        </div>
+        {automation.description && (
+          <p className="mt-1 text-[11.5px] text-txt-2">{automation.description}</p>
+        )}
+        <ul className="mt-2 space-y-1">
+          {automation.actions.map((a, i) => (
+            <li key={i} className="flex items-center gap-2 text-[12px] text-txt-1">
+              <span className="grid h-4 w-4 place-items-center rounded-full bg-teal/10 text-[9px] font-semibold text-teal">
+                {i + 1}
+              </span>
+              {describeAction(a, { stages, tags })}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        <Toggle enabled={automation.isEnabled} onChange={onToggle} />
+        <button
+          type="button"
+          onClick={onEdit}
+          className="rounded-md border border-line bg-canvas px-2.5 py-1 text-[11.5px] hover:bg-surface-2"
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          aria-label={`Delete ${automation.name}`}
+          className="grid h-7 w-7 place-items-center rounded-md text-txt-3 hover:bg-hp/10 hover:text-hp"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      onClick={() => onChange(!enabled)}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+        enabled ? 'bg-teal' : 'bg-line'
+      }`}
+    >
+      <span
+        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+          enabled ? 'translate-x-[18px]' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  );
+}
+
+function TriggerSummary({
+  triggerType,
+  config,
+  dispositions,
+}: {
+  triggerType: string;
+  config: Record<string, unknown>;
+  dispositions: DispositionRef[];
+}) {
+  if (triggerType === 'disposition_set') {
+    const codes = Array.isArray(config.codes) ? (config.codes as string[]) : [];
+    const labels = codes.map((c) => dispositions.find((d) => d.code === c)?.label ?? c);
+    return (
+      <span>
+        When disposition is{' '}
+        <span className="font-medium text-txt-1">
+          {labels.length === 0 ? '(none)' : labels.join(', ')}
+        </span>
+      </span>
+    );
+  }
+  return <span>Trigger: {triggerType}</span>;
+}

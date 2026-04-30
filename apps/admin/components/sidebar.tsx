@@ -87,7 +87,7 @@ const WORKSPACE: NavItem[] = [
   },
   {
     href: '/workflows',
-    label: 'Workflows',
+    label: 'Automations',
     icon: ICON(
       <>
         <circle cx="18" cy="5" r="3" />

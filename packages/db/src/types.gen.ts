@@ -132,6 +132,69 @@ export type Database = {
           },
         ]
       }
+      automations: {
+        Row: {
+          actions: Json
+          brand_id: string
+          created_at: string
+          created_by: string | null
+          description: string | null
+          id: string
+          is_enabled: boolean
+          is_system: boolean
+          name: string
+          sort_order: number
+          trigger_config: Json
+          trigger_type: string
+          updated_at: string
+        }
+        Insert: {
+          actions?: Json
+          brand_id: string
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          is_enabled?: boolean
+          is_system?: boolean
+          name: string
+          sort_order?: number
+          trigger_config?: Json
+          trigger_type: string
+          updated_at?: string
+        }
+        Update: {
+          actions?: Json
+          brand_id?: string
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          is_enabled?: boolean
+          is_system?: boolean
+          name?: string
+          sort_order?: number
+          trigger_config?: Json
+          trigger_type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "automations_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "automations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       brand_members: {
         Row: {
           brand_id: string
@@ -1238,6 +1301,10 @@ export type Database = {
         Returns: undefined
       }
       is_brand_member: { Args: { b: string }; Returns: boolean }
+      seed_automations_for_brand: {
+        Args: { p_brand_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       call_direction: "outbound" | "inbound"

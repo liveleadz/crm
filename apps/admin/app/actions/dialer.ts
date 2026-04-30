@@ -12,6 +12,7 @@ import { revalidatePath } from 'next/cache';
 import { getActiveBrand } from '@/lib/active-brand';
 import { getMyProfile, getOutboundFromNumber, toE164 } from '@/lib/dialer';
 import { signDialToken } from '@/lib/dial-token';
+import { runAutomations } from '@/lib/automation-engine';
 import { createServerClient } from '@leadpilot/db/server';
 
 type PrepareCallResult =
@@ -137,16 +138,37 @@ export async function setDisposition(input: {
   callbackAt?: string | null; // ISO timestamp when disposition === 'callback'
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const supabase = await createServerClient();
-  const { error } = await supabase
+  const callbackAt =
+    input.disposition === 'callback' ? input.callbackAt ?? null : null;
+  const { data: row, error } = await supabase
     .from('calls')
     .update({
       disposition: input.disposition,
       note: input.note?.trim() ? input.note.trim() : null,
-      callback_at: input.disposition === 'callback' ? input.callbackAt ?? null : null,
+      callback_at: callbackAt,
       needs_disposition: false,
     })
-    .eq('id', input.callId);
+    .eq('id', input.callId)
+    .select('brand_id, lead_id, member_id')
+    .single();
   if (error) return { ok: false, error: error.message };
+
+  // Fan out to user-defined automations. Best-effort: a misbehaving rule
+  // must never reject the disposition save.
+  if (row) {
+    await runAutomations({
+      trigger: 'disposition_set',
+      brandId: row.brand_id,
+      callId: input.callId,
+      leadId: row.lead_id,
+      memberId: row.member_id,
+      disposition: input.disposition,
+      callbackAt,
+    });
+  }
+
   revalidatePath('/calls');
+  revalidatePath('/leads');
+  revalidatePath('/tasks');
   return { ok: true };
 }
