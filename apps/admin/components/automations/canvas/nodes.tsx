@@ -81,17 +81,33 @@ function Card({
 export function TriggerNode({ data, selected }: NodeProps & { data: NodeData<'trigger'> }) {
   const summary = describeTriggerShared(data.trigger_type, data.trigger_config, CTX.dispositions);
   const isWebhook = data.trigger_type === 'webhook_received';
+  // "Unconfigured" = default disposition_set with no codes picked. Render a
+  // neutral accent + dashed-border card so it reads as a placeholder waiting
+  // for the author to set it up via the right-side panel.
+  const codes = Array.isArray((data.trigger_config as { codes?: unknown }).codes)
+    ? ((data.trigger_config as { codes: unknown[] }).codes as unknown[])
+    : [];
+  const unconfigured = data.trigger_type === 'disposition_set' && codes.length === 0;
+  const accent = unconfigured
+    ? 'bg-canvas text-txt-3 border border-dashed border-line'
+    : isWebhook
+      ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+      : 'bg-teal/15 text-teal';
   return (
     <>
       <Card
         selected={selected}
-        accent={isWebhook ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400' : 'bg-teal/15 text-teal'}
-        title="Trigger"
+        accent={accent}
+        title={unconfigured ? 'Trigger — not set' : 'Trigger'}
         subtitle={summary}
         icon={
           isWebhook ? (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M5 12a7 7 0 1114 0M3 16h18M8 20h8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : unconfigured ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M12 5v14M5 12h14" strokeLinecap="round" />
             </svg>
           ) : (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

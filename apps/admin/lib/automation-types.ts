@@ -339,15 +339,14 @@ export function describeTrigger(
 ): string {
   if (triggerType === 'disposition_set') {
     const codes = Array.isArray(config.codes) ? (config.codes as string[]) : [];
+    if (codes.length === 0) return 'Click to choose a trigger';
     const labels = codes.map((c) => dispositions.find((d) => d.code === c)?.label ?? c);
-    return labels.length === 0
-      ? 'When disposition is set'
-      : `When disposition is ${labels.join(', ')}`;
+    return `When disposition is ${labels.join(', ')}`;
   }
   if (triggerType === 'webhook_received') {
     return 'When webhook is received';
   }
-  return `Trigger: ${triggerType}`;
+  return 'Click to choose a trigger';
 }
 
 export function describeBranch(
