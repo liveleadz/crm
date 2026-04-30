@@ -3,9 +3,27 @@
 // Manager-only CRUD for the brand's automations. Each row is a trigger →
 // actions rule that the engine fires synchronously after the upstream
 // server action persists. Toggle off to disable without deleting; system
-// rows are seeded defaults but still fully editable / removable.
+// rows are seeded defaults but still fully editable / removable. Drag the
+// grip handle on the left of any row to reorder.
 
 import { useState, useTransition } from 'react';
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import {
   createAutomation,
   deleteAutomation,
@@ -38,6 +56,13 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
+  // 5px activation distance avoids hijacking clicks on the toggle / Edit
+  // / Delete buttons that share the row.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
   function toggleEnabled(id: string, enabled: boolean) {
     setError(null);
     setItems((prev) => prev.map((a) => (a.id === id ? { ...a, isEnabled: enabled } : a)));
@@ -47,14 +72,13 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
     });
   }
 
-  function move(id: string, dir: -1 | 1) {
-    const idx = items.findIndex((a) => a.id === id);
-    const next = idx + dir;
-    if (idx < 0 || next < 0 || next >= items.length) return;
-    const reordered = [...items];
-    const [moved] = reordered.splice(idx, 1);
-    if (!moved) return;
-    reordered.splice(next, 0, moved);
+  function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const from = items.findIndex((a) => a.id === active.id);
+    const to = items.findIndex((a) => a.id === over.id);
+    if (from < 0 || to < 0) return;
+    const reordered = arrayMove(items, from, to);
     setItems(reordered);
     startTransition(async () => {
       const res = await reorderAutomations({ ids: reordered.map((a) => a.id) });
@@ -85,8 +109,6 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
     if (editor.kind === 'create') {
       const res = await createAutomation(values);
       if (!res.ok) return res.error;
-      // Optimistic — server-generated id unknown until next reload, append
-      // a placeholder so the new row shows immediately.
       setItems((prev) => [
         ...prev,
         {
@@ -131,7 +153,7 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-[12.5px] text-txt-3">
-          Triggers fire synchronously when the upstream event happens. Actions run in order; failures are logged but don't block the original save.
+          Triggers fire synchronously when the upstream event happens. Drag the grip to reorder; actions run top-to-bottom.
         </p>
         <button
           type="button"
@@ -154,21 +176,26 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
             No automations yet. Create one to react to call dispositions.
           </div>
         ) : (
-          items.map((a, i) => (
-            <AutomationRow
-              key={a.id}
-              automation={a}
-              isFirst={i === 0}
-              isLast={i === items.length - 1}
-              stages={stages}
-              tags={tags}
-              dispositions={dispositions}
-              onToggle={(enabled) => toggleEnabled(a.id, enabled)}
-              onMove={(dir) => move(a.id, dir)}
-              onEdit={() => setEditor({ kind: 'edit', automation: a })}
-              onDelete={() => remove(a)}
-            />
-          ))
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEnd}
+          >
+            <SortableContext items={items.map((a) => a.id)} strategy={verticalListSortingStrategy}>
+              {items.map((a) => (
+                <SortableAutomationRow
+                  key={a.id}
+                  automation={a}
+                  stages={stages}
+                  tags={tags}
+                  dispositions={dispositions}
+                  onToggle={(enabled) => toggleEnabled(a.id, enabled)}
+                  onEdit={() => setEditor({ kind: 'edit', automation: a })}
+                  onDelete={() => remove(a)}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
         )}
       </div>
 
@@ -187,55 +214,50 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
   );
 }
 
-function AutomationRow({
-  automation,
-  isFirst,
-  isLast,
-  stages,
-  tags,
-  dispositions,
-  onToggle,
-  onMove,
-  onEdit,
-  onDelete,
-}: {
+function SortableAutomationRow(props: {
   automation: Automation;
-  isFirst: boolean;
-  isLast: boolean;
   stages: StageRef[];
   tags: TagRef[];
   dispositions: DispositionRef[];
   onToggle: (enabled: boolean) => void;
-  onMove: (dir: -1 | 1) => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const { automation } = props;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: automation.id,
+  });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+  };
+
   return (
-    <div className="grid grid-cols-[60px_1fr_auto] items-start gap-3 border-b border-line/60 px-3 py-3 last:border-b-0">
-      <div className="mt-1 flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onMove(-1)}
-          disabled={isFirst}
-          aria-label="Move up"
-          className="grid h-6 w-6 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1 disabled:opacity-30 disabled:hover:bg-transparent"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m18 15-6-6-6 6" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          onClick={() => onMove(1)}
-          disabled={isLast}
-          aria-label="Move down"
-          className="grid h-6 w-6 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1 disabled:opacity-30 disabled:hover:bg-transparent"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m6 9 6 6 6-6" />
-          </svg>
-        </button>
-      </div>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`relative grid grid-cols-[28px_1fr_auto] items-start gap-3 border-b border-line/60 bg-surface px-3 py-3 last:border-b-0 ${
+        isDragging ? 'shadow-lg ring-1 ring-teal/30' : ''
+      }`}
+    >
+      <button
+        type="button"
+        aria-label={`Drag ${automation.name}`}
+        {...attributes}
+        {...listeners}
+        className="mt-1 grid h-7 w-7 cursor-grab touch-none place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1 active:cursor-grabbing"
+      >
+        <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor">
+          <circle cx="3" cy="2" r="1.2" />
+          <circle cx="9" cy="2" r="1.2" />
+          <circle cx="3" cy="7" r="1.2" />
+          <circle cx="9" cy="7" r="1.2" />
+          <circle cx="3" cy="12" r="1.2" />
+          <circle cx="9" cy="12" r="1.2" />
+        </svg>
+      </button>
 
       <div className="min-w-0">
         <div className="flex items-center gap-2">
@@ -255,7 +277,7 @@ function AutomationRow({
           <TriggerSummary
             triggerType={automation.triggerType}
             config={automation.triggerConfig}
-            dispositions={dispositions}
+            dispositions={props.dispositions}
           />
         </div>
         {automation.description && (
@@ -267,24 +289,24 @@ function AutomationRow({
               <span className="grid h-4 w-4 place-items-center rounded-full bg-teal/10 text-[9px] font-semibold text-teal">
                 {i + 1}
               </span>
-              {describeAction(a, { stages, tags })}
+              {describeAction(a, { stages: props.stages, tags: props.tags })}
             </li>
           ))}
         </ul>
       </div>
 
       <div className="flex items-center gap-1.5">
-        <Toggle enabled={automation.isEnabled} onChange={onToggle} />
+        <Toggle enabled={automation.isEnabled} onChange={props.onToggle} />
         <button
           type="button"
-          onClick={onEdit}
+          onClick={props.onEdit}
           className="rounded-md border border-line bg-canvas px-2.5 py-1 text-[11.5px] hover:bg-surface-2"
         >
           Edit
         </button>
         <button
           type="button"
-          onClick={onDelete}
+          onClick={props.onDelete}
           aria-label={`Delete ${automation.name}`}
           className="grid h-7 w-7 place-items-center rounded-md text-txt-3 hover:bg-hp/10 hover:text-hp"
         >

@@ -3,9 +3,27 @@
 // Modal-style editor for a single automation. v1 only supports the
 // `disposition_set` trigger and four action kinds; the form structure is
 // designed to grow into more triggers without a rewrite (TriggerSection
-// switches on triggerType and renders a config slot).
+// switches on triggerType and renders a config slot). Action cards are
+// reorderable via drag handle (grip on the left of each card).
 
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { AutomationAction, Automation } from '@/lib/automation-types';
 import type { StageRef, TagRef, DispositionRef } from './automations-manager';
 
@@ -32,6 +50,15 @@ const ACTION_KINDS: { kind: AutomationAction['kind']; label: string }[] = [
   { kind: 'create_task', label: 'Create task' },
 ];
 
+// Lightweight client-only id generator. Used to give each action card a
+// stable identity for the dnd-kit SortableContext without polluting the
+// persisted action shape.
+function useIdGenerator() {
+  const counter = useRef(0);
+  const prefix = useId();
+  return () => `${prefix}-${counter.current++}`;
+}
+
 export function AutomationForm({
   mode,
   initial,
@@ -47,11 +74,17 @@ export function AutomationForm({
     const c = initial?.triggerConfig?.codes;
     return Array.isArray(c) ? (c as string[]) : [];
   });
-  const [actions, setActions] = useState<AutomationAction[]>(
-    () => initial?.actions ?? [],
+  const nextId = useIdGenerator();
+  const [actions, setActions] = useState<{ id: string; data: AutomationAction }[]>(() =>
+    (initial?.actions ?? []).map((a) => ({ id: nextId(), data: a })),
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   function toggleCode(code: string) {
     setCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
@@ -73,27 +106,30 @@ export function AutomationForm({
         next = { kind: 'create_task', title: 'Follow up', task_kind: 'call', assign_to_caller: true };
         break;
     }
-    setActions((prev) => [...prev, next]);
+    setActions((prev) => [...prev, { id: nextId(), data: next }]);
   }
 
-  function patchAction(idx: number, patch: Partial<AutomationAction>) {
+  function patchAction(id: string, patch: Partial<AutomationAction>) {
     setActions((prev) =>
-      prev.map((a, i) => (i === idx ? ({ ...a, ...patch } as AutomationAction) : a)),
+      prev.map((row) =>
+        row.id === id ? { ...row, data: { ...row.data, ...patch } as AutomationAction } : row,
+      ),
     );
   }
 
-  function removeAction(idx: number) {
-    setActions((prev) => prev.filter((_, i) => i !== idx));
+  function removeAction(id: string) {
+    setActions((prev) => prev.filter((row) => row.id !== id));
   }
 
-  function moveAction(idx: number, dir: -1 | 1) {
-    const next = idx + dir;
-    if (next < 0 || next >= actions.length) return;
-    const reordered = [...actions];
-    const [m] = reordered.splice(idx, 1);
-    if (!m) return;
-    reordered.splice(next, 0, m);
-    setActions(reordered);
+  function onActionDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    setActions((prev) => {
+      const from = prev.findIndex((r) => r.id === active.id);
+      const to = prev.findIndex((r) => r.id === over.id);
+      if (from < 0 || to < 0) return prev;
+      return arrayMove(prev, from, to);
+    });
   }
 
   async function submit() {
@@ -110,8 +146,7 @@ export function AutomationForm({
       setError('Add at least one action.');
       return;
     }
-    // Validate action shape
-    for (const a of actions) {
+    for (const { data: a } of actions) {
       if (a.kind === 'move_stage' && !a.stage_id) {
         setError('Pick a stage for every "Move lead to stage" action.');
         return;
@@ -132,7 +167,7 @@ export function AutomationForm({
       description: description.trim(),
       triggerType: 'disposition_set',
       triggerConfig: { codes },
-      actions,
+      actions: actions.map((row) => row.data),
     });
     setSaving(false);
     if (err) setError(err);
@@ -244,22 +279,31 @@ export function AutomationForm({
                 Add at least one action.
               </div>
             ) : (
-              <div className="space-y-2">
-                {actions.map((a, i) => (
-                  <ActionEditor
-                    key={i}
-                    action={a}
-                    index={i}
-                    isFirst={i === 0}
-                    isLast={i === actions.length - 1}
-                    stages={stages}
-                    tags={tags}
-                    onPatch={(patch) => patchAction(i, patch)}
-                    onRemove={() => removeAction(i)}
-                    onMove={(dir) => moveAction(i, dir)}
-                  />
-                ))}
-              </div>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={onActionDragEnd}
+              >
+                <SortableContext
+                  items={actions.map((row) => row.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-2">
+                    {actions.map((row, i) => (
+                      <SortableActionEditor
+                        key={row.id}
+                        sortableId={row.id}
+                        action={row.data}
+                        index={i}
+                        stages={stages}
+                        tags={tags}
+                        onPatch={(patch) => patchAction(row.id, patch)}
+                        onRemove={() => removeAction(row.id)}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
             )}
           </div>
         </div>
@@ -295,70 +339,74 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function ActionEditor({
+function SortableActionEditor({
+  sortableId,
   action,
   index,
-  isFirst,
-  isLast,
   stages,
   tags,
   onPatch,
   onRemove,
-  onMove,
 }: {
+  sortableId: string;
   action: AutomationAction;
   index: number;
-  isFirst: boolean;
-  isLast: boolean;
   stages: StageRef[];
   tags: TagRef[];
   onPatch: (patch: Partial<AutomationAction>) => void;
   onRemove: () => void;
-  onMove: (dir: -1 | 1) => void;
 }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: sortableId,
+  });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+  };
+
   return (
-    <div className="rounded-xl border border-line bg-canvas p-3">
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`rounded-xl border bg-canvas p-3 ${
+        isDragging ? 'border-teal/50 shadow-lg' : 'border-line'
+      }`}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label="Drag action"
+            {...attributes}
+            {...listeners}
+            className="grid h-6 w-6 cursor-grab touch-none place-items-center rounded text-txt-3 hover:bg-surface-2 hover:text-txt-1 active:cursor-grabbing"
+          >
+            <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor">
+              <circle cx="3" cy="2" r="1.2" />
+              <circle cx="9" cy="2" r="1.2" />
+              <circle cx="3" cy="7" r="1.2" />
+              <circle cx="9" cy="7" r="1.2" />
+              <circle cx="3" cy="12" r="1.2" />
+              <circle cx="9" cy="12" r="1.2" />
+            </svg>
+          </button>
           <span className="grid h-5 w-5 place-items-center rounded-full bg-teal/10 text-[10px] font-semibold text-teal">
             {index + 1}
           </span>
           <span className="text-[12px] font-medium">{labelFor(action.kind)}</span>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => onMove(-1)}
-            disabled={isFirst}
-            aria-label="Move up"
-            className="grid h-6 w-6 place-items-center rounded text-txt-3 hover:bg-surface-2 disabled:opacity-30"
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m18 15-6-6-6 6" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={() => onMove(1)}
-            disabled={isLast}
-            aria-label="Move down"
-            className="grid h-6 w-6 place-items-center rounded text-txt-3 hover:bg-surface-2 disabled:opacity-30"
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={onRemove}
-            aria-label="Remove action"
-            className="grid h-6 w-6 place-items-center rounded text-txt-3 hover:bg-hp/10 hover:text-hp"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
-            </svg>
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label="Remove action"
+          className="grid h-6 w-6 place-items-center rounded text-txt-3 hover:bg-hp/10 hover:text-hp"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
 
       {action.kind === 'move_stage' && (
