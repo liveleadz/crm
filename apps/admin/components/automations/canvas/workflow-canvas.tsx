@@ -88,7 +88,13 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
   }, [ctx]);
 
   // Re-derive the underlying graph + emit upstream whenever rf state moves.
-  // Keeps a flag to skip the very first emit (would be identical to initial).
+  // Skips the very first emit (would be identical to initial). `onChange` is
+  // held in a ref so unstable parent identities don't re-fire this effect —
+  // that would cause a setState→render→effect→setState loop (React #185).
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
   const firstEmit = useRef(true);
   useEffect(() => {
     if (firstEmit.current) {
@@ -99,8 +105,8 @@ function CanvasInner({ initial, ctx, onChange }: Props) {
       nodes: nodes.map(fromRfNode),
       edges: edges.map(fromRfEdge),
     };
-    onChange(graph);
-  }, [nodes, edges, onChange]);
+    onChangeRef.current(graph);
+  }, [nodes, edges]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),

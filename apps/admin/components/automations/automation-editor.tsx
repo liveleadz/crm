@@ -5,7 +5,7 @@
 // React Flow canvas. Switching to Visual on a simple rule materializes a
 // linear graph from the actions[]; saving the canvas flips mode='graph'.
 
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   saveAutomationGraph,
@@ -73,10 +73,13 @@ export function AutomationEditor({ initial, stages, tags, dispositions }: Props)
     };
   }, [graph, initial.id]);
 
-  function onCanvasChange(next: WorkflowGraph) {
+  // Memoized so its identity is stable across renders. The canvas wires this
+  // into a useEffect; an unstable reference would re-fire that effect every
+  // render and create an infinite loop with the parent's setGraph.
+  const onCanvasChange = useCallback((next: WorkflowGraph) => {
     dirtyGraph.current = true;
     setGraph(next);
-  }
+  }, []);
 
   async function changeView(next: 'standard' | 'visual') {
     if (next === view) return;
