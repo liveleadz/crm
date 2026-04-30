@@ -39,7 +39,7 @@ export async function createCustomField(input: { label: string }) {
     .single();
   if (error || !data) return { ok: false as const, error: error?.message ?? 'Insert failed' };
 
-  revalidatePath('/leads/import');
+  revalidatePath('/pipelines/import');
   return { ok: true as const, id: data.id, key: data.key, label: data.label };
 }
 

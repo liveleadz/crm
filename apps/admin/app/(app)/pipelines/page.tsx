@@ -1,20 +1,15 @@
-// Flat-list view of every lead in the active brand. Companion to
-// /pipelines (which presents the same data on a Kanban). Surfaces all
-// leads at a glance, with the same Smart Lists / Filters / Import / New
-// affordances and an LeadDetailDrawer click-to-expand for inline editing.
-
 import Link from 'next/link';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadKanban } from '@/lib/leads';
 import { loadLists } from '@/lib/lists';
 import { loadBrandTags } from '@/lib/tags';
 import { PageHeader } from '@/components/page-header';
-import { LeadFilters } from '@/components/leads/lead-filters';
-import { ListPills } from '@/components/leads/list-pills';
+import { KanbanBoard } from '@/components/leads/kanban-board';
 import { NewLeadButton } from '@/components/leads/new-lead-button';
-import { LeadsTable } from '@/components/leads/leads-table';
+import { ListPills } from '@/components/leads/list-pills';
+import { LeadFilters } from '@/components/leads/lead-filters';
 
-export default async function LeadsListPage({
+export default async function PipelinesPage({
   searchParams,
 }: {
   searchParams: Promise<{
@@ -54,16 +49,17 @@ export default async function LeadsListPage({
     loadBrandTags(active.id),
   ]);
 
+  const activeList = activeListId ? lists.find((l) => l.id === activeListId) ?? null : null;
   const filtersActive =
     !!search || !!source || tagIds.length > 0 || excludeDnc || excludeDne;
-  const subtitle = `${leads.length.toLocaleString()}${filtersActive ? ' filtered' : ' total'}`;
-
-  const stageById = new Map(stages.map((s) => [s.id, s]));
+  const subtitle = activeList
+    ? `${leads.length.toLocaleString()} in ${activeList.name}${filtersActive ? ' · filtered' : ''} · drag cards to move stages`
+    : `${leads.length.toLocaleString()}${filtersActive ? ' filtered' : ' total'} · drag cards to move stages`;
 
   return (
     <>
       <PageHeader
-        title="Leads"
+        title="Pipelines"
         subtitle={subtitle}
         actions={
           stages.length > 0 ? (
@@ -79,7 +75,9 @@ export default async function LeadsListPage({
           ) : null
         }
       />
-      {lists.length > 0 && <ListPills lists={lists} activeListId={activeListId} />}
+      {lists.length > 0 && (
+        <ListPills lists={lists} activeListId={activeListId} />
+      )}
       <LeadFilters
         tagLibrary={tagLibrary}
         initialSearch={search ?? ''}
@@ -92,17 +90,19 @@ export default async function LeadsListPage({
         <div className="flex flex-1 items-center justify-center p-12">
           <div className="max-w-md rounded-lg border border-dashed border-line-2 bg-surface p-8 text-center">
             <p className="text-[12.5px] text-txt-3">
-              No stages configured for {active.name}. Add stages in Settings to start tracking
-              leads.
+              No stages configured for {active.name}. Add stages in Settings to start the
+              pipeline.
             </p>
           </div>
         </div>
       ) : (
-        <LeadsTable
-          leads={leads}
-          stages={stages}
-          stageById={Object.fromEntries(stageById)}
-        />
+        <div className="flex-1 overflow-auto">
+          <KanbanBoard
+            stages={stages}
+            leads={leads}
+            tags={tagLibrary.map((t) => ({ id: t.id, name: t.name }))}
+          />
+        </div>
       )}
     </>
   );

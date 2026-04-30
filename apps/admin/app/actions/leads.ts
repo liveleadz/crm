@@ -53,6 +53,59 @@ export async function createLead(input: {
   return { ok: true as const, leadId: data.id };
 }
 
+// Quick "Create contact" flow from /calls. Pulls phone + best-effort
+// name fields from the call row, creates a lead, and stamps the lead_id
+// back onto the call so the row jumps from "Unknown" to the new contact.
+export async function createLeadFromCall(input: { callId: string }): Promise<
+  | { ok: true; leadId: string }
+  | { ok: false; error: string }
+> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const supabase = await createServerClient();
+  const { data: call } = await supabase
+    .from('calls')
+    .select('id, brand_id, direction, from_number, to_number, lead_id')
+    .eq('id', input.callId)
+    .eq('brand_id', active.id)
+    .maybeSingle();
+  if (!call) return { ok: false, error: 'Call not found.' };
+  if (call.lead_id) {
+    return { ok: false, error: 'Call already linked to a lead.' };
+  }
+  // Use the OTHER side of the call as the lead's phone — for inbound the
+  // caller is the lead; for outbound the dialed number is the lead.
+  const leadPhone =
+    call.direction === 'inbound' ? call.from_number : call.to_number;
+  if (!leadPhone) return { ok: false, error: 'No phone on call to create from.' };
+
+  const { data: lead, error: insertErr } = await supabase
+    .from('leads')
+    .insert({
+      brand_id: active.id,
+      phone: leadPhone,
+      source: 'manual',
+    })
+    .select('id')
+    .single();
+  if (insertErr || !lead) {
+    return { ok: false, error: insertErr?.message ?? 'Could not create lead.' };
+  }
+
+  // Backfill the call row + any earlier calls from the same number so the
+  // contact's history is complete from the start.
+  await supabase
+    .from('calls')
+    .update({ lead_id: lead.id })
+    .eq('brand_id', active.id)
+    .or(`from_number.eq.${leadPhone},to_number.eq.${leadPhone}`)
+    .is('lead_id', null);
+
+  revalidatePath('/calls');
+  revalidatePath('/leads');
+  return { ok: true, leadId: lead.id };
+}
+
 export async function moveLeadStage(leadId: string, stageId: string) {
   const supabase = await createServerClient();
   // RLS scopes the update; if the user can't access the lead the row count is 0.

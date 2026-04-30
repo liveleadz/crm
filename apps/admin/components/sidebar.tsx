@@ -39,6 +39,17 @@ const WORKSPACE: NavItem[] = [
     ),
   },
   {
+    href: '/pipelines',
+    label: 'Pipelines',
+    icon: ICON(
+      <>
+        <rect x="3" y="4" width="4" height="16" rx="1" />
+        <rect x="10" y="4" width="4" height="11" rx="1" />
+        <rect x="17" y="4" width="4" height="7" rx="1" />
+      </>,
+    ),
+  },
+  {
     href: '/calls',
     label: 'Calls',
     icon: ICON(

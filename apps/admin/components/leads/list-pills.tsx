@@ -107,7 +107,7 @@ export function ListPills({
         Smart lists
       </span>
       <Link
-        href="/leads"
+        href="/pipelines"
         className={`rounded-full px-3 py-1 text-[11.5px] font-medium ${
           activeListId === null
             ? 'bg-teal/15 text-teal'
@@ -165,7 +165,7 @@ export function ListPills({
             ) : (
               <>
                 <Link
-                  href={`/leads?list=${l.id}`}
+                  href={`/pipelines?list=${l.id}`}
                   onDoubleClick={(e) => {
                     e.preventDefault();
                     beginRename(l);

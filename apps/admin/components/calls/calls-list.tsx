@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import type { CallRow } from '@/lib/calls';
 import type { LeadStage } from '@/lib/leads';
 import { LeadDetailDrawer } from '@/components/leads/lead-detail-drawer';
+import { createLeadFromCall } from '@/app/actions/leads';
 import {
   DispositionPicker,
   type DispositionChoice,
@@ -286,11 +288,23 @@ export function CallsList({
                         className={`px-3 py-2.5 ${c.leadId ? 'cursor-pointer' : ''}`}
                         onClick={() => c.leadId && setOpenLeadId(c.leadId)}
                       >
-                        <span className="font-medium">{leadName(c)}</span>
-                        {c.leadPhone && (
-                          <span className="ml-2 font-mono text-[11px] text-txt-3">
-                            {c.leadPhone}
-                          </span>
+                        {c.leadId ? (
+                          <>
+                            <span className="font-medium">{leadName(c)}</span>
+                            {c.leadPhone && (
+                              <span className="ml-2 font-mono text-[11px] text-txt-3">
+                                {c.leadPhone}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <CreateContactButton
+                            callId={c.id}
+                            phone={
+                              c.direction === 'inbound' ? c.fromNumber : c.toNumber
+                            }
+                            onCreated={(leadId) => setOpenLeadId(leadId)}
+                          />
                         )}
                       </td>
                       <td className="px-3 py-2.5">
@@ -644,6 +658,52 @@ function TranscriptPanel({
   return (
     <div className="rounded-lg border border-line bg-surface px-3 py-2 text-[11.5px] text-txt-3">
       {label}
+    </div>
+  );
+}
+
+// Inline "Create contact" affordance for calls whose phone number didn't
+// match any existing lead. One click creates a lead from the call's other
+// side, backfills lead_id on this + any prior calls from the same phone,
+// and opens the freshly-created lead in the detail drawer for tagging.
+function CreateContactButton({
+  callId,
+  phone,
+  onCreated,
+}: {
+  callId: string;
+  phone: string;
+  onCreated: (leadId: string) => void;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-mono text-[11.5px] text-txt-3">{phone}</span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async (e) => {
+          e.stopPropagation();
+          setBusy(true);
+          setError(null);
+          const res = await createLeadFromCall({ callId });
+          setBusy(false);
+          if (!res.ok) {
+            setError(res.error);
+            return;
+          }
+          startTransition(() => router.refresh());
+          onCreated(res.leadId);
+        }}
+        className="rounded-md border border-line bg-canvas px-1.5 py-0.5 text-[10.5px] font-medium text-txt-2 hover:border-teal hover:text-teal disabled:opacity-50"
+        title="Create a contact from this call"
+      >
+        {busy ? 'Creating…' : '+ Contact'}
+      </button>
+      {error && <span className="text-[10.5px] text-hp">{error}</span>}
     </div>
   );
 }
