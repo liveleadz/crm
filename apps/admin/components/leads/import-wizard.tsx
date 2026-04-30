@@ -150,13 +150,31 @@ export function ImportWizard({
     }
     setImporting(true);
     startTransition(async () => {
-      const res = await importLeads({
-        rows,
-        mapping,
-        stageId: stageId || null,
-        listName: listName.trim(),
-        skipDedup,
-      });
+      // Belt-and-suspenders: importLeads itself catches all throws and
+      // returns { ok: false, error }, but a network/timeout error
+      // between the browser and the action endpoint can still throw on
+      // the await. We catch here too so the wizard surfaces a friendly
+      // banner instead of letting React kick to the page error
+      // boundary.
+      let res: Awaited<ReturnType<typeof importLeads>>;
+      try {
+        res = await importLeads({
+          rows,
+          mapping,
+          stageId: stageId || null,
+          listName: listName.trim(),
+          skipDedup,
+        });
+      } catch (err) {
+        console.error('[import-wizard] action threw', err);
+        setImporting(false);
+        setError(
+          err instanceof Error
+            ? `Import failed: ${err.message}`
+            : 'Import failed unexpectedly. Please try again.',
+        );
+        return;
+      }
       setImporting(false);
       if (!res.ok) {
         setError(res.error);

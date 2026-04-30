@@ -227,7 +227,30 @@ export async function logCall(input: {
 // Mapping decides where each header goes (lead column / custom JSON / skip).
 // Server-side dedup: skip rows whose normalized phone OR email already exists
 // in this brand (caller can override with skipDedup=true).
+//
+// The whole body is wrapped in try/catch and ALWAYS returns a structured
+// result. Any uncaught throw here would bubble out of the client's
+// startTransition and surface as the page-scoped error boundary
+// ("Import couldn't finish loading"), which is a terrible UX for a
+// recoverable problem (e.g. transient supabase failure mid-import).
 export async function importLeads(input: {
+  rows: Record<string, string>[];
+  mapping: FieldMapping;
+  stageId: string | null;
+  listName: string;
+  skipDedup?: boolean;
+}) {
+  try {
+    return await importLeadsInner(input);
+  } catch (err) {
+    console.error('[importLeads] unhandled error', err);
+    const message =
+      err instanceof Error ? err.message : 'Import failed unexpectedly';
+    return { ok: false as const, error: message };
+  }
+}
+
+async function importLeadsInner(input: {
   rows: Record<string, string>[];
   mapping: FieldMapping;
   stageId: string | null;
@@ -263,21 +286,27 @@ export async function importLeads(input: {
     const phones = valid.map((v) => v.phone).filter((p): p is string => !!p);
     const emails = valid.map((v) => v.email).filter((e): e is string => !!e);
 
+    // Chunk the .in() lookups: at ~16 chars/phone a 5000-row CSV pushes
+    // the URL well past Supabase's ~8KB request line limit. 500 per call
+    // keeps each query under a few KB.
+    const LOOKUP_CHUNK = 500;
     const existing = new Set<string>();
-    if (phones.length > 0) {
+    for (let i = 0; i < phones.length; i += LOOKUP_CHUNK) {
+      const slice = phones.slice(i, i + LOOKUP_CHUNK);
       const { data } = await supabase
         .from('leads')
         .select('phone')
         .eq('brand_id', active.id)
-        .in('phone', phones);
+        .in('phone', slice);
       data?.forEach((d) => d.phone && existing.add(`p:${d.phone}`));
     }
-    if (emails.length > 0) {
+    for (let i = 0; i < emails.length; i += LOOKUP_CHUNK) {
+      const slice = emails.slice(i, i + LOOKUP_CHUNK);
       const { data } = await supabase
         .from('leads')
         .select('email')
         .eq('brand_id', active.id)
-        .in('email', emails);
+        .in('email', slice);
       data?.forEach((d) => d.email && existing.add(`e:${d.email}`));
     }
 

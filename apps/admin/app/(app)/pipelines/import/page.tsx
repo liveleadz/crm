@@ -10,12 +10,24 @@ import { ImportWizard } from '@/components/leads/import-wizard';
 // loaded every lead + every tag join — fine for a fresh brand, slow
 // enough to time out on a brand with thousands of leads. The import
 // wizard never needs the leads array, so we don't load it.
+//
+// Both loaders are also wrapped in defensive .catch() so a transient
+// Supabase failure shows the wizard with empty fallbacks instead of
+// firing the page-scoped error boundary. The user can still upload a
+// CSV and pick a stage — the wizard tolerates an empty list of custom
+// fields and an empty stages array (it just disables the stage picker).
 export default async function ImportLeadsPage() {
   const active = await getActiveBrand();
   if (!active) redirect('/');
   const [stages, customFields] = await Promise.all([
-    loadStages(active.id),
-    loadCustomFields(active.id),
+    loadStages(active.id).catch((err) => {
+      console.error('[pipelines/import] loadStages failed', err);
+      return [];
+    }),
+    loadCustomFields(active.id).catch((err) => {
+      console.error('[pipelines/import] loadCustomFields failed', err);
+      return [];
+    }),
   ]);
 
   return (
