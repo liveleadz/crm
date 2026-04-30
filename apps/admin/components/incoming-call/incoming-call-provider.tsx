@@ -158,12 +158,15 @@ export function IncomingCallProvider({ children }: { children: React.ReactNode }
         to: prep.fabricAddress,
         audio: true,
         video: false,
-        rootElement: document.body,
+        // Important: do NOT pass rootElement for audio-only — the SDK
+        // would inject a full-screen video container into the page. The
+        // existing /dialer flow proves audio works without it.
+        negotiateVideo: false,
         userVariables: { t: prep.dialToken },
       });
       sessionRef.current = session;
 
-      session.on('destroy', () => {
+      session.on?.('destroy', () => {
         setStatus({ kind: 'idle' });
         void cleanup();
       });
