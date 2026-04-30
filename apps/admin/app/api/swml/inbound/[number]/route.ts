@@ -198,21 +198,15 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
 
   // Build LaML XML response.
   //
-  // In-browser ringing: <Dial><Client>email</Client></Dial> dispatches to
-  // any SignalWire JS Subscriber online for that email. Multiple <Client>
-  // children parallel-dial — first to accept wins. If <Dial> times out
-  // with no answer, execution falls through to <Say>+<Record> voicemail.
+  // In-browser PSTN→Subscriber routing for Call Fabric needs SWML, not
+  // LaML — the IncomingPhoneNumber must dispatch through a SignalWire ML
+  // application. Until that's wired, every inbound goes straight to
+  // voicemail so the caller never gets stuck in a dead dial. The agent
+  // still sees the call + recording in /calls and the lead owner gets a
+  // bell notification.
   void nextRotationMemberId;
+  void ringEmails;
   const verbs: string[] = [];
-  const ring = route?.ring_timeout_sec ?? 25;
-
-  if (ringEmails.length > 0) {
-    const callerIdAttr = ` callerId="${escapeXml(fromNumber !== 'unknown' ? fromNumber : e164)}"`;
-    const clients = ringEmails.map((e) => `<Client>${escapeXml(e)}</Client>`).join('');
-    verbs.push(
-      `<Dial timeout="${ring}" answerOnBridge="true"${callerIdAttr}>${clients}</Dial>`,
-    );
-  }
 
   if ((route?.voicemail_enabled ?? true) && callId) {
     const greeting =
