@@ -1,6 +1,8 @@
 // Server-only loaders for the Numbers & Routing page. Pulls the brand's
 // `numbers` rows and decorates each with a small health summary computed
-// from recent call + SMS activity.
+// from recent call + SMS activity. Health metrics now lean on SignalWire's
+// per-call signals (sip_response, hangup_cause, STIR attestation) where
+// available — those are populated by the /api/swml/call-status webhook.
 
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
@@ -10,23 +12,32 @@ export type NumberRow = {
   e164: string;
   signalwireId: string | null;
   label: string | null;
+  cnam: string | null;
+  cnamCheckedAt: string | null;
   a2pCampaignId: string | null;
   active: boolean;
   createdAt: string;
 };
 
+export type AttestationMix = { A: number; B: number; C: number; unknown: number };
+
 export type NumberHealth = {
   callsLast7d: number;
-  callsConnectedLast7d: number;
-  successRate: number; // 0..1, NaN-safe
   smsLast7d: number;
   smsDeliveredLast7d: number;
   lastUsedAt: string | null;
-  // Heuristic spam-risk score derived from our own call data. There's no
-  // truly free programmatic API for "spam likely" reputation — Hiya, TNS,
-  // First Orion all gate it behind paid plans — so we approximate with the
-  // signals we already have. The risk_check buttons on each row link to the
-  // free consumer-facing lookup tools for a real ground-truth check.
+  // Carrier-side block rate — share of recent calls that ended with a SIP
+  // 603 / 487 or a hangup cause indicating the call was rejected by the
+  // terminating network. The closest free proxy for "are carriers
+  // labeling us spam" we can build without paying for a lookup API.
+  blockedCalls: number;
+  blockRate: number; // 0..1
+  // STIR/SHAKEN attestation mix over the same window. A is full
+  // attestation; B/C trigger spam labels on T-Mobile / AT&T / Verizon.
+  attestation: AttestationMix;
+  dominantAttestation: 'A' | 'B' | 'C' | 'unknown';
+  // Self-derived risk derived from the signals above + raw call velocity.
+  // The reputation lookup links on each row are still the ground truth.
   risk: 'low' | 'medium' | 'high';
   riskReasons: string[];
 };
@@ -35,12 +46,31 @@ export type NumberWithHealth = NumberRow & { health: NumberHealth };
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
+// SIP response codes that strongly imply terminating-carrier rejection /
+// spam-block. 603 ("Decline"), 607 ("Unwanted"), 608 ("Rejected"), 487
+// ("Request Terminated") — with very short call duration the latter is a
+// reliable spam-flag proxy too. We treat 480/486 as soft-blocks (busy /
+// unavailable, sometimes carrier-set when a number is flagged).
+const HARD_BLOCK_CODES = new Set([603, 607, 608]);
+const SOFT_BLOCK_CODES = new Set([480, 486, 487]);
+
+const HARD_BLOCK_CAUSES = new Set([
+  'CALL_REJECTED',
+  'INCOMING_CALL_BARRED',
+  'NUMBER_CHANGED',
+  'DESTINATION_OUT_OF_ORDER',
+  'INVALID_NUMBER_FORMAT',
+  'BLOCKED',
+]);
+
 export async function loadNumbersWithHealth(brandId: string): Promise<NumberWithHealth[]> {
   const supabase = await createServerClient();
 
   const { data: rows } = await supabase
     .from('numbers')
-    .select('id, e164, signalwire_id, label, a2p_campaign_id, active, created_at')
+    .select(
+      'id, e164, signalwire_id, label, cnam, cnam_checked_at, a2p_campaign_id, active, created_at',
+    )
     .eq('brand_id', brandId)
     .order('created_at', { ascending: true });
 
@@ -51,6 +81,8 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
     e164: r.e164,
     signalwireId: r.signalwire_id,
     label: r.label,
+    cnam: r.cnam,
+    cnamCheckedAt: r.cnam_checked_at,
     a2pCampaignId: r.a2p_campaign_id,
     active: r.active,
     createdAt: r.created_at,
@@ -59,12 +91,12 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
   const since = new Date(Date.now() - SEVEN_DAYS_MS).toISOString();
   const ids = numbers.map((n) => n.id);
 
-  // Pull the slim columns we need; aggregate client-side. Cheaper than running
-  // four separate count queries per number.
   const [calls, sms] = await Promise.all([
     supabase
       .from('calls')
-      .select('number_id, disposition, started_at')
+      .select(
+        'number_id, disposition, started_at, ended_at, duration_sec, hangup_cause, sip_response, stir_attestation',
+      )
       .in('number_id', ids)
       .gte('started_at', since),
     supabase
@@ -74,8 +106,6 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
       .gte('created_at', since),
   ]);
 
-  // Also fetch the absolute most-recent call/sms per number (regardless of
-  // window) so "last used" reflects reality even on quiet weeks.
   const [lastCalls, lastSms] = await Promise.all([
     supabase
       .from('calls')
@@ -89,20 +119,20 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
       .order('created_at', { ascending: false }),
   ]);
 
-  // Track per-number raw counters; risk score is derived once at the end.
-  type Counters = NumberHealth & { wrongOrDnc: number };
+  type Counters = NumberHealth;
   const health = new Map<string, Counters>();
   for (const id of ids) {
     health.set(id, {
       callsLast7d: 0,
-      callsConnectedLast7d: 0,
-      successRate: 0,
       smsLast7d: 0,
       smsDeliveredLast7d: 0,
       lastUsedAt: null,
+      blockedCalls: 0,
+      blockRate: 0,
+      attestation: { A: 0, B: 0, C: 0, unknown: 0 },
+      dominantAttestation: 'unknown',
       risk: 'low',
       riskReasons: [],
-      wrongOrDnc: 0,
     });
   }
 
@@ -110,14 +140,27 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
     const h = health.get(c.number_id as string);
     if (!h) continue;
     h.callsLast7d++;
-    // "Connected" buckets — anything that resulted in a real conversation or
-    // a clear sale outcome counts toward success.
-    if (c.disposition === 'connected' || c.disposition === 'sale' || c.disposition === 'callback') {
-      h.callsConnectedLast7d++;
-    }
-    if (c.disposition === 'wrong_number' || c.disposition === 'do_not_call') {
-      h.wrongOrDnc++;
-    }
+
+    // Carrier-block heuristic — hard block codes always count, soft block
+    // codes count only when paired with very short duration (<3s) which
+    // correlates with carrier-side rejection (vs. an actual user decline).
+    const sip = typeof c.sip_response === 'number' ? c.sip_response : null;
+    const cause =
+      typeof c.hangup_cause === 'string' ? c.hangup_cause.toUpperCase() : null;
+    const dur = typeof c.duration_sec === 'number' ? c.duration_sec : null;
+    const isHardBlock =
+      (sip !== null && HARD_BLOCK_CODES.has(sip)) ||
+      (cause !== null && HARD_BLOCK_CAUSES.has(cause));
+    const isSoftBlock =
+      sip !== null && SOFT_BLOCK_CODES.has(sip) && dur !== null && dur < 3;
+    if (isHardBlock || isSoftBlock) h.blockedCalls++;
+
+    // STIR attestation roll-up.
+    const stir = c.stir_attestation as 'A' | 'B' | 'C' | null;
+    if (stir === 'A') h.attestation.A++;
+    else if (stir === 'B') h.attestation.B++;
+    else if (stir === 'C') h.attestation.C++;
+    else h.attestation.unknown++;
   }
   for (const s of sms.data ?? []) {
     const h = health.get(s.number_id as string);
@@ -140,56 +183,67 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
     }
   }
 
+  // Final pass — risk score derived from signals that actually correlate
+  // with how carriers treat the number.
   for (const h of health.values()) {
-    h.successRate = h.callsLast7d > 0 ? h.callsConnectedLast7d / h.callsLast7d : 0;
+    h.blockRate = h.callsLast7d > 0 ? h.blockedCalls / h.callsLast7d : 0;
 
-    // Risk heuristic — public lookup tools own the real spam-database flags;
-    // here we just surface the signals carriers themselves use to flag
-    // numbers (velocity + low-quality dispositions), so authors know which
-    // numbers to spot-check first.
-    //
-    // Carrier flagging triggers we approximate:
-    //  - Velocity: > 50 dials/day average over the window (350 in 7d).
-    //  - Conversion: connect rate < 10% over 50+ calls.
-    //  - List hygiene: > 20% wrong-number / DNC dispositions.
+    const att = h.attestation;
+    const totalAtt = att.A + att.B + att.C;
+    if (totalAtt > 0) {
+      h.dominantAttestation =
+        att.A >= att.B && att.A >= att.C ? 'A' : att.B >= att.C ? 'B' : 'C';
+    } else {
+      h.dominantAttestation = 'unknown';
+    }
+
     const reasons: string[] = [];
+    // Block-rate is the strongest signal. Anything > 5% over 30+ calls is
+    // a hard yellow flag; > 12% gets a red flag.
+    if (h.callsLast7d >= 30 && h.blockRate >= 0.12) {
+      reasons.push(`Carrier block rate ${Math.round(h.blockRate * 100)}%`);
+    } else if (h.callsLast7d >= 30 && h.blockRate >= 0.05) {
+      reasons.push(`Elevated block rate ${Math.round(h.blockRate * 100)}%`);
+    }
+    // STIR attestation < A on most calls means terminating carriers will
+    // downgrade the call — usually shows up as "Suspected Spam" labels.
+    if (totalAtt >= 10) {
+      const aShare = att.A / totalAtt;
+      if (aShare < 0.5) {
+        reasons.push(`Low STIR-A share (${Math.round(aShare * 100)}%)`);
+      }
+    }
+    // Velocity is still a useful tripwire — carriers throttle high-volume
+    // single-number outbound aggressively.
     const dailyAvg = h.callsLast7d / 7;
     if (dailyAvg >= 50) {
       reasons.push(`High daily volume (${Math.round(dailyAvg)}/day)`);
-    } else if (dailyAvg >= 25) {
-      reasons.push(`Elevated daily volume (${Math.round(dailyAvg)}/day)`);
     }
-    if (h.callsLast7d >= 50 && h.successRate < 0.1) {
-      reasons.push(`Low connect rate (${Math.round(h.successRate * 100)}%)`);
-    }
-    const wrongRate = h.callsLast7d > 0 ? h.wrongOrDnc / h.callsLast7d : 0;
-    if (h.callsLast7d >= 20 && wrongRate > 0.2) {
-      reasons.push(`High wrong-number / DNC rate (${Math.round(wrongRate * 100)}%)`);
-    }
-    h.risk = reasons.length === 0 ? 'low' : reasons.length >= 2 || dailyAvg >= 50 ? 'high' : 'medium';
+
+    h.risk =
+      reasons.length === 0
+        ? 'low'
+        : reasons.some((r) => r.startsWith('Carrier block rate')) || reasons.length >= 2
+          ? 'high'
+          : 'medium';
     h.riskReasons = reasons;
   }
 
-  return numbers.map((n) => {
-    const counter = health.get(n.id);
-    if (!counter) {
-      return {
-        ...n,
-        health: {
-          callsLast7d: 0,
-          callsConnectedLast7d: 0,
-          successRate: 0,
-          smsLast7d: 0,
-          smsDeliveredLast7d: 0,
-          lastUsedAt: null,
-          risk: 'low' as const,
-          riskReasons: [],
-        },
-      };
-    }
-    // Strip the internal counter before returning.
-    const { wrongOrDnc: _ignored, ...rest } = counter;
-    void _ignored;
-    return { ...n, health: rest };
-  });
+  return numbers.map((n) => ({
+    ...n,
+    health:
+      health.get(n.id) ??
+      ({
+        callsLast7d: 0,
+        smsLast7d: 0,
+        smsDeliveredLast7d: 0,
+        lastUsedAt: null,
+        blockedCalls: 0,
+        blockRate: 0,
+        attestation: { A: 0, B: 0, C: 0, unknown: 0 },
+        dominantAttestation: 'unknown',
+        risk: 'low' as const,
+        riskReasons: [],
+      } satisfies NumberHealth),
+  }));
 }

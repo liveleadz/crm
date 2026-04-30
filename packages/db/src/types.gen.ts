@@ -286,6 +286,7 @@ export type Database = {
           duration_sec: number | null
           ended_at: string | null
           from_number: string
+          hangup_cause: string | null
           id: string
           lead_id: string | null
           member_id: string | null
@@ -296,7 +297,9 @@ export type Database = {
           recording_sid: string | null
           recording_url: string | null
           signalwire_call_id: string | null
+          sip_response: number | null
           started_at: string
+          stir_attestation: string | null
           to_number: string
           transcript: string | null
           transcript_status: string | null
@@ -310,6 +313,7 @@ export type Database = {
           duration_sec?: number | null
           ended_at?: string | null
           from_number: string
+          hangup_cause?: string | null
           id?: string
           lead_id?: string | null
           member_id?: string | null
@@ -320,7 +324,9 @@ export type Database = {
           recording_sid?: string | null
           recording_url?: string | null
           signalwire_call_id?: string | null
+          sip_response?: number | null
           started_at?: string
+          stir_attestation?: string | null
           to_number: string
           transcript?: string | null
           transcript_status?: string | null
@@ -334,6 +340,7 @@ export type Database = {
           duration_sec?: number | null
           ended_at?: string | null
           from_number?: string
+          hangup_cause?: string | null
           id?: string
           lead_id?: string | null
           member_id?: string | null
@@ -344,7 +351,9 @@ export type Database = {
           recording_sid?: string | null
           recording_url?: string | null
           signalwire_call_id?: string | null
+          sip_response?: number | null
           started_at?: string
+          stir_attestation?: string | null
           to_number?: string
           transcript?: string | null
           transcript_status?: string | null
@@ -878,6 +887,8 @@ export type Database = {
           a2p_campaign_id: string | null
           active: boolean
           brand_id: string
+          cnam: string | null
+          cnam_checked_at: string | null
           created_at: string
           e164: string
           id: string
@@ -888,6 +899,8 @@ export type Database = {
           a2p_campaign_id?: string | null
           active?: boolean
           brand_id: string
+          cnam?: string | null
+          cnam_checked_at?: string | null
           created_at?: string
           e164: string
           id?: string
@@ -898,6 +911,8 @@ export type Database = {
           a2p_campaign_id?: string | null
           active?: boolean
           brand_id?: string
+          cnam?: string | null
+          cnam_checked_at?: string | null
           created_at?: string
           e164?: string
           id?: string

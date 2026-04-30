@@ -9,6 +9,7 @@ import { useState, useTransition } from 'react';
 import {
   bulkDeleteNumbers,
   deleteNumber,
+  refreshCnam,
   setA2pCampaignId,
   setNumberActive,
   updateNumberLabel,
@@ -105,11 +106,27 @@ export function NumbersManager({ initial }: Props) {
 
   const totalCalls = items.reduce((s, n) => s + n.health.callsLast7d, 0);
   const totalSms = items.reduce((s, n) => s + n.health.smsLast7d, 0);
-  const overallRate =
-    totalCalls > 0
-      ? items.reduce((s, n) => s + n.health.callsConnectedLast7d, 0) / totalCalls
-      : 0;
+  const totalBlocks = items.reduce((s, n) => s + n.health.blockedCalls, 0);
+  const blockRate = totalCalls > 0 ? totalBlocks / totalCalls : 0;
   const atRisk = items.filter((n) => n.health.risk !== 'low').length;
+
+  const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
+
+  async function onRefreshCnam(n: NumberWithHealth) {
+    setError(null);
+    setRefreshing((prev) => new Set(prev).add(n.id));
+    const res = await refreshCnam({ id: n.id });
+    setRefreshing((prev) => {
+      const next = new Set(prev);
+      next.delete(n.id);
+      return next;
+    });
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    patch(n.id, (x) => ({ ...x, cnam: res.cnam, cnamCheckedAt: new Date().toISOString() }));
+  }
 
   return (
     <div className="space-y-4 p-6">
@@ -117,11 +134,11 @@ export function NumbersManager({ initial }: Props) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Stat label="Numbers" value={items.length.toString()} />
         <Stat label="Active" value={items.filter((n) => n.active).length.toString()} />
-        <Stat label="Calls (7d)" value={totalCalls.toString()} />
+        <Stat label="Calls (7d)" value={totalCalls.toString()} sub={`${totalSms} SMS`} />
         <Stat
-          label="Connect rate"
-          value={totalCalls > 0 ? `${Math.round(overallRate * 100)}%` : '—'}
-          sub={`${totalSms} SMS in last 7d`}
+          label="Block rate"
+          value={totalCalls > 0 ? `${Math.round(blockRate * 100)}%` : '—'}
+          sub={totalCalls > 0 ? `${totalBlocks} of ${totalCalls}` : 'no recent calls'}
         />
         <Stat
           label="At risk"
@@ -170,10 +187,11 @@ export function NumbersManager({ initial }: Props) {
           <table className="w-full table-fixed border-collapse text-left text-[12.5px]">
             <colgroup>
               <col style={{ width: 36 }} />
+              <col style={{ width: 160 }} />
+              <col style={{ width: 140 }} />
               <col style={{ width: 170 }} />
-              <col />
-              <col style={{ width: 150 }} />
-              <col style={{ width: 110 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 80 }} />
               <col style={{ width: 100 }} />
               <col style={{ width: 90 }} />
               <col style={{ width: 90 }} />
@@ -197,9 +215,10 @@ export function NumbersManager({ initial }: Props) {
                 </th>
                 <th className="px-3 py-2 font-medium">Number</th>
                 <th className="px-3 py-2 font-medium">Label</th>
+                <th className="px-3 py-2 font-medium">CNAM</th>
                 <th className="px-3 py-2 font-medium">A2P campaign</th>
-                <th className="px-3 py-2 font-medium">Calls (7d)</th>
-                <th className="px-3 py-2 font-medium">Connect</th>
+                <th className="px-3 py-2 font-medium">STIR</th>
+                <th className="px-3 py-2 font-medium">Block rate</th>
                 <th className="px-3 py-2 font-medium">Risk</th>
                 <th className="px-3 py-2 font-medium">Last used</th>
                 <th className="px-3 py-2 font-medium">Reputation check</th>
@@ -235,6 +254,14 @@ export function NumbersManager({ initial }: Props) {
                     />
                   </td>
                   <td className="px-3 py-3">
+                    <CnamCell
+                      cnam={n.cnam}
+                      checkedAt={n.cnamCheckedAt}
+                      busy={refreshing.has(n.id)}
+                      onRefresh={() => onRefreshCnam(n)}
+                    />
+                  </td>
+                  <td className="px-3 py-3">
                     <InlineInput
                       initial={n.a2pCampaignId ?? ''}
                       placeholder="Campaign id…"
@@ -242,16 +269,12 @@ export function NumbersManager({ initial }: Props) {
                     />
                   </td>
                   <td className="px-3 py-3">
-                    <span className="font-mono">{n.health.callsLast7d}</span>
-                    {n.health.smsLast7d > 0 && (
-                      <span className="ml-1.5 text-[10.5px] text-txt-3">
-                        · {n.health.smsLast7d} sms
-                      </span>
-                    )}
+                    <AttestationBadge mix={n.health.attestation} dominant={n.health.dominantAttestation} />
                   </td>
                   <td className="px-3 py-3">
-                    <ConnectBadge
-                      rate={n.health.successRate}
+                    <BlockRateBadge
+                      rate={n.health.blockRate}
+                      blocked={n.health.blockedCalls}
                       sampleSize={n.health.callsLast7d}
                     />
                   </td>
@@ -289,17 +312,23 @@ export function NumbersManager({ initial }: Props) {
 
       <div className="space-y-1.5 text-[11px] text-txt-3">
         <p>
-          Health is computed from the last 7 days of calls + SMS in this brand. Connect rate
-          counts dispositions of <code className="rounded bg-canvas px-1">connected</code>,{' '}
-          <code className="rounded bg-canvas px-1">sale</code>, and{' '}
-          <code className="rounded bg-canvas px-1">callback</code> as wins.
+          Health draws from SignalWire's per-call signals captured on the call-status
+          webhook — SIP response codes, hangup causes, and STIR/SHAKEN attestation level —
+          over the last 7 days.
         </p>
         <p>
-          Risk is a self-derived heuristic — high call velocity (50+/day), low connect rate
-          (&lt;10% over 50+ calls), or &gt;20% wrong-number / DNC dispositions trip the flag.
-          For ground-truth carrier reputation, click the lookup links to check each number on
-          YouMail, NoMoRobo, FreeCallerID, and Hiya — those are the free consumer-facing
-          databases the major spam-blocking apps mirror.
+          <strong className="text-txt-2">Block rate</strong> = share of calls that ended with
+          a carrier-block SIP code (603 “Decline”, 607 “Unwanted”, or 487 “Cancel” with
+          &lt;3s duration). <strong className="text-txt-2">STIR</strong> shows the dominant
+          attestation level signed on outbound — A is full attestation, B/C trigger
+          “Suspected Spam” labels on T-Mobile / AT&amp;T / Verizon. Risk goes high when block
+          rate ≥ 12%, less than half of calls sign at A, or daily volume crosses 50/day.
+        </p>
+        <p>
+          <strong className="text-txt-2">CNAM</strong> is fetched on demand from SignalWire
+          (~$0.005/lookup) — click <span className="font-medium text-txt-2">Look up</span> to
+          fetch the registered caller-ID name terminating carriers see. The reputation links
+          remain the ground-truth check on YouMail, NoMoRobo, FreeCallerID, and Hiya.
         </p>
       </div>
     </div>
@@ -389,17 +418,106 @@ function ReputationLinks({ e164 }: { e164: string }) {
   );
 }
 
-function ConnectBadge({ rate, sampleSize }: { rate: number; sampleSize: number }) {
+function CnamCell({
+  cnam,
+  checkedAt,
+  busy,
+  onRefresh,
+}: {
+  cnam: string | null;
+  checkedAt: string | null;
+  busy: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="min-w-0 flex-1">
+        {cnam ? (
+          <>
+            <div className="truncate text-[12px]" title={cnam}>
+              {cnam}
+            </div>
+            {checkedAt && (
+              <div className="text-[10px] text-txt-3">
+                checked {timeAgo(checkedAt)} ago
+              </div>
+            )}
+          </>
+        ) : (
+          <span className="text-[11.5px] text-txt-3">
+            {checkedAt ? 'no name on file' : 'not checked'}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={busy}
+        title="Look up the registered caller-ID name (paid SignalWire query)"
+        className="rounded-md border border-line bg-canvas px-1.5 py-0.5 text-[10.5px] text-txt-2 hover:bg-surface-2 disabled:opacity-50"
+      >
+        {busy ? '…' : cnam ? 'Refresh' : 'Look up'}
+      </button>
+    </div>
+  );
+}
+
+function AttestationBadge({
+  mix,
+  dominant,
+}: {
+  mix: { A: number; B: number; C: number; unknown: number };
+  dominant: 'A' | 'B' | 'C' | 'unknown';
+}) {
+  if (dominant === 'unknown') {
+    return (
+      <span className="text-[11px] text-txt-3" title="No STIR/SHAKEN data on recent calls yet.">
+        —
+      </span>
+    );
+  }
+  const tone =
+    dominant === 'A'
+      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+      : dominant === 'B'
+        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+        : 'bg-hp/15 text-hp';
+  const total = mix.A + mix.B + mix.C;
+  const tooltip = `A:${mix.A} · B:${mix.B} · C:${mix.C}${mix.unknown ? ` · ?:${mix.unknown}` : ''} (last 7d)`;
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}`}
+      title={tooltip}
+    >
+      {dominant} {total > 0 ? `· ${total}` : ''}
+    </span>
+  );
+}
+
+function BlockRateBadge({
+  rate,
+  blocked,
+  sampleSize,
+}: {
+  rate: number;
+  blocked: number;
+  sampleSize: number;
+}) {
   if (sampleSize === 0) return <span className="text-txt-3">—</span>;
   const pct = Math.round(rate * 100);
   const tone =
-    pct >= 30
-      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-      : pct >= 15
+    rate >= 0.12
+      ? 'bg-hp/15 text-hp'
+      : rate >= 0.05
         ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-        : 'bg-hp/15 text-hp';
+        : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400';
   return (
-    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}`}>{pct}%</span>
+    <span
+      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}`}
+      title={`${blocked} of ${sampleSize} calls hit a carrier-block SIP code (603 / 487 short / 607).`}
+    >
+      {pct}%
+    </span>
   );
 }
 

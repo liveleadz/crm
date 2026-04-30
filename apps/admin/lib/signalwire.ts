@@ -86,6 +86,36 @@ async function swGet<T>(path: string): Promise<SwResult<T>> {
  * 200 (the API caps at 50/page, so 4 pages = 200 numbers — far more than any
  * brand needs at this stage).
  */
+/**
+ * CNAM lookup — tells you the registered caller-ID name a destination
+ * carrier sees when this number rings. SignalWire bills ~$0.005 per query,
+ * so we expose it as an on-demand action (no auto-sync) and cache the
+ * result on numbers.cnam / numbers.cnam_checked_at.
+ */
+export type CnamLookupResult = {
+  caller_name?: string | null;
+  carrier_name?: string | null;
+  line_type?: string | null;
+};
+
+export async function lookupCnam(e164: string): Promise<SwResult<CnamLookupResult>> {
+  const naked = e164.replace(/^\+/, '');
+  const path = `/api/laml/2010-04-01/Accounts/${process.env.SIGNALWIRE_PROJECT_ID}/Lookup.json?PhoneNumber=%2B${naked}&Type=cnam`;
+  const res = await swGet<{
+    cnam?: { caller_name?: string | null };
+    carrier?: { name?: string | null; type?: string | null };
+  }>(path);
+  if (!res.ok) return res;
+  return {
+    ok: true,
+    data: {
+      caller_name: res.data.cnam?.caller_name ?? null,
+      carrier_name: res.data.carrier?.name ?? null,
+      line_type: res.data.carrier?.type ?? null,
+    },
+  };
+}
+
 type SwListPage = {
   data: SignalWirePhoneNumber[];
   links?: { next: string | null };

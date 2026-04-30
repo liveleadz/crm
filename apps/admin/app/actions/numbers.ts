@@ -8,8 +8,36 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
+import { lookupCnam } from '@/lib/signalwire';
 
 type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+
+// SignalWire's Lookup API charges ~$0.005 per CNAM hit, so this stays
+// strictly on-demand — one lookup per click, cached on the row.
+export async function refreshCnam(input: {
+  id: string;
+}): Promise<Result<{ cnam: string | null }>> {
+  const supabase = await createServerClient();
+  const { data: row } = await supabase
+    .from('numbers')
+    .select('id, e164')
+    .eq('id', input.id)
+    .maybeSingle();
+  if (!row) return { ok: false, error: 'Number not found.' };
+
+  const lookup = await lookupCnam(row.e164);
+  if (!lookup.ok) return { ok: false, error: lookup.error };
+
+  const cnam = lookup.data.caller_name?.trim() || null;
+  const { error } = await supabase
+    .from('numbers')
+    .update({ cnam, cnam_checked_at: new Date().toISOString() })
+    .eq('id', input.id);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath('/numbers');
+  return { ok: true, cnam };
+}
 
 export async function updateNumberLabel(input: {
   id: string;

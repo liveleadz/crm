@@ -88,3 +88,21 @@ export function verifyRecordingPath(callId: string, sig: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
 }
+
+// Same construction as the recording path, namespaced with a "cs:" prefix so
+// a leaked recording sig can't be replayed as a status sig.
+export function signCallStatusPath(callId: string): string {
+  return createHmac('sha256', getSecret())
+    .update(`cs:${callId}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+export function verifyCallStatusPath(callId: string, sig: string): boolean {
+  if (!callId || !sig || sig.length !== 16) return false;
+  const expected = signCallStatusPath(callId);
+  const a = Buffer.from(expected);
+  const b = Buffer.from(sig);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}

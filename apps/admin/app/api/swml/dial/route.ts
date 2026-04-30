@@ -13,7 +13,7 @@
 // `calls` row when the recording is ready.
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { signRecordingPath, verifyDialToken } from '@/lib/dial-token';
+import { signCallStatusPath, signRecordingPath, verifyDialToken } from '@/lib/dial-token';
 import { getPublicAppUrl } from '@/lib/dialer';
 
 function jsonSwmlResponse(swml: object) {
@@ -71,6 +71,10 @@ async function handle(req: NextRequest) {
   // ?t= query strings on record_call.status_url with "invalid value".
   const recSig = signRecordingPath(payload.callId);
   const statusUrl = `${getPublicAppUrl()}/api/swml/recording/${payload.callId}/${recSig}`;
+  // Separate, narrower-scoped signature for the call-completion webhook so
+  // we capture sip_response, hangup_cause and STIR attestation per call.
+  const csSig = signCallStatusPath(payload.callId);
+  const callStatusUrl = `${getPublicAppUrl()}/api/swml/call-status/${payload.callId}/${csSig}`;
 
   // Answer the WebRTC leg explicitly first — otherwise record_call runs
   // before the call is answered (because connect.answer_on_bridge defers
@@ -96,6 +100,13 @@ async function handle(req: NextRequest) {
             from: payload.from,
             to: payload.to,
             timeout: 25,
+            // SignalWire POSTs the completed-call payload here (sip_response,
+            // hangup_cause, verstat / stir attestation). We use it to score
+            // each number's deliverability without a paid lookup API.
+            result: {
+              200: { send_event: 'call_status' },
+            },
+            status_url: callStatusUrl,
           },
         },
       ],
