@@ -20,6 +20,7 @@ export type CallRow = {
   needsDisposition: boolean;
   note: string | null;
   callbackAt: string | null;
+  isVoicemail: boolean;
 };
 
 export async function loadCalls(brandId: string, limit = 200): Promise<CallRow[]> {
@@ -27,7 +28,7 @@ export async function loadCalls(brandId: string, limit = 200): Promise<CallRow[]
   const { data } = await supabase
     .from('calls')
     .select(
-      'id, started_at, direction, disposition, duration_sec, from_number, to_number, lead_id, recording_url, recording_duration_sec, transcript, transcript_status, needs_disposition, note, callback_at, leads(first_name, last_name, phone)',
+      'id, started_at, direction, disposition, duration_sec, from_number, to_number, lead_id, recording_url, recording_duration_sec, transcript, transcript_status, needs_disposition, note, callback_at, is_voicemail, leads(first_name, last_name, phone)',
     )
     .eq('brand_id', brandId)
     .order('started_at', { ascending: false })
@@ -57,6 +58,7 @@ export async function loadCalls(brandId: string, limit = 200): Promise<CallRow[]
       needsDisposition: Boolean(c.needs_disposition),
       note: c.note ?? null,
       callbackAt: c.callback_at ?? null,
+      isVoicemail: Boolean(c.is_voicemail),
     };
   });
 }

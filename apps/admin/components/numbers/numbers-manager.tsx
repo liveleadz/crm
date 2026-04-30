@@ -798,11 +798,15 @@ function InboundRouteModal({
               <option value="round_robin">Round robin (next idle)</option>
               <option value="single">Single agent</option>
             </select>
-            {strategy !== "simul" && (
+            {strategy === 'round_robin' && (
               <p className="mt-1.5 text-[10.5px] text-txt-3">
-                Round robin and single-agent are recorded in the config but the SWML
-                handler currently parallel-dials all selected members. Real rotation
-                state lands in a follow-up.
+                Each inbound call rings the next member in the list, wrapping at the
+                end. Members without a mobile_phone are skipped on their turn.
+              </p>
+            )}
+            {strategy === 'single' && (
+              <p className="mt-1.5 text-[10.5px] text-txt-3">
+                Only the first selected member is rung; everyone else is ignored.
               </p>
             )}
           </div>

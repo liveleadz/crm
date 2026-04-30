@@ -81,26 +81,55 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
   const { data: route } = await supabase
     .from('inbound_routes')
     .select(
-      'strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting',
+      'strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting, last_rung_member_id',
     )
     .eq('number_id', numberRow.id)
     .maybeSingle();
 
-  // Fetch member mobile_phones for the configured rotation. Drop members
-  // without a mobile_phone — we have nothing to ring.
-  const memberIds = route?.member_ids ?? [];
+  // Resolve which member IDs to ring based on strategy. Strategy semantics:
+  //   simul       — ring everyone in member_ids in parallel
+  //   round_robin — advance from last_rung_member_id, ring just the next one
+  //   single      — ring only the first member in the list
+  const allMemberIds = route?.member_ids ?? [];
+  const strategy = (route?.strategy ?? 'simul') as 'simul' | 'round_robin' | 'single';
+  const targetMemberIds = pickTargetsForStrategy(
+    strategy,
+    allMemberIds,
+    route?.last_rung_member_id ?? null,
+  );
+
+  // Fetch mobile_phones for just the chosen targets. Drop members without
+  // a mobile_phone — we have nothing to ring.
   const ringNumbers: string[] = [];
-  if (memberIds.length > 0) {
+  let nextRotationMemberId: string | null = null;
+  if (targetMemberIds.length > 0) {
     const { data: members } = await supabase
       .from('members')
       .select('id, mobile_phone')
-      .in('id', memberIds);
-    for (const m of members ?? []) {
-      if (m.mobile_phone) {
+      .in('id', targetMemberIds);
+    const byId = new Map((members ?? []).map((m) => [m.id, m] as const));
+    // Preserve target order so round_robin / single ring the chosen one.
+    for (const id of targetMemberIds) {
+      const m = byId.get(id);
+      if (m?.mobile_phone) {
         const n = toE164(m.mobile_phone);
-        if (n) ringNumbers.push(n);
+        if (n) {
+          ringNumbers.push(n);
+          if (strategy === 'round_robin' && !nextRotationMemberId) {
+            nextRotationMemberId = id;
+          }
+        }
       }
     }
+  }
+
+  // Persist the new rotation pointer for round_robin so the next inbound
+  // call advances. Best-effort — don't block on the write.
+  if (strategy === 'round_robin' && nextRotationMemberId) {
+    void supabase
+      .from('inbound_routes')
+      .update({ last_rung_member_id: nextRotationMemberId })
+      .eq('number_id', numberRow.id);
   }
 
   // Try to attribute the call to a known lead (by phone). Brand-scoped.
@@ -199,6 +228,23 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
   }
 
   return jsonSwml({ version: '1.0.0', sections: { main: sections } });
+}
+
+// Returns the ordered list of member IDs to ring for this call based on
+// strategy. For round_robin we start at the member AFTER last_rung_member_id
+// (wrapping), giving exactly one target per call. Empty input returns empty.
+function pickTargetsForStrategy(
+  strategy: 'simul' | 'round_robin' | 'single',
+  memberIds: string[],
+  lastRung: string | null,
+): string[] {
+  if (memberIds.length === 0) return [];
+  if (strategy === 'simul') return memberIds;
+  if (strategy === 'single') return [memberIds[0]!];
+  // round_robin
+  const lastIdx = lastRung ? memberIds.indexOf(lastRung) : -1;
+  const start = lastIdx >= 0 ? (lastIdx + 1) % memberIds.length : 0;
+  return [memberIds[start]!];
 }
 
 function pickString(body: Record<string, unknown>, keys: string[]): string | null {

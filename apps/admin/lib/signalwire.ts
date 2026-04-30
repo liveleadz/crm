@@ -116,6 +116,59 @@ export async function lookupCnam(e164: string): Promise<SwResult<CnamLookupResul
   };
 }
 
+/**
+ * Send an SMS via SignalWire's LaML Messages API. Returns the provider's
+ * message SID on success. Used by the message_outbox drain worker.
+ */
+export async function sendSignalWireSms(input: {
+  from: string;
+  to: string;
+  body: string;
+}): Promise<SwResult<{ sid: string }>> {
+  const auth = basicAuth();
+  const space = spaceUrl();
+  const projectId = process.env.SIGNALWIRE_PROJECT_ID;
+  if (!auth || !space || !projectId) {
+    return {
+      ok: false,
+      error:
+        'SignalWire credentials missing. Set SIGNALWIRE_PROJECT_ID, SIGNALWIRE_TOKEN, SIGNALWIRE_SPACE_URL.',
+    };
+  }
+  const url = `https://${space}/api/laml/2010-04-01/Accounts/${projectId}/Messages.json`;
+  const form = new URLSearchParams({
+    From: input.from,
+    To: input.to,
+    Body: input.body,
+  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: form.toString(),
+      signal: AbortSignal.timeout(15_000),
+      cache: 'no-store',
+    });
+  } catch (e) {
+    return { ok: false, error: `Network error: ${(e as Error).message}` };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    return {
+      ok: false,
+      status: res.status,
+      error: body ? `${res.status} ${body.slice(0, 240)}` : `HTTP ${res.status}`,
+    };
+  }
+  const json = (await res.json()) as { sid?: string };
+  return { ok: true, data: { sid: json.sid ?? '' } };
+}
+
 type SwListPage = {
   data: SignalWirePhoneNumber[];
   links?: { next: string | null };

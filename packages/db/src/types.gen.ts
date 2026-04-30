@@ -439,6 +439,7 @@ export type Database = {
       inbound_routes: {
         Row: {
           brand_id: string
+          last_rung_member_id: string | null
           member_ids: string[]
           number_id: string
           ring_timeout_sec: number
@@ -449,6 +450,7 @@ export type Database = {
         }
         Insert: {
           brand_id: string
+          last_rung_member_id?: string | null
           member_ids?: string[]
           number_id: string
           ring_timeout_sec?: number
@@ -459,6 +461,7 @@ export type Database = {
         }
         Update: {
           brand_id?: string
+          last_rung_member_id?: string | null
           member_ids?: string[]
           number_id?: string
           ring_timeout_sec?: number
