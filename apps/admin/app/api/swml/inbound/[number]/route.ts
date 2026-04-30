@@ -19,17 +19,26 @@ import { runAutomations } from '@/lib/automation-engine';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function jsonSwml(swml: object) {
-  return new NextResponse(JSON.stringify(swml), {
+// SignalWire's IncomingPhoneNumber voice_url runs the LaML pipeline, which
+// expects XML responses (Twilio-compatible). Returning SWML JSON here would
+// silently fail. Helpers below build LaML responses.
+function laml(xml: string) {
+  return new NextResponse(xml, {
     status: 200,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
+    headers: { 'content-type': 'text/xml; charset=utf-8' },
   });
 }
 
-const HANGUP_SWML = {
-  version: '1.0.0',
-  sections: { main: [{ hangup: { reason: 'normal' } }] },
-};
+const HANGUP_LAML = `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`;
+
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ number: string }> }) {
   return handle(req, ctx);
@@ -42,7 +51,7 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
   const { number } = await ctx.params;
   // The path segment is the destination E.164 (or sanitized; we re-normalize).
   const e164 = toE164(decodeURIComponent(number));
-  if (!e164) return jsonSwml(HANGUP_SWML);
+  if (!e164) return laml(HANGUP_LAML);
 
   // Caller's number — try a few common SWML/LaML field shapes.
   const url = new URL(req.url);
@@ -76,7 +85,7 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
     .select('id, brand_id')
     .eq('e164', e164)
     .maybeSingle();
-  if (!numberRow) return jsonSwml(HANGUP_SWML);
+  if (!numberRow) return laml(HANGUP_LAML);
 
   const { data: route } = await supabase
     .from('inbound_routes')
@@ -185,49 +194,44 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
   // No agents and no voicemail = polite hangup. Still record the inbound
   // call we already inserted (above) so the brand sees the missed attempt.
   if (ringNumbers.length === 0 && !(route?.voicemail_enabled ?? true)) {
-    return jsonSwml(HANGUP_SWML);
+    return laml(HANGUP_LAML);
   }
 
-  const sections: Array<Record<string, unknown>> = [{ answer: {} }];
+  // Build LaML XML response. <Dial> with multiple <Number> children
+  // parallel-dials them; the first leg to answer wins. If <Dial> finishes
+  // without anyone answering (timeout / busy / failed), execution falls
+  // through to the next verbs — the voicemail flow.
+  const ring = route?.ring_timeout_sec ?? 25;
+  const verbs: string[] = [];
 
-  // Connect to the assigned member numbers. SWML's connect.to accepts an
-  // array of E.164 strings for parallel dial; first to answer wins.
   if (ringNumbers.length > 0) {
-    sections.push({
-      connect: {
-        from: e164,
-        to: ringNumbers.length === 1 ? ringNumbers[0] : ringNumbers,
-        timeout: route?.ring_timeout_sec ?? 25,
-        // result.no_answer falls through to the next section (voicemail) so
-        // the caller never hits an abrupt drop.
-      },
-    });
+    const callerIdAttr = ` callerId="${escapeXml(fromNumber !== 'unknown' ? fromNumber : e164)}"`;
+    if (ringNumbers.length === 1) {
+      verbs.push(
+        `<Dial timeout="${ring}"${callerIdAttr}><Number>${escapeXml(ringNumbers[0]!)}</Number></Dial>`,
+      );
+    } else {
+      const numbers = ringNumbers.map((n) => `<Number>${escapeXml(n)}</Number>`).join('');
+      verbs.push(`<Dial timeout="${ring}"${callerIdAttr}>${numbers}</Dial>`);
+    }
   }
 
-  // Voicemail leg — only runs if no agent leg picked up. The `record_call`
-  // status_url posts the recording URL back when finished.
   if ((route?.voicemail_enabled ?? true) && callId) {
     const greeting =
       route?.voicemail_greeting ??
-      'You\'ve reached us. We can\'t take your call right now — please leave a message after the tone.';
+      "You've reached us. We can't take your call right now — please leave a message after the tone.";
     const vmSig = signVoicemailPath(callId);
     const vmUrl = `${getPublicAppUrl()}/api/swml/voicemail/${callId}/${vmSig}`;
-    sections.push({ play: { say: { text: greeting } } });
-    sections.push({
-      record_call: {
-        format: 'mp3',
-        beep: true,
-        max_length: 180,
-        end_silence_timeout: 5,
-        status_url: vmUrl,
-      },
-    });
-    sections.push({ hangup: { reason: 'normal' } });
-  } else {
-    sections.push({ hangup: { reason: 'normal' } });
+    verbs.push(`<Say>${escapeXml(greeting)}</Say>`);
+    verbs.push(
+      `<Record action="${escapeXml(vmUrl)}" method="POST" maxLength="180" finishOnKey="#" playBeep="true" timeout="5"/>`,
+    );
   }
 
-  return jsonSwml({ version: '1.0.0', sections: { main: sections } });
+  verbs.push('<Hangup/>');
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${verbs.join('')}</Response>`;
+  return laml(xml);
 }
 
 // Returns the ordered list of member IDs to ring for this call based on
