@@ -56,6 +56,15 @@ export default async function PipelinesPage({
     ? `${leads.length.toLocaleString()} in ${activeList.name}${filtersActive ? ' · filtered' : ''} · drag cards to move stages`
     : `${leads.length.toLocaleString()}${filtersActive ? ' filtered' : ' total'} · drag cards to move stages`;
 
+  const dialerParams = new URLSearchParams();
+  if (activeListId) dialerParams.set('list', activeListId);
+  if (search) dialerParams.set('q', search);
+  if (source) dialerParams.set('source', source);
+  if (tagIds.length > 0) dialerParams.set('tags', tagIds.join(','));
+  const powerDialHref = dialerParams.toString()
+    ? `/dialer?${dialerParams.toString()}`
+    : `/dialer?list=all`;
+
   return (
     <>
       <PageHeader
@@ -64,6 +73,12 @@ export default async function PipelinesPage({
         actions={
           stages.length > 0 ? (
             <>
+              <Link
+                href={powerDialHref as `/dialer?${string}`}
+                className="rounded-lg border border-teal/40 bg-teal/10 px-3 py-1.5 text-[12px] font-medium text-teal hover:bg-teal/20"
+              >
+                Power dial
+              </Link>
               <Link
                 href="/pipelines/import"
                 className="rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-txt-2 hover:bg-canvas"
