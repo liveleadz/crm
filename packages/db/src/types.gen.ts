@@ -288,6 +288,7 @@ export type Database = {
           from_number: string
           hangup_cause: string | null
           id: string
+          is_voicemail: boolean
           lead_id: string | null
           member_id: string | null
           needs_disposition: boolean
@@ -315,6 +316,7 @@ export type Database = {
           from_number: string
           hangup_cause?: string | null
           id?: string
+          is_voicemail?: boolean
           lead_id?: string | null
           member_id?: string | null
           needs_disposition?: boolean
@@ -342,6 +344,7 @@ export type Database = {
           from_number?: string
           hangup_cause?: string | null
           id?: string
+          is_voicemail?: boolean
           lead_id?: string | null
           member_id?: string | null
           needs_disposition?: boolean
@@ -429,6 +432,54 @@ export type Database = {
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      inbound_routes: {
+        Row: {
+          brand_id: string
+          member_ids: string[]
+          number_id: string
+          ring_timeout_sec: number
+          strategy: string
+          updated_at: string
+          voicemail_enabled: boolean
+          voicemail_greeting: string | null
+        }
+        Insert: {
+          brand_id: string
+          member_ids?: string[]
+          number_id: string
+          ring_timeout_sec?: number
+          strategy?: string
+          updated_at?: string
+          voicemail_enabled?: boolean
+          voicemail_greeting?: string | null
+        }
+        Update: {
+          brand_id?: string
+          member_ids?: string[]
+          number_id?: string
+          ring_timeout_sec?: number
+          strategy?: string
+          updated_at?: string
+          voicemail_enabled?: boolean
+          voicemail_greeting?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "inbound_routes_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inbound_routes_number_id_fkey"
+            columns: ["number_id"]
+            isOneToOne: true
+            referencedRelation: "numbers"
             referencedColumns: ["id"]
           },
         ]

@@ -12,6 +12,91 @@ import { lookupCnam } from '@/lib/signalwire';
 
 type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
 
+// ---------------------------------------------------------------------------
+// Inbound routing per number
+// ---------------------------------------------------------------------------
+
+export type InboundRouteRow = {
+  numberId: string;
+  strategy: 'simul' | 'round_robin' | 'single';
+  memberIds: string[];
+  ringTimeoutSec: number;
+  voicemailEnabled: boolean;
+  voicemailGreeting: string | null;
+};
+
+export async function loadInboundRoute(numberId: string): Promise<InboundRouteRow | null> {
+  const supabase = await createServerClient();
+  const { data } = await supabase
+    .from('inbound_routes')
+    .select('number_id, strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting')
+    .eq('number_id', numberId)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    numberId: data.number_id,
+    strategy: data.strategy as InboundRouteRow['strategy'],
+    memberIds: (data.member_ids as string[] | null) ?? [],
+    ringTimeoutSec: data.ring_timeout_sec,
+    voicemailEnabled: data.voicemail_enabled,
+    voicemailGreeting: data.voicemail_greeting,
+  };
+}
+
+export async function saveInboundRoute(input: {
+  numberId: string;
+  strategy: 'simul' | 'round_robin' | 'single';
+  memberIds: string[];
+  ringTimeoutSec: number;
+  voicemailEnabled: boolean;
+  voicemailGreeting?: string | null;
+}): Promise<Result> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const supabase = await createServerClient();
+  const { data: num } = await supabase
+    .from('numbers')
+    .select('id')
+    .eq('id', input.numberId)
+    .eq('brand_id', active.id)
+    .maybeSingle();
+  if (!num) return { ok: false, error: 'Number not found in this brand.' };
+
+  const ring = Math.max(5, Math.min(120, Math.trunc(input.ringTimeoutSec) || 25));
+  const memberIds = Array.from(new Set(input.memberIds.filter(Boolean)));
+
+  const { error } = await supabase.from('inbound_routes').upsert(
+    {
+      number_id: input.numberId,
+      brand_id: active.id,
+      strategy: input.strategy,
+      member_ids: memberIds,
+      ring_timeout_sec: ring,
+      voicemail_enabled: input.voicemailEnabled,
+      voicemail_greeting: input.voicemailGreeting?.trim() || null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'number_id' },
+  );
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/numbers');
+  return { ok: true };
+}
+
+export async function deleteInboundRoute(input: { numberId: string }): Promise<Result> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('inbound_routes')
+    .delete()
+    .eq('number_id', input.numberId)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/numbers');
+  return { ok: true };
+}
+
 // SignalWire's Lookup API charges ~$0.005 per CNAM hit, so this stays
 // strictly on-demand — one lookup per click, cached on the row.
 export async function refreshCnam(input: {

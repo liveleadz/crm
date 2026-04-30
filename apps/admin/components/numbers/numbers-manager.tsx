@@ -5,26 +5,43 @@
 // last 7d), an editable label, an A2P campaign id field, and an active
 // toggle. Admins can also pull fresh numbers from SignalWire on demand.
 
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import {
   bulkDeleteNumbers,
+  deleteInboundRoute,
   deleteNumber,
   refreshCnam,
+  saveInboundRoute,
   setA2pCampaignId,
   setNumberActive,
   updateNumberLabel,
+  type InboundRouteRow,
 } from '@/app/actions/numbers';
 import type { NumberWithHealth } from '@/lib/numbers';
 
-type Props = {
-  initial: NumberWithHealth[];
+type BrandMember = {
+  id: string;
+  full_name: string | null;
+  email: string;
+  mobile_phone: string | null;
 };
 
-export function NumbersManager({ initial }: Props) {
+type Props = {
+  initial: NumberWithHealth[];
+  members?: BrandMember[];
+  initialRoutes?: InboundRouteRow[];
+};
+
+export function NumbersManager({ initial, members = [], initialRoutes = [] }: Props) {
   const [items, setItems] = useState<NumberWithHealth[]>(initial);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
+  const [routes, setRoutes] = useState<Map<string, InboundRouteRow>>(
+    () => new Map(initialRoutes.map((r) => [r.numberId, r])),
+  );
+  const [routingNumberId, setRoutingNumberId] = useState<string | null>(null);
+  const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
 
   function patch(id: string, fn: (n: NumberWithHealth) => NumberWithHealth) {
     setItems((prev) => prev.map((n) => (n.id === id ? fn(n) : n)));
@@ -195,6 +212,7 @@ export function NumbersManager({ initial }: Props) {
               <col style={{ width: 100 }} />
               <col style={{ width: 90 }} />
               <col style={{ width: 90 }} />
+              <col style={{ width: 130 }} />
               <col style={{ width: 110 }} />
               <col style={{ width: 70 }} />
               <col style={{ width: 60 }} />
@@ -221,6 +239,7 @@ export function NumbersManager({ initial }: Props) {
                 <th className="px-3 py-2 font-medium">Block rate</th>
                 <th className="px-3 py-2 font-medium">Risk</th>
                 <th className="px-3 py-2 font-medium">Last used</th>
+                <th className="px-3 py-2 font-medium">Inbound</th>
                 <th className="px-3 py-2 font-medium">Reputation check</th>
                 <th className="px-3 py-2 font-medium">Active</th>
                 <th className="px-3 py-2" />
@@ -285,6 +304,13 @@ export function NumbersManager({ initial }: Props) {
                     {n.health.lastUsedAt ? timeAgo(n.health.lastUsedAt) : <span className="text-txt-3">never</span>}
                   </td>
                   <td className="px-3 py-3">
+                    <InboundCell
+                      route={routes.get(n.id) ?? null}
+                      memberById={memberById}
+                      onConfigure={() => setRoutingNumberId(n.id)}
+                    />
+                  </td>
+                  <td className="px-3 py-3">
                     <ReputationLinks e164={n.e164} />
                   </td>
                   <td className="px-3 py-3">
@@ -309,6 +335,31 @@ export function NumbersManager({ initial }: Props) {
           </table>
         )}
       </div>
+
+      {routingNumberId && (
+        <InboundRouteModal
+          number={items.find((n) => n.id === routingNumberId) ?? null}
+          members={members}
+          existing={routes.get(routingNumberId) ?? null}
+          onClose={() => setRoutingNumberId(null)}
+          onSaved={(next) => {
+            setRoutes((prev) => {
+              const m = new Map(prev);
+              m.set(routingNumberId, next);
+              return m;
+            });
+            setRoutingNumberId(null);
+          }}
+          onRemoved={() => {
+            setRoutes((prev) => {
+              const m = new Map(prev);
+              m.delete(routingNumberId);
+              return m;
+            });
+            setRoutingNumberId(null);
+          }}
+        />
+      )}
 
       <div className="space-y-1.5 text-[11px] text-txt-3">
         <p>
@@ -583,3 +634,301 @@ function timeAgo(iso: string): string {
   if (d < 7) return `${d}d`;
   return `${Math.floor(d / 7)}w`;
 }
+
+
+function InboundCell({
+  route,
+  memberById,
+  onConfigure,
+}: {
+  route: InboundRouteRow | null;
+  memberById: Map<string, BrandMember>;
+  onConfigure: () => void;
+}) {
+  if (!route || (route.memberIds.length === 0 && !route.voicemailEnabled)) {
+    return (
+      <button
+        type="button"
+        onClick={onConfigure}
+        className="rounded-md border border-dashed border-line bg-canvas px-2 py-0.5 text-[11px] text-txt-3 hover:border-teal hover:text-teal"
+      >
+        Set up
+      </button>
+    );
+  }
+  const named = route.memberIds
+    .map((id) => memberById.get(id))
+    .filter(Boolean) as BrandMember[];
+  const summary =
+    named.length === 0
+      ? "voicemail only"
+      : named.length === 1
+        ? (named[0]!.full_name || named[0]!.email)
+        : route.strategy === "simul"
+          ? `ring all (${named.length})`
+          : route.strategy === "round_robin"
+            ? `round robin (${named.length})`
+            : `single (${named.length})`;
+  return (
+    <button
+      type="button"
+      onClick={onConfigure}
+      className="flex flex-col items-start text-left text-[11.5px] hover:text-teal"
+      title="Click to edit routing"
+    >
+      <span className="truncate">{summary}</span>
+      <span className="text-[10px] text-txt-3">
+        {route.ringTimeoutSec}s
+        {route.voicemailEnabled ? " · vm on" : ""}
+      </span>
+    </button>
+  );
+}
+
+function InboundRouteModal({
+  number,
+  members,
+  existing,
+  onClose,
+  onSaved,
+  onRemoved,
+}: {
+  number: NumberWithHealth | null;
+  members: BrandMember[];
+  existing: InboundRouteRow | null;
+  onClose: () => void;
+  onSaved: (next: InboundRouteRow) => void;
+  onRemoved: () => void;
+}) {
+  const [strategy, setStrategy] = useState<InboundRouteRow["strategy"]>(
+    existing?.strategy ?? "simul",
+  );
+  const [memberIds, setMemberIds] = useState<string[]>(existing?.memberIds ?? []);
+  const [ring, setRing] = useState<number>(existing?.ringTimeoutSec ?? 25);
+  const [vmOn, setVmOn] = useState<boolean>(existing?.voicemailEnabled ?? true);
+  const [vmGreeting, setVmGreeting] = useState<string>(existing?.voicemailGreeting ?? "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!number) return null;
+
+  function toggleMember(id: string) {
+    setMemberIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    const res = await saveInboundRoute({
+      numberId: number!.id,
+      strategy,
+      memberIds,
+      ringTimeoutSec: ring,
+      voicemailEnabled: vmOn,
+      voicemailGreeting: vmGreeting || null,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    onSaved({
+      numberId: number!.id,
+      strategy,
+      memberIds,
+      ringTimeoutSec: ring,
+      voicemailEnabled: vmOn,
+      voicemailGreeting: vmGreeting || null,
+    });
+  }
+
+  async function remove() {
+    if (!existing) {
+      onClose();
+      return;
+    }
+    if (!window.confirm("Remove inbound routing? Calls to this number will hang up.")) return;
+    setBusy(true);
+    setErr(null);
+    const res = await deleteInboundRoute({ numberId: number!.id });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    onRemoved();
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg overflow-hidden rounded-2xl border border-line bg-surface shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-line px-4 py-3">
+          <div>
+            <h2 className="text-[13px] font-semibold">Inbound routing</h2>
+            <div className="font-mono text-[11px] text-txt-3">{number.e164}</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-7 w-7 place-items-center rounded-md text-txt-3 hover:bg-canvas hover:text-txt-1"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div className="space-y-4 px-4 py-4">
+          <div>
+            <Label>Ring strategy</Label>
+            <select
+              value={strategy}
+              onChange={(e) => setStrategy(e.target.value as InboundRouteRow["strategy"])}
+              className={inputCls}
+            >
+              <option value="simul">Ring all selected at once</option>
+              <option value="round_robin">Round robin (next idle)</option>
+              <option value="single">Single agent</option>
+            </select>
+            {strategy !== "simul" && (
+              <p className="mt-1.5 text-[10.5px] text-txt-3">
+                Round robin and single-agent are recorded in the config but the SWML
+                handler currently parallel-dials all selected members. Real rotation
+                state lands in a follow-up.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <Label>Members to ring (mobile_phone)</Label>
+            {members.length === 0 ? (
+              <p className="text-[11.5px] text-txt-3">No brand members yet.</p>
+            ) : (
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {members.map((m) => {
+                  const checked = memberIds.includes(m.id);
+                  const disabled = !m.mobile_phone;
+                  return (
+                    <label
+                      key={m.id}
+                      className={`flex items-start gap-2 rounded-md border px-2 py-1.5 text-[12px] ${
+                        checked
+                          ? "border-teal/50 bg-teal/5"
+                          : "border-line bg-canvas"
+                      } ${disabled ? "opacity-50" : "cursor-pointer hover:border-teal/40"}`}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={disabled}
+                        checked={checked && !disabled}
+                        onChange={() => !disabled && toggleMember(m.id)}
+                        className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-teal"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[12px] font-medium">
+                          {m.full_name || m.email}
+                        </div>
+                        <div className="truncate font-mono text-[10.5px] text-txt-3">
+                          {m.mobile_phone || "no mobile_phone on file"}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <p className="mt-1.5 text-[10.5px] text-txt-3">
+              Members without a mobile_phone are greyed out — add one in their profile to
+              include them in the rotation.
+            </p>
+          </div>
+
+          <div>
+            <Label>Ring timeout (seconds)</Label>
+            <input
+              type="number"
+              min={5}
+              max={120}
+              value={ring}
+              onChange={(e) => setRing(Math.max(5, Math.min(120, Number(e.target.value) || 25)))}
+              className={inputCls}
+            />
+          </div>
+
+          <div className="space-y-2 rounded-lg border border-line p-3">
+            <label className="flex items-center gap-2 text-[12px] font-medium">
+              <input
+                type="checkbox"
+                checked={vmOn}
+                onChange={(e) => setVmOn(e.target.checked)}
+                className="h-3.5 w-3.5 cursor-pointer accent-teal"
+              />
+              Send to voicemail when no one answers
+            </label>
+            {vmOn && (
+              <div>
+                <Label>Greeting</Label>
+                <textarea
+                  rows={2}
+                  value={vmGreeting}
+                  onChange={(e) => setVmGreeting(e.target.value)}
+                  placeholder="Default greeting will play if blank."
+                  className={`${inputCls} resize-y`}
+                />
+              </div>
+            )}
+          </div>
+
+          {err && (
+            <div className="rounded-lg border border-hp/40 bg-hp/10 px-3 py-2 text-[12px] text-hp">
+              {err}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+          {existing && (
+            <button
+              type="button"
+              onClick={remove}
+              disabled={busy}
+              className="mr-auto rounded-md border border-hp/40 bg-hp/10 px-2.5 py-1 text-[11.5px] text-hp hover:bg-hp/20 disabled:opacity-50"
+            >
+              Remove routing
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-line bg-canvas px-3 py-1.5 text-[12px] hover:bg-surface-2"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={busy}
+            className="rounded-md bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const inputCls =
+  "w-full rounded-md border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20";
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <span className="mb-1.5 block text-[11.5px] font-medium text-txt-2">{children}</span>;
+}
+

@@ -106,3 +106,21 @@ export function verifyCallStatusPath(callId: string, sig: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
 }
+
+// Voicemail recording callback — separate namespace again so a status-sig
+// leak can't be replayed onto the voicemail callback (different DB writes).
+export function signVoicemailPath(callId: string): string {
+  return createHmac('sha256', getSecret())
+    .update(`vm:${callId}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+export function verifyVoicemailPath(callId: string, sig: string): boolean {
+  if (!callId || !sig || sig.length !== 16) return false;
+  const expected = signVoicemailPath(callId);
+  const a = Buffer.from(expected);
+  const b = Buffer.from(sig);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}

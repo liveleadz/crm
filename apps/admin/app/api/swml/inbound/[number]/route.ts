@@ -1,0 +1,187 @@
+// Inbound call handler for brand-owned numbers. SignalWire posts here when a
+// PSTN call hits a number — we look up the per-number routing config, ring
+// the assigned members' mobile_phones in parallel, and fall through to a
+// voicemail recording if no one answers in the configured timeout.
+//
+// SignalWire's SWML connect supports a "from"-list as a parallel-dial array
+// when you pass an array of destinations. The first leg to answer wins.
+//
+// One row gets inserted into `calls` per inbound call so the call list and
+// per-number health metrics see it. The voicemail callback (separate signed
+// path) updates the row with the recording URL when the recording finishes.
+
+import { NextResponse, type NextRequest } from 'next/server';
+import { createAdminClient } from '@leadpilot/db/admin';
+import { signVoicemailPath } from '@/lib/dial-token';
+import { getPublicAppUrl, toE164 } from '@/lib/dialer';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+function jsonSwml(swml: object) {
+  return new NextResponse(JSON.stringify(swml), {
+    status: 200,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+  });
+}
+
+const HANGUP_SWML = {
+  version: '1.0.0',
+  sections: { main: [{ hangup: { reason: 'normal' } }] },
+};
+
+export async function GET(req: NextRequest, ctx: { params: Promise<{ number: string }> }) {
+  return handle(req, ctx);
+}
+export async function POST(req: NextRequest, ctx: { params: Promise<{ number: string }> }) {
+  return handle(req, ctx);
+}
+
+async function handle(req: NextRequest, ctx: { params: Promise<{ number: string }> }) {
+  const { number } = await ctx.params;
+  // The path segment is the destination E.164 (or sanitized; we re-normalize).
+  const e164 = toE164(decodeURIComponent(number));
+  if (!e164) return jsonSwml(HANGUP_SWML);
+
+  // Caller's number — try a few common SWML/LaML field shapes.
+  const url = new URL(req.url);
+  let parsedBody: Record<string, unknown> = {};
+  try {
+    const raw = await req.text();
+    if (raw) {
+      try {
+        parsedBody = JSON.parse(raw);
+      } catch {
+        const params = new URLSearchParams(raw);
+        params.forEach((v, k) => {
+          parsedBody[k] = v;
+        });
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  const callerRaw = pickString(parsedBody, ['From', 'from', 'caller', 'caller_id_number']) ??
+    url.searchParams.get('From') ??
+    url.searchParams.get('from') ??
+    null;
+  const fromNumber = callerRaw ? toE164(callerRaw) ?? callerRaw : 'unknown';
+
+  const supabase = createAdminClient();
+
+  // Resolve the receiving number row, plus its routing config and brand.
+  const { data: numberRow } = await supabase
+    .from('numbers')
+    .select('id, brand_id')
+    .eq('e164', e164)
+    .maybeSingle();
+  if (!numberRow) return jsonSwml(HANGUP_SWML);
+
+  const { data: route } = await supabase
+    .from('inbound_routes')
+    .select(
+      'strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting',
+    )
+    .eq('number_id', numberRow.id)
+    .maybeSingle();
+
+  // Fetch member mobile_phones for the configured rotation. Drop members
+  // without a mobile_phone — we have nothing to ring.
+  const memberIds = route?.member_ids ?? [];
+  const ringNumbers: string[] = [];
+  if (memberIds.length > 0) {
+    const { data: members } = await supabase
+      .from('members')
+      .select('id, mobile_phone')
+      .in('id', memberIds);
+    for (const m of members ?? []) {
+      if (m.mobile_phone) {
+        const n = toE164(m.mobile_phone);
+        if (n) ringNumbers.push(n);
+      }
+    }
+  }
+
+  // Try to attribute the call to a known lead (by phone). Brand-scoped.
+  let leadId: string | null = null;
+  if (fromNumber !== 'unknown') {
+    const { data: lead } = await supabase
+      .from('leads')
+      .select('id')
+      .eq('brand_id', numberRow.brand_id)
+      .eq('phone', fromNumber)
+      .maybeSingle();
+    leadId = lead?.id ?? null;
+  }
+
+  // Insert the calls row up-front so the recording callback can target it.
+  const { data: call } = await supabase
+    .from('calls')
+    .insert({
+      brand_id: numberRow.brand_id,
+      number_id: numberRow.id,
+      lead_id: leadId,
+      direction: 'inbound',
+      from_number: fromNumber,
+      to_number: e164,
+      started_at: new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+  const callId = call?.id ?? null;
+
+  // No agents and no voicemail = polite hangup. Still record the inbound
+  // call we already inserted (above) so the brand sees the missed attempt.
+  if (ringNumbers.length === 0 && !(route?.voicemail_enabled ?? true)) {
+    return jsonSwml(HANGUP_SWML);
+  }
+
+  const sections: Array<Record<string, unknown>> = [{ answer: {} }];
+
+  // Connect to the assigned member numbers. SWML's connect.to accepts an
+  // array of E.164 strings for parallel dial; first to answer wins.
+  if (ringNumbers.length > 0) {
+    sections.push({
+      connect: {
+        from: e164,
+        to: ringNumbers.length === 1 ? ringNumbers[0] : ringNumbers,
+        timeout: route?.ring_timeout_sec ?? 25,
+        // result.no_answer falls through to the next section (voicemail) so
+        // the caller never hits an abrupt drop.
+      },
+    });
+  }
+
+  // Voicemail leg — only runs if no agent leg picked up. The `record_call`
+  // status_url posts the recording URL back when finished.
+  if ((route?.voicemail_enabled ?? true) && callId) {
+    const greeting =
+      route?.voicemail_greeting ??
+      'You\'ve reached us. We can\'t take your call right now — please leave a message after the tone.';
+    const vmSig = signVoicemailPath(callId);
+    const vmUrl = `${getPublicAppUrl()}/api/swml/voicemail/${callId}/${vmSig}`;
+    sections.push({ play: { say: { text: greeting } } });
+    sections.push({
+      record_call: {
+        format: 'mp3',
+        beep: true,
+        max_length: 180,
+        end_silence_timeout: 5,
+        status_url: vmUrl,
+      },
+    });
+    sections.push({ hangup: { reason: 'normal' } });
+  } else {
+    sections.push({ hangup: { reason: 'normal' } });
+  }
+
+  return jsonSwml({ version: '1.0.0', sections: { main: sections } });
+}
+
+function pickString(body: Record<string, unknown>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = body[k];
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+  }
+  return null;
+}
