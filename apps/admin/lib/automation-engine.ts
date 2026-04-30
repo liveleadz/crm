@@ -13,7 +13,7 @@ import 'server-only';
 //
 // Either mode must never block the primary write. All errors are caught.
 
-import { createServerClient } from '@leadpilot/db/server';
+import { createAdminClient } from '@leadpilot/db/admin';
 import type { AutomationAction, WorkflowGraph } from '@/lib/automations';
 import { startGraphRun, executeAction } from '@/lib/workflow-graph-engine';
 
@@ -27,7 +27,18 @@ type DispositionTrigger = {
   callbackAt: string | null;
 };
 
-export type AutomationTriggerInput = DispositionTrigger;
+type CallReceivedTrigger = {
+  trigger: 'call_received';
+  brandId: string;
+  callId: string;
+  leadId: string | null;
+  // numberId of the LeadPilot number that was called (for filtering rules)
+  numberId: string | null;
+  fromNumber: string;
+  toNumber: string;
+};
+
+export type AutomationTriggerInput = DispositionTrigger | CallReceivedTrigger;
 
 type Row = {
   id: string;
@@ -39,7 +50,7 @@ type Row = {
 };
 
 export async function runAutomations(input: AutomationTriggerInput): Promise<void> {
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
 
   const { data, error } = await supabase
     .from('automations')
@@ -54,22 +65,10 @@ export async function runAutomations(input: AutomationTriggerInput): Promise<voi
   const matched = (data as unknown as Row[]).filter((row) => matches(row.trigger_config, input));
 
   for (const row of matched) {
+    const ctxBase = buildCtx(input);
     if (row.mode === 'graph' && row.graph) {
       try {
-        await startGraphRun({
-          automationId: row.id,
-          graph: row.graph,
-          ctx: {
-            brandId: input.brandId,
-            leadId: input.leadId,
-            memberId: input.memberId,
-            trigger: {
-              kind: input.trigger,
-              disposition: input.disposition,
-              callbackAt: input.callbackAt,
-            },
-          },
-        });
+        await startGraphRun({ automationId: row.id, graph: row.graph, ctx: ctxBase });
       } catch (e) {
         console.error('[automations:graph]', row.name, (e as Error).message);
       }
@@ -79,16 +78,7 @@ export async function runAutomations(input: AutomationTriggerInput): Promise<voi
     // Simple mode — fast path.
     for (const action of row.actions) {
       try {
-        await executeAction(action, {
-          brandId: input.brandId,
-          leadId: input.leadId,
-          memberId: input.memberId,
-          trigger: {
-            kind: input.trigger,
-            disposition: input.disposition,
-            callbackAt: input.callbackAt,
-          },
-        });
+        await executeAction(action, ctxBase);
       } catch (e) {
         console.error('[automations]', row.name, action.kind, (e as Error).message);
       }
@@ -96,11 +86,45 @@ export async function runAutomations(input: AutomationTriggerInput): Promise<voi
   }
 }
 
+function buildCtx(input: AutomationTriggerInput) {
+  if (input.trigger === 'disposition_set') {
+    return {
+      brandId: input.brandId,
+      leadId: input.leadId,
+      memberId: input.memberId,
+      trigger: {
+        kind: input.trigger,
+        disposition: input.disposition,
+        callbackAt: input.callbackAt,
+      },
+    };
+  }
+  return {
+    brandId: input.brandId,
+    leadId: input.leadId,
+    memberId: null,
+    trigger: {
+      kind: input.trigger,
+      fromNumber: input.fromNumber,
+      toNumber: input.toNumber,
+      numberId: input.numberId,
+    },
+  };
+}
+
 function matches(config: Record<string, unknown>, input: AutomationTriggerInput): boolean {
   if (input.trigger === 'disposition_set') {
     const codes = config.codes;
     if (!Array.isArray(codes) || codes.length === 0) return false;
     return codes.includes(input.disposition);
+  }
+  if (input.trigger === 'call_received') {
+    // Optional filter by specific LeadPilot number; empty/missing = match all.
+    const numberIds = config.number_ids;
+    if (Array.isArray(numberIds) && numberIds.length > 0) {
+      return input.numberId !== null && numberIds.includes(input.numberId);
+    }
+    return true;
   }
   return false;
 }
@@ -138,7 +162,7 @@ export async function runWebhookAutomation(input: WebhookRunInput): Promise<void
   if (typeof body === 'object' && body !== null) {
     const candidate = (body as { lead_id?: unknown }).lead_id;
     if (typeof candidate === 'string' && candidate.length > 0) {
-      const supabase = await createServerClient();
+      const supabase = createAdminClient();
       const { data: lead } = await supabase
         .from('leads')
         .select('id')

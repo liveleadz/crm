@@ -19,7 +19,7 @@ import 'server-only';
 // targets are stored in the graph itself, not in run state, so editing a
 // graph affects in-flight runs deterministically.
 
-import { createServerClient } from '@leadpilot/db/server';
+import { createAdminClient } from '@leadpilot/db/admin';
 import type {
   AutomationAction,
   BranchCondition,
@@ -40,6 +40,10 @@ export type GraphRunContext = {
     kind: string;
     disposition?: string;
     callbackAt?: string | null;
+    // call_received only
+    fromNumber?: string;
+    toNumber?: string;
+    numberId?: string | null;
   };
   // Optional payload from incoming webhook triggers; available to templates
   // as {{webhook.body.<json-path>}}.
@@ -63,7 +67,7 @@ export async function startGraphRun({
   const trigger = graph.nodes.find((n) => n.type === 'trigger');
   if (!trigger) return;
 
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
   const { data, error } = await supabase
     .from('workflow_runs')
     .insert({
@@ -85,7 +89,7 @@ export async function startGraphRun({
 }
 
 export async function tickGraphRun(runId: string): Promise<void> {
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
   const { data: run } = await supabase
     .from('workflow_runs')
     .select('id, automation_id, current_node_id, state, status')
@@ -130,7 +134,7 @@ async function walkFrom(
   graph: WorkflowGraph,
   ctx: GraphRunContext,
 ): Promise<void> {
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
   let cursor: string | null = nodeId;
   const visited = new Set<string>();
 
@@ -226,7 +230,7 @@ function nextEdge(graph: WorkflowGraph, nodeId: string, handle: BranchHandle | n
 }
 
 async function markCompleted(runId: string): Promise<void> {
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
   await supabase
     .from('workflow_runs')
     .update({ status: 'completed', finished_at: new Date().toISOString() })
@@ -234,7 +238,7 @@ async function markCompleted(runId: string): Promise<void> {
 }
 
 async function markFailed(runId: string, reason: string): Promise<void> {
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
   await supabase
     .from('workflow_runs')
     .update({
@@ -258,7 +262,7 @@ async function evaluateBranch(cond: BranchCondition, ctx: GraphRunContext): Prom
 
   if (!ctx.leadId) return 'none';
 
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
 
   if (cond.kind === 'lead_in_stage') {
     const { data } = await supabase
@@ -297,7 +301,7 @@ async function evaluateBranch(cond: BranchCondition, ctx: GraphRunContext): Prom
 // ---------------------------------------------------------------------------
 
 export async function executeAction(action: AutomationAction, ctx: GraphRunContext): Promise<void> {
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
 
   // Lead-bound actions silently no-op when there's no lead (e.g. webhook
   // trigger that didn't resolve to a lead). The "lead-free" actions —
@@ -533,7 +537,7 @@ export async function executeAction(action: AutomationAction, ctx: GraphRunConte
 // Builds the template variable bag using a fresh read of the lead. Engine-only
 // helper; keeps action handlers tiny.
 async function buildActionVars(ctx: GraphRunContext): Promise<TemplateVars> {
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
   let lead: {
     first_name?: string | null;
     last_name?: string | null;

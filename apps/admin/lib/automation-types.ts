@@ -346,6 +346,9 @@ export function describeTrigger(
   if (triggerType === 'webhook_received') {
     return 'When webhook is received';
   }
+  if (triggerType === 'call_received') {
+    return 'When inbound call is received';
+  }
   return 'Click to choose a trigger';
 }
 

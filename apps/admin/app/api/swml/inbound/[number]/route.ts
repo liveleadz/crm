@@ -14,6 +14,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { signVoicemailPath } from '@/lib/dial-token';
 import { getPublicAppUrl, toE164 } from '@/lib/dialer';
+import { runAutomations } from '@/lib/automation-engine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -104,14 +105,20 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
 
   // Try to attribute the call to a known lead (by phone). Brand-scoped.
   let leadId: string | null = null;
+  let leadName: string | null = null;
+  let leadOwnerId: string | null = null;
   if (fromNumber !== 'unknown') {
     const { data: lead } = await supabase
       .from('leads')
-      .select('id')
+      .select('id, first_name, last_name, owner_id')
       .eq('brand_id', numberRow.brand_id)
       .eq('phone', fromNumber)
       .maybeSingle();
     leadId = lead?.id ?? null;
+    if (lead) {
+      leadName = [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null;
+      leadOwnerId = lead.owner_id ?? null;
+    }
   }
 
   // Insert the calls row up-front so the recording callback can target it.
@@ -129,6 +136,22 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
     .select('id')
     .single();
   const callId = call?.id ?? null;
+
+  // Side effects (notification + automation dispatch) run after the SWML is
+  // composed so they never delay the response. Errors are swallowed — never
+  // block the call.
+  if (callId) {
+    void notifyAndDispatch({
+      brandId: numberRow.brand_id,
+      callId,
+      numberId: numberRow.id,
+      leadId,
+      leadName,
+      leadOwnerId,
+      fromNumber,
+      toNumber: e164,
+    });
+  }
 
   // No agents and no voicemail = polite hangup. Still record the inbound
   // call we already inserted (above) so the brand sees the missed attempt.
@@ -184,4 +207,48 @@ function pickString(body: Record<string, unknown>, keys: string[]): string | nul
     if (typeof v === 'string' && v.trim().length > 0) return v.trim();
   }
   return null;
+}
+
+// Auto-notify the lead owner (if matched) and dispatch any call_received
+// automations. Both are best-effort — the inbound call must always proceed.
+async function notifyAndDispatch(input: {
+  brandId: string;
+  callId: string;
+  numberId: string;
+  leadId: string | null;
+  leadName: string | null;
+  leadOwnerId: string | null;
+  fromNumber: string;
+  toNumber: string;
+}) {
+  const supabase = createAdminClient();
+  try {
+    if (input.leadOwnerId) {
+      const who = input.leadName || input.fromNumber;
+      await supabase.from('notifications').insert({
+        brand_id: input.brandId,
+        recipient_member_id: input.leadOwnerId,
+        kind: 'inbound_call',
+        title: `Inbound call from ${who}`,
+        body: `${input.fromNumber} → ${input.toNumber}`,
+        link_url: input.leadId ? `/leads/${input.leadId}` : `/calls`,
+        data: { call_id: input.callId, lead_id: input.leadId },
+      });
+    }
+  } catch (e) {
+    console.error('[inbound:notify]', (e as Error).message);
+  }
+  try {
+    await runAutomations({
+      trigger: 'call_received',
+      brandId: input.brandId,
+      callId: input.callId,
+      numberId: input.numberId,
+      leadId: input.leadId,
+      fromNumber: input.fromNumber,
+      toNumber: input.toNumber,
+    });
+  } catch (e) {
+    console.error('[inbound:automations]', (e as Error).message);
+  }
 }

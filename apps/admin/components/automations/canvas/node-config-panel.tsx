@@ -120,6 +120,7 @@ function TriggerEditor({
         <Label>Trigger type</Label>
         <select value={triggerType} onChange={(e) => setKind(e.target.value)} className={inputCls}>
           <option value="disposition_set">When call disposition is set</option>
+          <option value="call_received">When inbound call is received</option>
           <option value="webhook_received">When webhook is received</option>
         </select>
       </div>
@@ -127,7 +128,22 @@ function TriggerEditor({
       {triggerType === 'disposition_set' && (
         <DispositionTriggerFields node={node} ctx={ctx} onChange={onChange} />
       )}
+      {triggerType === 'call_received' && <CallReceivedTriggerFields />}
       {triggerType === 'webhook_received' && <WebhookTriggerFields ctx={ctx} />}
+    </div>
+  );
+}
+
+function CallReceivedTriggerFields() {
+  return (
+    <div className="rounded-lg border border-line bg-canvas/50 p-3 text-[11.5px] text-txt-3">
+      Fires for every inbound call to any of this brand&apos;s numbers. The matched
+      lead (if any) is available as <code className="text-txt-1">{'{{lead.*}}'}</code>;
+      caller / callee numbers are exposed as
+      {' '}
+      <code className="text-txt-1">{'{{trigger.fromNumber}}'}</code> and
+      {' '}
+      <code className="text-txt-1">{'{{trigger.toNumber}}'}</code>.
     </div>
   );
 }
