@@ -189,16 +189,24 @@ async function handle(req: NextRequest) {
 
   // Compose the SWML response.
   //
-  // 1. Explicit answer — SignalWire's pipeline behaves more predictably
-  //    when the script answers the leg before any connect.
-  // 2. Try to bridge the caller to a routed subscriber via Call Fabric.
-  //    Subscribers auto-provisioned via /api/fabric/subscribers/tokens
-  //    don't always have a /private address by default — only /public.
-  //    We pass an array so SignalWire tries both namespaces; the first
-  //    one with an online client wins, the others auto-cancel.
-  // 3. If all targets refuse / time out, the script falls through to a
-  //    voicemail greeting + recording.
-  const sections: Array<Record<string, unknown>> = [{ answer: {} }];
+  // 1. answer + a brief "connecting" cue so the caller knows the script
+  //    is alive (vs. dead-air silence which is indistinguishable from a
+  //    misconfigured webhook).
+  // 2. connect to the routed subscribers via Call Fabric. We pass both
+  //    /private/<reference> and /public/<reference> so the dispatch
+  //    works regardless of which namespace the subscriber's default
+  //    address landed in.
+  // 3. On no-answer / refused, fall through to voicemail greeting (top-
+  //    level `say` verb — `play.say.text` is NOT valid SWML and was
+  //    the reason the previous fallback played silence) + record_call.
+  const sections: Array<Record<string, unknown>> = [
+    { answer: {} },
+    { say: { text: 'Connecting your call.' } },
+  ];
+
+  // Shorter timeout than configured so callers don't sit in silence too
+  // long when no agent is online — voicemail kicks in faster.
+  const connectTimeout = Math.min(route?.ring_timeout_sec ?? 25, 15);
 
   if (ringEmails.length > 0) {
     const addresses: string[] = [];
@@ -206,10 +214,11 @@ async function handle(req: NextRequest) {
       addresses.push(`/private/${email}`);
       addresses.push(`/public/${email}`);
     }
+    console.log('[inbound-swml] dispatching to', addresses);
     sections.push({
       connect: {
         to: addresses.length === 1 ? addresses[0] : addresses,
-        timeout: route?.ring_timeout_sec ?? 25,
+        timeout: connectTimeout,
         from: fromNumber !== 'unknown' ? fromNumber : e164,
       },
     });
@@ -221,7 +230,7 @@ async function handle(req: NextRequest) {
       "You've reached us. We can't take your call right now — please leave a message after the tone.";
     const vmSig = signVoicemailPath(callId);
     const vmUrl = `${getPublicAppUrl()}/api/swml/voicemail/${callId}/${vmSig}`;
-    sections.push({ play: { say: { text: greeting } } });
+    sections.push({ say: { text: greeting } });
     sections.push({
       record_call: {
         format: 'mp3',
