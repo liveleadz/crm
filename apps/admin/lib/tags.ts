@@ -28,16 +28,24 @@ export async function loadTagsForLeads(
   const map = new Map<string, Tag[]>();
   if (leadIds.length === 0) return map;
   const supabase = await createServerClient();
-  const { data } = await supabase
-    .from('lead_tags')
-    .select('lead_id, tags:tag_id ( id, name, color )')
-    .in('lead_id', leadIds);
-  for (const row of data ?? []) {
-    const t = row.tags as { id: string; name: string; color: string | null } | null;
-    if (!t) continue;
-    const list = map.get(row.lead_id) ?? [];
-    list.push({ id: t.id, name: t.name, color: t.color ?? 'slate' });
-    map.set(row.lead_id, list);
+  // Chunk the IN list. Supabase serializes filters into the request URL,
+  // so a single 5000-id query exceeds the URL length limit and the
+  // request fails (manifests as a server-side exception on the calling
+  // page). 500 ids per chunk keeps each URL well under the 8KB cap.
+  const CHUNK = 500;
+  for (let i = 0; i < leadIds.length; i += CHUNK) {
+    const slice = leadIds.slice(i, i + CHUNK);
+    const { data } = await supabase
+      .from('lead_tags')
+      .select('lead_id, tags:tag_id ( id, name, color )')
+      .in('lead_id', slice);
+    for (const row of data ?? []) {
+      const t = row.tags as { id: string; name: string; color: string | null } | null;
+      if (!t) continue;
+      const list = map.get(row.lead_id) ?? [];
+      list.push({ id: t.id, name: t.name, color: t.color ?? 'slate' });
+      map.set(row.lead_id, list);
+    }
   }
   return map;
 }

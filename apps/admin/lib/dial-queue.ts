@@ -69,7 +69,8 @@ export async function loadDialQueue(
     query = query.eq('list_id', filter.listId);
   }
 
-  // Tag filter: any-of semantics.
+  // Tag filter: any-of semantics. tag_id IN (…) is small (the user's
+  // selected tag count) so no chunking needed here.
   if (filter.tagIds && filter.tagIds.length > 0) {
     const { data: tagRows } = await supabase
       .from('lead_tags')
@@ -77,7 +78,8 @@ export async function loadDialQueue(
       .in('tag_id', filter.tagIds);
     const tagLeadIds = Array.from(new Set((tagRows ?? []).map((r) => r.lead_id)));
     if (tagLeadIds.length === 0) return [];
-    query = query.in('id', tagLeadIds);
+    // Cap to avoid an ultra-long URL on the parent leads query.
+    query = query.in('id', tagLeadIds.slice(0, 1000));
   }
 
   query = query.order('updated_at', { ascending: true }).limit(limit);

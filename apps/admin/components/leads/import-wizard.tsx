@@ -230,12 +230,15 @@ export function ImportWizard({
 
       {step === 'map' && (
         <div className="space-y-4">
+          <MapSummary mapping={mapping} headers={headers} validCount={validCount} totalRows={rows.length} />
           <div className="rounded-2xl border border-line bg-surface">
             <div className="flex items-center justify-between border-b border-line px-5 py-3">
               <div>
                 <h3 className="text-[13.5px] font-semibold">Map fields</h3>
                 <p className="text-[11.5px] text-txt-3">
-                  {fileName} · {rows.length.toLocaleString()} rows · {headers.length} columns
+                  {fileName} · {rows.length.toLocaleString()} rows · {headers.length} columns ·
+                  required: <span className="font-medium text-txt-2">at least one of</span>{' '}
+                  name, email, or phone
                 </p>
               </div>
               <button
@@ -588,5 +591,66 @@ function Stepper({ current }: { current: Step }) {
         );
       })}
     </div>
+  );
+}
+
+// At-a-glance summary of the current mapping. Helps the agent see what's
+// being captured before they hit Preview without having to scan every row.
+function MapSummary({
+  mapping,
+  headers,
+  validCount,
+  totalRows,
+}: {
+  mapping: FieldMapping;
+  headers: string[];
+  validCount: number;
+  totalRows: number;
+}) {
+  let mapped = 0;
+  let custom = 0;
+  let skipped = 0;
+  for (const h of headers) {
+    const t = mapping[h] ?? '__skip__';
+    if (t === '__skip__') skipped += 1;
+    else if (t === '__custom__' || (typeof t === 'string' && t.startsWith('custom:'))) custom += 1;
+    else mapped += 1;
+  }
+  const ready = validCount === totalRows;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-surface px-5 py-3">
+      <span className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        Mapping
+      </span>
+      <Pill tone="teal">{mapped} → lead column</Pill>
+      <Pill tone="neutral">{custom} → custom</Pill>
+      <Pill tone="muted">{skipped} skipped</Pill>
+      <span className="ml-auto text-[12px]">
+        <span className={ready ? 'text-teal' : 'text-txt-2'}>
+          {validCount.toLocaleString()} of {totalRows.toLocaleString()}
+        </span>{' '}
+        <span className="text-txt-3">rows ready to import</span>
+      </span>
+    </div>
+  );
+}
+
+function Pill({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone: 'teal' | 'neutral' | 'muted';
+}) {
+  const cls =
+    tone === 'teal'
+      ? 'bg-teal/15 text-teal ring-teal/30'
+      : tone === 'neutral'
+        ? 'bg-canvas text-txt-2 ring-line'
+        : 'bg-canvas text-txt-3 ring-line';
+  return (
+    <span className={`inline-flex h-[20px] items-center rounded-full px-2 text-[11px] font-medium ring-1 ${cls}`}>
+      {children}
+    </span>
   );
 }
