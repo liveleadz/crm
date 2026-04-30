@@ -148,6 +148,21 @@ export function ImportWizard({
       setError('Please give this list a name.');
       return;
     }
+    // Trim rows to only the columns that actually have a mapping target
+    // other than '__skip__'. Wide CSVs (50–100 columns where only 10 are
+    // mapped) otherwise serialize ~7× more data than necessary, which
+    // can blow past the server-action body limit. The mapping object
+    // already has the same keys as the row records, so we just project
+    // each row to the kept-headers subset.
+    const keepHeaders = headers.filter((h) => (mapping[h] ?? '__skip__') !== '__skip__');
+    const slimRows = rows.map((r) => {
+      const out: Record<string, string> = {};
+      for (const h of keepHeaders) {
+        const v = r[h];
+        if (v !== undefined) out[h] = v;
+      }
+      return out;
+    });
     setImporting(true);
     startTransition(async () => {
       // Belt-and-suspenders: importLeads itself catches all throws and
@@ -159,7 +174,7 @@ export function ImportWizard({
       let res: Awaited<ReturnType<typeof importLeads>>;
       try {
         res = await importLeads({
-          rows,
+          rows: slimRows,
           mapping,
           stageId: stageId || null,
           listName: listName.trim(),
