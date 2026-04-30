@@ -191,30 +191,26 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
     });
   }
 
-  // No agents and no voicemail = polite hangup. Still record the inbound
-  // call we already inserted (above) so the brand sees the missed attempt.
-  if (ringNumbers.length === 0 && !(route?.voicemail_enabled ?? true)) {
+  // No voicemail enabled = polite hangup. Still record the inbound call
+  // we already inserted (above) so the brand sees the missed attempt.
+  if (!(route?.voicemail_enabled ?? true)) {
     return laml(HANGUP_LAML);
   }
 
-  // Build LaML XML response. <Dial> with multiple <Number> children
-  // parallel-dials them; the first leg to answer wins. If <Dial> finishes
-  // without anyone answering (timeout / busy / failed), execution falls
-  // through to the next verbs — the voicemail flow.
-  const ring = route?.ring_timeout_sec ?? 25;
+  // Build LaML XML response.
+  //
+  // NOTE: PSTN-to-mobile parallel-dial is disabled. Inbound calls should
+  // ring the assigned members' BROWSERS (WebRTC) so they can answer with
+  // an in-app popup instead of waking up someone's cell. Until the in-
+  // browser inbound flow lands, every inbound call goes straight to
+  // voicemail — the agent still sees the call + recording in /calls and
+  // the lead owner gets a notification.
+  //
+  // ringNumbers is intentionally ignored here. Routing config is still
+  // read so we know strategy/ring_timeout for when WebRTC ringing ships.
+  void ringNumbers;
+  void nextRotationMemberId;
   const verbs: string[] = [];
-
-  if (ringNumbers.length > 0) {
-    const callerIdAttr = ` callerId="${escapeXml(fromNumber !== 'unknown' ? fromNumber : e164)}"`;
-    if (ringNumbers.length === 1) {
-      verbs.push(
-        `<Dial timeout="${ring}"${callerIdAttr}><Number>${escapeXml(ringNumbers[0]!)}</Number></Dial>`,
-      );
-    } else {
-      const numbers = ringNumbers.map((n) => `<Number>${escapeXml(n)}</Number>`).join('');
-      verbs.push(`<Dial timeout="${ring}"${callerIdAttr}>${numbers}</Dial>`);
-    }
-  }
 
   if ((route?.voicemail_enabled ?? true) && callId) {
     const greeting =
