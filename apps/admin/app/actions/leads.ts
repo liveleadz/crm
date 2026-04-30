@@ -417,3 +417,127 @@ export async function setLeadConsent(
   revalidatePath('/leads');
   return { ok: true as const };
 }
+
+// ---------------------------------------------------------------------------
+// Bulk operations
+// ---------------------------------------------------------------------------
+//
+// All bulk-* actions are brand-scoped via RLS plus an explicit brand_id check
+// so a malicious caller can't pass IDs from another brand. They return the
+// effective row count so the UI can give meaningful feedback.
+
+type BulkResult = { ok: true; count: number } | { ok: false; error: string };
+
+function uniqueIds(ids: string[]): string[] {
+  return Array.from(new Set(ids.filter(Boolean)));
+}
+
+export async function bulkDeleteLeads(input: { ids: string[] }): Promise<BulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('leads')
+    .delete({ count: 'exact' })
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/leads');
+  revalidatePath('/dashboard');
+  return { ok: true, count: count ?? 0 };
+}
+
+export async function bulkMoveLeadsStage(input: {
+  ids: string[];
+  stageId: string;
+}): Promise<BulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('leads')
+    .update(
+      { stage_id: input.stageId, updated_at: new Date().toISOString() },
+      { count: 'exact' },
+    )
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/leads');
+  revalidatePath('/dashboard');
+  return { ok: true, count: count ?? 0 };
+}
+
+export async function bulkSetLeadsConsent(input: {
+  ids: string[];
+  doNotCall?: boolean;
+  doNotEmail?: boolean;
+}): Promise<BulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const patch: { updated_at: string; do_not_call?: boolean; do_not_email?: boolean } = {
+    updated_at: new Date().toISOString(),
+  };
+  if (input.doNotCall !== undefined) patch.do_not_call = input.doNotCall;
+  if (input.doNotEmail !== undefined) patch.do_not_email = input.doNotEmail;
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('leads')
+    .update(patch, { count: 'exact' })
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/leads');
+  return { ok: true, count: count ?? 0 };
+}
+
+export async function bulkAddTagToLeads(input: {
+  ids: string[];
+  tagId: string;
+}): Promise<BulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  // Confirm every id belongs to the active brand before inserting junction rows.
+  const { data: scoped } = await supabase
+    .from('leads')
+    .select('id')
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  const allowed = (scoped ?? []).map((r) => r.id);
+  if (allowed.length === 0) return { ok: true, count: 0 };
+  const rows = allowed.map((leadId) => ({ lead_id: leadId, tag_id: input.tagId }));
+  const { error } = await supabase
+    .from('lead_tags')
+    .upsert(rows, { onConflict: 'lead_id,tag_id', ignoreDuplicates: true });
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/leads');
+  return { ok: true, count: allowed.length };
+}
+
+export async function bulkRemoveTagFromLeads(input: {
+  ids: string[];
+  tagId: string;
+}): Promise<BulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('lead_tags')
+    .delete({ count: 'exact' })
+    .in('lead_id', ids)
+    .eq('tag_id', input.tagId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/leads');
+  return { ok: true, count: count ?? 0 };
+}

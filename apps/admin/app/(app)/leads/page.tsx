@@ -97,7 +97,11 @@ export default async function LeadsPage({
         </div>
       ) : (
         <div className="flex-1 overflow-auto">
-          <KanbanBoard stages={stages} leads={leads} />
+          <KanbanBoard
+            stages={stages}
+            leads={leads}
+            tags={tagLibrary.map((t) => ({ id: t.id, name: t.name }))}
+          />
         </div>
       )}
     </>

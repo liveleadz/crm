@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
-import { deleteList, renameList } from '@/app/actions/lists';
+import { bulkDeleteLists, deleteList, renameList } from '@/app/actions/lists';
 import type { LeadList } from '@/lib/lists';
 
 export function ListPills({
@@ -18,6 +18,39 @@ export function ListPills({
   const [draftName, setDraftName] = useState('');
   const [, startTransition] = useTransition();
   const [busy, setBusy] = useState(false);
+  // Manage mode replaces the rename/delete-on-hover affordance with explicit
+  // checkboxes on every pill plus a bulk-delete bar. Click a pill while in
+  // manage mode to toggle its selection.
+  const [manageMode, setManageMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function exitManage() {
+    setManageMode(false);
+    setSelected(new Set());
+  }
+  function bulkDelete() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (!confirm(`Delete ${ids.length} list${ids.length === 1 ? '' : 's'}? Leads stay; the list tag is removed.`)) return;
+    setBusy(true);
+    startTransition(async () => {
+      const res = await bulkDeleteLists({ ids });
+      setBusy(false);
+      if (res.ok) {
+        if (activeListId && selected.has(activeListId)) router.push('/leads');
+        else router.refresh();
+        exitManage();
+      }
+    });
+  }
 
   function beginRename(list: LeadList) {
     setEditingId(list.id);
@@ -86,6 +119,31 @@ export function ListPills({
       {lists.map((l) => {
         const isActive = activeListId === l.id;
         const isEditing = editingId === l.id;
+        const isSelected = selected.has(l.id);
+        if (manageMode) {
+          return (
+            <button
+              key={l.id}
+              type="button"
+              onClick={() => toggleSelected(l.id)}
+              className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-[11.5px] font-medium ${
+                isSelected
+                  ? 'bg-teal/15 text-teal ring-2 ring-teal/40'
+                  : 'bg-canvas text-txt-2 hover:bg-canvas/70'
+              }`}
+              title="Click to toggle selection"
+            >
+              <input
+                type="checkbox"
+                readOnly
+                checked={isSelected}
+                className="h-3 w-3 cursor-pointer accent-teal"
+              />
+              {l.name}
+              <span className="text-[10.5px] text-txt-3">{l.count}</span>
+            </button>
+          );
+        }
         return (
           <div key={l.id} className="group relative inline-flex items-center">
             {isEditing ? (
@@ -139,6 +197,37 @@ export function ListPills({
           </div>
         );
       })}
+
+      <div className="ml-auto flex items-center gap-1.5">
+        {manageMode ? (
+          <>
+            <span className="text-[11px] text-txt-3">{selected.size} selected</span>
+            <button
+              type="button"
+              onClick={bulkDelete}
+              disabled={busy || selected.size === 0}
+              className="rounded-md border border-hp/40 bg-hp/10 px-2 py-0.5 text-[11px] text-hp hover:bg-hp/20 disabled:opacity-40"
+            >
+              Delete
+            </button>
+            <button
+              type="button"
+              onClick={exitManage}
+              className="rounded-md px-2 py-0.5 text-[11px] text-txt-3 hover:text-txt-1"
+            >
+              Done
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setManageMode(true)}
+            className="rounded-md border border-line bg-canvas px-2 py-0.5 text-[11px] text-txt-2 hover:bg-canvas/70"
+          >
+            Manage
+          </button>
+        )}
+      </div>
     </div>
   );
 }

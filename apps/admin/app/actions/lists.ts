@@ -64,3 +64,22 @@ export async function deleteList(listId: string) {
   revalidatePath('/leads');
   return { ok: true as const };
 }
+
+// Bulk delete several smart lists. Brand-scoped via the active brand check
+// plus a brand_id filter on the delete itself. Leads belonging to deleted
+// lists keep their rows (list_id is FK on delete set null).
+export async function bulkDeleteLists(input: { ids: string[] }) {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false as const, error: 'No active brand.' };
+  const ids = Array.from(new Set(input.ids.filter(Boolean)));
+  if (ids.length === 0) return { ok: true as const, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('lead_lists')
+    .delete({ count: 'exact' })
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false as const, error: error.message };
+  revalidatePath('/leads');
+  return { ok: true as const, count: count ?? 0 };
+}

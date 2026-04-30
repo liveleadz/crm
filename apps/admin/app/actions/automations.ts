@@ -331,6 +331,51 @@ export async function renameAutomation(input: { id: string; name: string }): Pro
   return { ok: true };
 }
 
+// ---------------------------------------------------------------------------
+// Bulk operations
+// ---------------------------------------------------------------------------
+
+type BulkResult = { ok: true; count: number } | { ok: false; error: string };
+
+function uniqueIds(ids: string[]): string[] {
+  return Array.from(new Set(ids.filter(Boolean)));
+}
+
+export async function bulkDeleteAutomations(input: { ids: string[] }): Promise<BulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('automations')
+    .delete({ count: 'exact' })
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/workflows');
+  return { ok: true, count: count ?? 0 };
+}
+
+export async function bulkSetAutomationsEnabled(input: {
+  ids: string[];
+  enabled: boolean;
+}): Promise<BulkResult> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const ids = uniqueIds(input.ids);
+  if (ids.length === 0) return { ok: true, count: 0 };
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('automations')
+    .update({ is_enabled: input.enabled }, { count: 'exact' })
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/workflows');
+  return { ok: true, count: count ?? 0 };
+}
+
 export async function reorderAutomations(input: { ids: string[] }): Promise<Result> {
   const active = await getActiveBrand();
   if (!active) return { ok: false, error: 'No active brand.' };

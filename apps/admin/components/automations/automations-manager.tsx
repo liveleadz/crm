@@ -28,6 +28,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { useRouter } from 'next/navigation';
 import {
+  bulkDeleteAutomations,
+  bulkSetAutomationsEnabled,
   createBlankAutomation,
   deleteAutomation,
   reorderAutomations,
@@ -51,7 +53,53 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
   const [items, setItems] = useState<Automation[]>(initial);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelected(new Set());
+  }
+  function selectAll() {
+    setSelected(new Set(items.map((a) => a.id)));
+  }
+
+  async function bulkDelete() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} automation${ids.length === 1 ? '' : 's'}? This can't be undone.`)) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await bulkDeleteAutomations({ ids });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setItems((prev) => prev.filter((a) => !selected.has(a.id)));
+      clearSelection();
+    });
+  }
+  async function bulkEnable(enabled: boolean) {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await bulkSetAutomationsEnabled({ ids, enabled });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setItems((prev) => prev.map((a) => (selected.has(a.id) ? { ...a, isEnabled: enabled } : a)));
+      clearSelection();
+    });
+  }
 
   // Canvas-first creation: drops a blank workflow with no trigger configured
   // and lands the user directly in the visual editor. The trigger is picked
@@ -134,31 +182,85 @@ export function AutomationsManager({ initial, stages, tags, dispositions }: Prop
         </div>
       )}
 
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-teal/40 bg-teal/5 px-3 py-2 text-[12px]">
+          <span className="font-medium text-txt-1">
+            {selected.size} selected
+          </span>
+          <span className="mx-1 h-4 w-px bg-line" />
+          <button
+            type="button"
+            onClick={() => bulkEnable(true)}
+            className="rounded-md border border-line bg-canvas px-2.5 py-1 text-[11.5px] hover:bg-surface-2"
+          >
+            Enable
+          </button>
+          <button
+            type="button"
+            onClick={() => bulkEnable(false)}
+            className="rounded-md border border-line bg-canvas px-2.5 py-1 text-[11.5px] hover:bg-surface-2"
+          >
+            Disable
+          </button>
+          <button
+            type="button"
+            onClick={bulkDelete}
+            className="rounded-md border border-hp/40 bg-hp/10 px-2.5 py-1 text-[11.5px] text-hp hover:bg-hp/20"
+          >
+            Delete
+          </button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="ml-auto rounded-md px-2 py-1 text-[11.5px] text-txt-3 hover:text-txt-1"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-xl border border-line bg-surface">
         {items.length === 0 ? (
           <div className="px-4 py-10 text-center text-[12.5px] text-txt-3">
             No automations yet. Create one to react to call dispositions.
           </div>
         ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={onDragEnd}
-          >
-            <SortableContext items={items.map((a) => a.id)} strategy={verticalListSortingStrategy}>
-              {items.map((a) => (
-                <SortableAutomationRow
-                  key={a.id}
-                  automation={a}
-                  stages={stages}
-                  tags={tags}
-                  dispositions={dispositions}
-                  onToggle={(enabled) => toggleEnabled(a.id, enabled)}
-                  onDelete={() => remove(a)}
-                />
-              ))}
-            </SortableContext>
-          </DndContext>
+          <>
+            <div className="flex items-center gap-2 border-b border-line bg-canvas px-4 py-2 text-[11.5px] text-txt-3">
+              <input
+                type="checkbox"
+                aria-label="Select all"
+                checked={selected.size > 0 && selected.size === items.length}
+                ref={(el) => {
+                  if (el) el.indeterminate = selected.size > 0 && selected.size < items.length;
+                }}
+                onChange={(e) => (e.target.checked ? selectAll() : clearSelection())}
+                className="h-3.5 w-3.5 cursor-pointer accent-teal"
+              />
+              <span>{items.length} workflow{items.length === 1 ? '' : 's'}</span>
+            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={onDragEnd}
+            >
+              <SortableContext items={items.map((a) => a.id)} strategy={verticalListSortingStrategy}>
+                {items.map((a) => (
+                  <SortableAutomationRow
+                    key={a.id}
+                    automation={a}
+                    stages={stages}
+                    tags={tags}
+                    dispositions={dispositions}
+                    selected={selected.has(a.id)}
+                    onSelectChange={() => toggleSelected(a.id)}
+                    onToggle={(enabled) => toggleEnabled(a.id, enabled)}
+                    onDelete={() => remove(a)}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
+          </>
         )}
       </div>
 
@@ -171,6 +273,8 @@ function SortableAutomationRow(props: {
   stages: StageRef[];
   tags: TagRef[];
   dispositions: DispositionRef[];
+  selected: boolean;
+  onSelectChange: () => void;
   onToggle: (enabled: boolean) => void;
   onDelete: () => void;
 }) {
@@ -189,10 +293,17 @@ function SortableAutomationRow(props: {
     <div
       ref={setNodeRef}
       style={style}
-      className={`relative grid grid-cols-[28px_1fr_auto] items-start gap-3 border-b border-line/60 bg-surface px-3 py-3 last:border-b-0 ${
-        isDragging ? 'shadow-lg ring-1 ring-teal/30' : ''
-      }`}
+      className={`relative grid grid-cols-[20px_28px_1fr_auto] items-start gap-3 border-b border-line/60 px-3 py-3 last:border-b-0 ${
+        props.selected ? 'bg-teal/5' : 'bg-surface'
+      } ${isDragging ? 'shadow-lg ring-1 ring-teal/30' : ''}`}
     >
+      <input
+        type="checkbox"
+        aria-label={`Select ${automation.name}`}
+        checked={props.selected}
+        onChange={props.onSelectChange}
+        className="mt-2 h-3.5 w-3.5 cursor-pointer accent-teal"
+      />
       <button
         type="button"
         aria-label={`Drag ${automation.name}`}
