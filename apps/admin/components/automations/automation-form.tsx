@@ -33,6 +33,9 @@ type Props = {
   stages: StageRef[];
   tags: TagRef[];
   dispositions: DispositionRef[];
+  /** When true, renders inline (no modal overlay or title bar). The host page is expected
+   * to provide its own header. Defaults to modal. */
+  inline?: boolean;
   onCancel: () => void;
   onSave: (values: {
     name: string;
@@ -65,6 +68,7 @@ export function AutomationForm({
   stages,
   tags,
   dispositions,
+  inline = false,
   onCancel,
   onSave,
 }: Props) {
@@ -173,9 +177,15 @@ export function AutomationForm({
     if (err) setError(err);
   }
 
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl rounded-2xl border border-line bg-surface shadow-xl">
+  const body = (
+    <div
+      className={
+        inline
+          ? 'rounded-2xl border border-line bg-surface'
+          : 'w-full max-w-2xl rounded-2xl border border-line bg-surface shadow-xl'
+      }
+    >
+      {!inline && (
         <div className="flex items-center justify-between border-b border-line px-5 py-4">
           <h2 className="text-[14px] font-semibold">
             {mode === 'create' ? 'New automation' : 'Edit automation'}
@@ -191,8 +201,9 @@ export function AutomationForm({
             </svg>
           </button>
         </div>
+      )}
 
-        <div className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-4">
+      <div className={`space-y-5 px-5 py-4 ${inline ? '' : 'max-h-[70vh] overflow-y-auto'}`}>
           {error && (
             <div className="rounded-lg border border-hp/40 bg-hp/10 px-3 py-2 text-[12px] text-hp">
               {error}
@@ -326,7 +337,11 @@ export function AutomationForm({
           </button>
         </div>
       </div>
-    </div>
+  );
+
+  if (inline) return body;
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">{body}</div>
   );
 }
 

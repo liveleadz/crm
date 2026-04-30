@@ -161,6 +161,7 @@ export function AutomationEditor({ initial, stages, tags, dispositions }: Props)
               <div className="mx-auto max-w-2xl">
                 <AutomationForm
                   mode="edit"
+                  inline
                   initial={initial}
                   stages={stages}
                   tags={tags}
