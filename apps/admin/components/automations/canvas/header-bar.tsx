@@ -8,10 +8,12 @@ import { useEffect, useState } from 'react';
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
+export type EditorView = 'standard' | 'visual' | 'runs';
+
 type Props = {
   initialName: string;
-  view: 'standard' | 'visual';
-  onViewChange: (v: 'standard' | 'visual') => void;
+  view: EditorView;
+  onViewChange: (v: EditorView) => void;
   saveState: SaveState;
   enabled: boolean;
   onToggleEnabled: () => void;
@@ -66,24 +68,18 @@ export function HeaderBar({
         <SaveBadge state={saveState} />
 
         <div className="flex rounded-lg border border-line bg-canvas p-0.5">
-          <button
-            type="button"
-            onClick={() => onViewChange('standard')}
-            className={`rounded-md px-3 py-1 text-[12px] font-medium transition-colors ${
-              view === 'standard' ? 'bg-surface text-txt-1 shadow-sm' : 'text-txt-3 hover:text-txt-1'
-            }`}
-          >
-            Standard
-          </button>
-          <button
-            type="button"
-            onClick={() => onViewChange('visual')}
-            className={`rounded-md px-3 py-1 text-[12px] font-medium transition-colors ${
-              view === 'visual' ? 'bg-surface text-txt-1 shadow-sm' : 'text-txt-3 hover:text-txt-1'
-            }`}
-          >
-            Visual
-          </button>
+          {(['standard', 'visual', 'runs'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => onViewChange(k)}
+              className={`rounded-md px-3 py-1 text-[12px] font-medium capitalize transition-colors ${
+                view === k ? 'bg-surface text-txt-1 shadow-sm' : 'text-txt-3 hover:text-txt-1'
+              }`}
+            >
+              {k}
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center gap-2">

@@ -15,10 +15,12 @@ import {
   updateAutomation,
 } from '@/app/actions/automations';
 import { graphFromSimple, type Automation, type WorkflowGraph } from '@/lib/automation-types';
+import type { WorkflowRunRow } from '@/lib/workflow-runs';
 import { AutomationForm } from './automation-form';
 import type { StageRef, TagRef, DispositionRef } from './automations-manager';
 import { WorkflowCanvas } from './canvas/workflow-canvas';
-import { HeaderBar, type SaveState } from './canvas/header-bar';
+import { HeaderBar, type EditorView, type SaveState } from './canvas/header-bar';
+import { RunsView } from './runs-view';
 
 type Props = {
   initial: Automation;
@@ -26,13 +28,12 @@ type Props = {
   tags: TagRef[];
   dispositions: DispositionRef[];
   members?: { id: string; full_name: string | null; email: string }[];
+  runs?: WorkflowRunRow[];
 };
 
-export function AutomationEditor({ initial, stages, tags, dispositions, members }: Props) {
+export function AutomationEditor({ initial, stages, tags, dispositions, members, runs }: Props) {
   const router = useRouter();
-  const [view, setView] = useState<'standard' | 'visual'>(
-    initial.mode === 'graph' ? 'visual' : 'standard',
-  );
+  const [view, setView] = useState<EditorView>(initial.mode === 'graph' ? 'visual' : 'standard');
   const [name, setName] = useState(initial.name);
   const [enabled, setEnabled] = useState(initial.isEnabled);
   const [saveState, setSaveState] = useState<SaveState>('idle');
@@ -82,8 +83,15 @@ export function AutomationEditor({ initial, stages, tags, dispositions, members 
     setGraph(next);
   }, []);
 
-  async function changeView(next: 'standard' | 'visual') {
+  async function changeView(next: EditorView) {
     if (next === view) return;
+    if (next === 'runs') {
+      setView('runs');
+      // Refresh from the server so the runs list reflects what's happened
+      // since the page was first loaded.
+      router.refresh();
+      return;
+    }
     setView(next);
     if (next === 'visual' && initial.mode !== 'graph') {
       // First switch into Visual on a simple rule — promote to graph mode
@@ -144,7 +152,9 @@ export function AutomationEditor({ initial, stages, tags, dispositions, members 
       />
 
       <div className="relative flex-1 overflow-hidden">
-        {view === 'visual' ? (
+        {view === 'runs' ? (
+          <RunsView runs={runs ?? []} />
+        ) : view === 'visual' ? (
           <WorkflowCanvas
             initial={initialGraph}
             ctx={{

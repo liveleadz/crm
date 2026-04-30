@@ -4,6 +4,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadAutomation } from '@/lib/automations';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadBrandTagsWithCounts } from '@/lib/tags';
+import { loadRecentWorkflowRuns } from '@/lib/workflow-runs';
 import { createServerClient } from '@leadpilot/db/server';
 
 async function loadStages(brandId: string) {
@@ -37,12 +38,13 @@ export default async function AutomationEditorPage({
   const active = await getActiveBrand();
   if (!active) notFound();
 
-  const [automation, stages, tagsWithCounts, dispositions, members] = await Promise.all([
+  const [automation, stages, tagsWithCounts, dispositions, members, runs] = await Promise.all([
     loadAutomation(id),
     loadStages(active.id),
     loadBrandTagsWithCounts(active.id),
     loadDispositions(active.id),
     loadMembers(active.id),
+    loadRecentWorkflowRuns(id, 50),
   ]);
   if (!automation) notFound();
 
@@ -53,6 +55,7 @@ export default async function AutomationEditorPage({
       tags={tagsWithCounts.map((t) => ({ id: t.id, name: t.name }))}
       dispositions={dispositions.map((d) => ({ code: d.code, label: d.label }))}
       members={members}
+      runs={runs}
     />
   );
 }
