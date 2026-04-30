@@ -6,6 +6,7 @@ import type { CallRow } from '@/lib/calls';
 import type { LeadStage } from '@/lib/leads';
 import { LeadDetailDrawer } from '@/components/leads/lead-detail-drawer';
 import { createLeadFromCall } from '@/app/actions/leads';
+import { bulkSetDispositions } from '@/app/actions/dialer';
 import {
   DispositionPicker,
   type DispositionChoice,
@@ -83,6 +84,10 @@ export function CallsList({
   // Disposition picker is now a centred modal — click the "Needs
   // disposition" pill to open. null = closed.
   const [dispositionCallId, setDispositionCallId] = useState<string | null>(null);
+  // Bulk-select state. `selected` is a set of call IDs; the bulk modal
+  // opens when the user clicks "Set disposition" in the action bar.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
   // Single shared <audio> element drives inline playback for any row.
   // activeId = which row's player is "open" (showing scrubber/speed).
   // isPlaying tracks audio.paused so the icon can flip without re-clicking.
@@ -223,6 +228,27 @@ export function CallsList({
             {filtered.length} / {calls.length}
           </span>
         </div>
+        {selected.size > 0 && (
+          <div className="mt-2 flex items-center gap-2 rounded-lg border border-teal/40 bg-teal/10 px-3 py-1.5">
+            <span className="text-[12px] font-medium text-txt-1">
+              {selected.size} selected
+            </span>
+            <button
+              type="button"
+              onClick={() => setBulkOpen(true)}
+              className="rounded-md border border-teal bg-teal px-2.5 py-1 text-[11.5px] font-semibold text-white hover:bg-teal/90"
+            >
+              Set disposition
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              className="ml-auto rounded-md border border-line bg-canvas px-2 py-1 text-[11.5px] text-txt-2 hover:border-line-2"
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -234,6 +260,24 @@ export function CallsList({
           <table className="w-full text-[12.5px]">
             <thead className="sticky top-0 z-10 border-b border-line bg-canvas text-left">
               <tr className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+                <th className="w-8 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all"
+                    checked={
+                      filtered.length > 0 &&
+                      filtered.every((c) => selected.has(c.id))
+                    }
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelected(new Set(filtered.map((c) => c.id)));
+                      } else {
+                        setSelected(new Set());
+                      }
+                    }}
+                    className="h-3.5 w-3.5 cursor-pointer accent-teal"
+                  />
+                </th>
                 <th className="w-8 px-3 py-2.5"></th>
                 <th className="px-3 py-2.5">Lead</th>
                 <th className="px-3 py-2.5">Direction</th>
@@ -259,6 +303,23 @@ export function CallsList({
                         c.leadId || canExpand ? 'hover:bg-surface' : 'opacity-60'
                       }`}
                     >
+                      <td className="px-3 py-2.5 text-center">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select call ${c.id}`}
+                          checked={selected.has(c.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            setSelected((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(c.id);
+                              else next.delete(c.id);
+                              return next;
+                            });
+                          }}
+                          className="h-3.5 w-3.5 cursor-pointer accent-teal"
+                        />
+                      </td>
                       <td className="px-3 py-2.5 text-center">
                         {canExpand && (
                           <button
@@ -366,7 +427,7 @@ export function CallsList({
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-line/60 bg-canvas/40">
-                        <td colSpan={7} className="px-6 py-4">
+                        <td colSpan={8} className="px-6 py-4">
                           <CallDetail call={c} />
                         </td>
                       </tr>
@@ -387,6 +448,16 @@ export function CallsList({
         callId={dispositionCallId}
         choices={dispositions}
         onClose={() => setDispositionCallId(null)}
+      />
+      <BulkDispositionModal
+        open={bulkOpen}
+        callIds={Array.from(selected)}
+        choices={dispositions}
+        onClose={() => setBulkOpen(false)}
+        onApplied={() => {
+          setBulkOpen(false);
+          setSelected(new Set());
+        }}
       />
       <audio ref={audioRef} preload="none" className="hidden" />
     </>
@@ -704,6 +775,154 @@ function CreateContactButton({
         {busy ? 'Creating…' : '+ Contact'}
       </button>
       {error && <span className="text-[10.5px] text-hp">{error}</span>}
+    </div>
+  );
+}
+
+// Bulk re-disposition modal. Pick a single code; applies to all selected
+// call IDs. No note/callback fields — those would conflict per-row, and
+// the bulk path is for cleanup, not authoring per-call detail.
+function BulkDispositionModal({
+  open,
+  callIds,
+  choices,
+  onClose,
+  onApplied,
+}: {
+  open: boolean;
+  callIds: string[];
+  choices: DispositionChoice[];
+  onClose: () => void;
+  onApplied: () => void;
+}) {
+  const [code, setCode] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
+
+  // Reset selection when the modal closes so a re-open starts clean.
+  useEffect(() => {
+    if (!open) {
+      setCode(null);
+      setError(null);
+    }
+  }, [open]);
+
+  // ESC closes.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  function submit() {
+    if (!code) {
+      setError('Pick a disposition first.');
+      return;
+    }
+    if (code === 'callback') {
+      setError("Can't bulk-set 'callback' — open each call to schedule.");
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      const res = await bulkSetDispositions({ callIds, disposition: code });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      router.refresh();
+      onApplied();
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div onClick={onClose} className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
+      <div className="relative w-[461px] rounded-2xl border border-line bg-surface p-6 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.04)_inset]">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="text-[14px] font-semibold uppercase tracking-wide text-txt-3">
+            Bulk disposition · {callIds.length} call{callIds.length === 1 ? '' : 's'}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-7 w-7 place-items-center rounded text-txt-3 hover:bg-canvas hover:text-txt-1"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+              <path d="M6 6l12 12" />
+              <path d="M18 6l-12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {choices.length === 0 && (
+            <div className="col-span-2 rounded-md border border-dashed border-line bg-canvas px-3 py-3 text-[13px] text-txt-3">
+              No dispositions configured.
+            </div>
+          )}
+          {choices.map((c) => {
+            const active = code === c.code;
+            return (
+              <button
+                key={c.code}
+                type="button"
+                onClick={() => setCode(c.code)}
+                className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-[13px] font-medium transition-colors ${
+                  active
+                    ? 'border-teal bg-teal text-white'
+                    : 'border-line bg-canvas text-txt-2 hover:bg-surface'
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full ${
+                    active
+                      ? 'bg-white/80'
+                      : c.tone === 'good'
+                        ? 'bg-teal'
+                        : c.tone === 'bad'
+                          ? 'bg-hp'
+                          : 'bg-txt-3/50'
+                  }`}
+                />
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+        {error && (
+          <div className="mt-3 rounded-md border border-hp/40 bg-hp/10 px-3 py-2 text-[12px] text-hp">
+            {error}
+          </div>
+        )}
+        <p className="mt-3 text-[11px] text-txt-3">
+          Notes and callback times are cleared on bulk apply.
+        </p>
+        <div className="mt-4 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={submit}
+            disabled={pending || !code}
+            className="flex-1 rounded-lg bg-teal py-2.5 text-[13.5px] font-semibold text-white hover:bg-teal/90 disabled:opacity-50"
+          >
+            {pending ? 'Applying…' : `Apply to ${callIds.length}`}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            className="rounded-lg border border-line px-3.5 py-2.5 text-[13.5px] text-txt-2 hover:bg-canvas"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

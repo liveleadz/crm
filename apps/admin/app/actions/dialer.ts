@@ -229,3 +229,58 @@ export async function setDisposition(input: {
   revalidatePath('/tasks');
   return { ok: true };
 }
+
+// Bulk re-disposition for the /calls list. Applies a single disposition
+// code to many calls at once — useful for cleaning up a batch of "needs
+// disposition" rows or correcting a misclick. Note + callback_at are not
+// settable in bulk mode (would conflict per-row); they're cleared so the
+// new disposition isn't paired with a stale note.
+export async function bulkSetDispositions(input: {
+  callIds: string[];
+  disposition: string;
+}): Promise<
+  | { ok: true; updated: number }
+  | { ok: false; error: string }
+> {
+  if (input.callIds.length === 0) {
+    return { ok: false, error: 'No calls selected.' };
+  }
+  if (!input.disposition) {
+    return { ok: false, error: 'Pick a disposition first.' };
+  }
+  const supabase = await createServerClient();
+  // Brand scope is enforced by RLS on `calls`; we just update by id list.
+  const { data: rows, error } = await supabase
+    .from('calls')
+    .update({
+      disposition: input.disposition,
+      callback_at: null,
+      needs_disposition: false,
+    })
+    .in('id', input.callIds)
+    .select('id, brand_id, lead_id, member_id');
+  if (error) return { ok: false, error: error.message };
+  const updated = rows?.length ?? 0;
+
+  // Fan out automations per row, best-effort.
+  if (rows && rows.length > 0) {
+    await Promise.all(
+      rows.map((r) =>
+        runAutomations({
+          trigger: 'disposition_set',
+          brandId: r.brand_id,
+          callId: r.id,
+          leadId: r.lead_id,
+          memberId: r.member_id,
+          disposition: input.disposition,
+          callbackAt: null,
+        }).catch(() => undefined),
+      ),
+    );
+  }
+
+  revalidatePath('/calls');
+  revalidatePath('/leads');
+  revalidatePath('/tasks');
+  return { ok: true, updated };
+}
