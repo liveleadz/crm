@@ -22,6 +22,13 @@ export type NumberHealth = {
   smsLast7d: number;
   smsDeliveredLast7d: number;
   lastUsedAt: string | null;
+  // Heuristic spam-risk score derived from our own call data. There's no
+  // truly free programmatic API for "spam likely" reputation — Hiya, TNS,
+  // First Orion all gate it behind paid plans — so we approximate with the
+  // signals we already have. The risk_check buttons on each row link to the
+  // free consumer-facing lookup tools for a real ground-truth check.
+  risk: 'low' | 'medium' | 'high';
+  riskReasons: string[];
 };
 
 export type NumberWithHealth = NumberRow & { health: NumberHealth };
@@ -82,7 +89,9 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
       .order('created_at', { ascending: false }),
   ]);
 
-  const health = new Map<string, NumberHealth>();
+  // Track per-number raw counters; risk score is derived once at the end.
+  type Counters = NumberHealth & { wrongOrDnc: number };
+  const health = new Map<string, Counters>();
   for (const id of ids) {
     health.set(id, {
       callsLast7d: 0,
@@ -91,6 +100,9 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
       smsLast7d: 0,
       smsDeliveredLast7d: 0,
       lastUsedAt: null,
+      risk: 'low',
+      riskReasons: [],
+      wrongOrDnc: 0,
     });
   }
 
@@ -102,6 +114,9 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
     // a clear sale outcome counts toward success.
     if (c.disposition === 'connected' || c.disposition === 'sale' || c.disposition === 'callback') {
       h.callsConnectedLast7d++;
+    }
+    if (c.disposition === 'wrong_number' || c.disposition === 'do_not_call') {
+      h.wrongOrDnc++;
     }
   }
   for (const s of sms.data ?? []) {
@@ -127,17 +142,54 @@ export async function loadNumbersWithHealth(brandId: string): Promise<NumberWith
 
   for (const h of health.values()) {
     h.successRate = h.callsLast7d > 0 ? h.callsConnectedLast7d / h.callsLast7d : 0;
+
+    // Risk heuristic — public lookup tools own the real spam-database flags;
+    // here we just surface the signals carriers themselves use to flag
+    // numbers (velocity + low-quality dispositions), so authors know which
+    // numbers to spot-check first.
+    //
+    // Carrier flagging triggers we approximate:
+    //  - Velocity: > 50 dials/day average over the window (350 in 7d).
+    //  - Conversion: connect rate < 10% over 50+ calls.
+    //  - List hygiene: > 20% wrong-number / DNC dispositions.
+    const reasons: string[] = [];
+    const dailyAvg = h.callsLast7d / 7;
+    if (dailyAvg >= 50) {
+      reasons.push(`High daily volume (${Math.round(dailyAvg)}/day)`);
+    } else if (dailyAvg >= 25) {
+      reasons.push(`Elevated daily volume (${Math.round(dailyAvg)}/day)`);
+    }
+    if (h.callsLast7d >= 50 && h.successRate < 0.1) {
+      reasons.push(`Low connect rate (${Math.round(h.successRate * 100)}%)`);
+    }
+    const wrongRate = h.callsLast7d > 0 ? h.wrongOrDnc / h.callsLast7d : 0;
+    if (h.callsLast7d >= 20 && wrongRate > 0.2) {
+      reasons.push(`High wrong-number / DNC rate (${Math.round(wrongRate * 100)}%)`);
+    }
+    h.risk = reasons.length === 0 ? 'low' : reasons.length >= 2 || dailyAvg >= 50 ? 'high' : 'medium';
+    h.riskReasons = reasons;
   }
 
-  return numbers.map((n) => ({
-    ...n,
-    health: health.get(n.id) ?? {
-      callsLast7d: 0,
-      callsConnectedLast7d: 0,
-      successRate: 0,
-      smsLast7d: 0,
-      smsDeliveredLast7d: 0,
-      lastUsedAt: null,
-    },
-  }));
+  return numbers.map((n) => {
+    const counter = health.get(n.id);
+    if (!counter) {
+      return {
+        ...n,
+        health: {
+          callsLast7d: 0,
+          callsConnectedLast7d: 0,
+          successRate: 0,
+          smsLast7d: 0,
+          smsDeliveredLast7d: 0,
+          lastUsedAt: null,
+          risk: 'low' as const,
+          riskReasons: [],
+        },
+      };
+    }
+    // Strip the internal counter before returning.
+    const { wrongOrDnc: _ignored, ...rest } = counter;
+    void _ignored;
+    return { ...n, health: rest };
+  });
 }

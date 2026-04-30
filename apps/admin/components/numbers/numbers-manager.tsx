@@ -109,11 +109,12 @@ export function NumbersManager({ initial }: Props) {
     totalCalls > 0
       ? items.reduce((s, n) => s + n.health.callsConnectedLast7d, 0) / totalCalls
       : 0;
+  const atRisk = items.filter((n) => n.health.risk !== 'low').length;
 
   return (
     <div className="space-y-4 p-6">
       {/* Health summary strip */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Stat label="Numbers" value={items.length.toString()} />
         <Stat label="Active" value={items.filter((n) => n.active).length.toString()} />
         <Stat label="Calls (7d)" value={totalCalls.toString()} />
@@ -121,6 +122,11 @@ export function NumbersManager({ initial }: Props) {
           label="Connect rate"
           value={totalCalls > 0 ? `${Math.round(overallRate * 100)}%` : '—'}
           sub={`${totalSms} SMS in last 7d`}
+        />
+        <Stat
+          label="At risk"
+          value={atRisk.toString()}
+          sub={atRisk === 0 ? 'all clear' : 'check reputation links'}
         />
       </div>
 
@@ -166,10 +172,12 @@ export function NumbersManager({ initial }: Props) {
               <col style={{ width: 36 }} />
               <col style={{ width: 170 }} />
               <col />
-              <col style={{ width: 170 }} />
-              <col style={{ width: 130 }} />
+              <col style={{ width: 150 }} />
               <col style={{ width: 110 }} />
+              <col style={{ width: 100 }} />
               <col style={{ width: 90 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 110 }} />
               <col style={{ width: 70 }} />
               <col style={{ width: 60 }} />
             </colgroup>
@@ -192,7 +200,9 @@ export function NumbersManager({ initial }: Props) {
                 <th className="px-3 py-2 font-medium">A2P campaign</th>
                 <th className="px-3 py-2 font-medium">Calls (7d)</th>
                 <th className="px-3 py-2 font-medium">Connect</th>
+                <th className="px-3 py-2 font-medium">Risk</th>
                 <th className="px-3 py-2 font-medium">Last used</th>
+                <th className="px-3 py-2 font-medium">Reputation check</th>
                 <th className="px-3 py-2 font-medium">Active</th>
                 <th className="px-3 py-2" />
               </tr>
@@ -245,8 +255,14 @@ export function NumbersManager({ initial }: Props) {
                       sampleSize={n.health.callsLast7d}
                     />
                   </td>
+                  <td className="px-3 py-3">
+                    <RiskBadge level={n.health.risk} reasons={n.health.riskReasons} />
+                  </td>
                   <td className="px-3 py-3 text-txt-2">
                     {n.health.lastUsedAt ? timeAgo(n.health.lastUsedAt) : <span className="text-txt-3">never</span>}
+                  </td>
+                  <td className="px-3 py-3">
+                    <ReputationLinks e164={n.e164} />
                   </td>
                   <td className="px-3 py-3">
                     <Toggle enabled={n.active} onChange={(v) => onActiveToggle(n, v)} />
@@ -271,12 +287,21 @@ export function NumbersManager({ initial }: Props) {
         )}
       </div>
 
-      <p className="text-[11px] text-txt-3">
-        Health is computed from the last 7 days of calls + SMS in this brand. Connect rate
-        counts dispositions of <code className="rounded bg-canvas px-1">connected</code>,{' '}
-        <code className="rounded bg-canvas px-1">sale</code>, and{' '}
-        <code className="rounded bg-canvas px-1">callback</code> as wins.
-      </p>
+      <div className="space-y-1.5 text-[11px] text-txt-3">
+        <p>
+          Health is computed from the last 7 days of calls + SMS in this brand. Connect rate
+          counts dispositions of <code className="rounded bg-canvas px-1">connected</code>,{' '}
+          <code className="rounded bg-canvas px-1">sale</code>, and{' '}
+          <code className="rounded bg-canvas px-1">callback</code> as wins.
+        </p>
+        <p>
+          Risk is a self-derived heuristic — high call velocity (50+/day), low connect rate
+          (&lt;10% over 50+ calls), or &gt;20% wrong-number / DNC dispositions trip the flag.
+          For ground-truth carrier reputation, click the lookup links to check each number on
+          YouMail, NoMoRobo, FreeCallerID, and Hiya — those are the free consumer-facing
+          databases the major spam-blocking apps mirror.
+        </p>
+      </div>
     </div>
   );
 }
@@ -287,6 +312,79 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
       <div className="text-[10.5px] uppercase tracking-wide text-txt-3">{label}</div>
       <div className="mt-1 text-[20px] font-semibold tracking-tight">{value}</div>
       {sub && <div className="mt-0.5 text-[11px] text-txt-3">{sub}</div>}
+    </div>
+  );
+}
+
+function RiskBadge({
+  level,
+  reasons,
+}: {
+  level: 'low' | 'medium' | 'high';
+  reasons: string[];
+}) {
+  const tone =
+    level === 'low'
+      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+      : level === 'medium'
+        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+        : 'bg-hp/15 text-hp';
+  const tooltip =
+    reasons.length > 0
+      ? reasons.join(' · ')
+      : 'No carrier-flag heuristics tripped — keep an eye on connect rate.';
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[11px] font-medium capitalize ${tone}`}
+      title={tooltip}
+    >
+      {level}
+    </span>
+  );
+}
+
+function ReputationLinks({ e164 }: { e164: string }) {
+  // Strip the leading + so a few of the older tools that don't accept it
+  // still load directly. URL-encoding the +-prefixed form is fine for the
+  // others; we pass both shapes so each link goes to the right page.
+  const encoded = encodeURIComponent(e164);
+  const naked = e164.replace(/^\+/, '');
+  const links = [
+    {
+      label: 'YouMail',
+      href: `https://directory.youmail.com/phone/${naked}`,
+      title: 'Crowdsourced spam reports + carrier flag indicators',
+    },
+    {
+      label: 'NoMoRobo',
+      href: `https://www.nomorobo.com/lookup/${naked}`,
+      title: 'Robocall-blocking database',
+    },
+    {
+      label: 'FreeCallerID',
+      href: `https://freecallerid.com/${naked}`,
+      title: 'Free reverse lookup + caller ID name',
+    },
+    {
+      label: 'Hiya',
+      href: `https://www.hiya.com/${encoded}`,
+      title: 'Hiya consumer reputation page',
+    },
+  ];
+  return (
+    <div className="flex flex-wrap gap-1">
+      {links.map((l) => (
+        <a
+          key={l.label}
+          href={l.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={l.title}
+          className="rounded-md border border-line bg-canvas px-1.5 py-0.5 text-[10.5px] text-txt-2 hover:border-teal/40 hover:text-teal"
+        >
+          {l.label}
+        </a>
+      ))}
     </div>
   );
 }
