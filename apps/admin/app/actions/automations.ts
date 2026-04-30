@@ -23,6 +23,7 @@ const KNOWN_ACTION_KINDS = new Set([
   'send_notification',
   'http_request',
   'update_lead_field',
+  'create_contact',
 ]);
 
 function validateActions(actions: unknown): actions is AutomationAction[] {

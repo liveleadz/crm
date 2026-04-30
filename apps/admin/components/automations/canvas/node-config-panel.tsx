@@ -311,6 +311,16 @@ function ActionEditor({
       case 'update_lead_field':
         next = { kind: 'update_lead_field', field: 'first_name', value: '' };
         break;
+      case 'create_contact':
+        next = {
+          kind: 'create_contact',
+          first_name: '{{webhook.body.first_name}}',
+          last_name: '{{webhook.body.last_name}}',
+          email: '{{webhook.body.email}}',
+          phone: '{{webhook.body.phone}}',
+          set_as_run_lead: true,
+        };
+        break;
     }
     onChange({ ...node, data: { action: next } });
   }
@@ -335,6 +345,7 @@ function ActionEditor({
             <option value="mark_dnc">Mark Do Not Call</option>
             <option value="create_task">Create task</option>
             <option value="update_lead_field">Update lead field</option>
+            <option value="create_contact">Create contact</option>
           </optgroup>
           <optgroup label="Integration">
             <option value="http_request">HTTP request</option>
@@ -481,6 +492,9 @@ function ActionEditor({
       )}
       {action.kind === 'update_lead_field' && (
         <UpdateLeadFieldEditor action={action} patch={patch} />
+      )}
+      {action.kind === 'create_contact' && (
+        <CreateContactEditor action={action} ctx={ctx} patch={patch} />
       )}
 
       <TokensHint />
@@ -851,6 +865,136 @@ function UpdateLeadFieldEditor({
           className={inputCls}
         />
       </div>
+    </div>
+  );
+}
+
+function CreateContactEditor({
+  action,
+  ctx,
+  patch,
+}: {
+  action: Extract<AutomationAction, { kind: 'create_contact' }>;
+  ctx: Props['ctx'];
+  patch: (p: Partial<AutomationAction>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <p className="text-[11.5px] text-txt-3">
+        Inserts a new lead. Every field accepts templates — paired with a webhook trigger,
+        defaults pull from the body's <code className="rounded bg-canvas px-1">first_name</code>,
+        <code className="rounded bg-canvas px-1">last_name</code>,{' '}
+        <code className="rounded bg-canvas px-1">email</code>,{' '}
+        <code className="rounded bg-canvas px-1">phone</code>.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label>First name</Label>
+          <input
+            type="text"
+            value={action.first_name ?? ''}
+            onChange={(e) => patch({ first_name: e.target.value } as Partial<AutomationAction>)}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <Label>Last name</Label>
+          <input
+            type="text"
+            value={action.last_name ?? ''}
+            onChange={(e) => patch({ last_name: e.target.value } as Partial<AutomationAction>)}
+            className={inputCls}
+          />
+        </div>
+      </div>
+      <div>
+        <Label>Email</Label>
+        <input
+          type="text"
+          value={action.email ?? ''}
+          onChange={(e) => patch({ email: e.target.value } as Partial<AutomationAction>)}
+          className={inputCls}
+        />
+      </div>
+      <div>
+        <Label>Phone</Label>
+        <input
+          type="text"
+          value={action.phone ?? ''}
+          onChange={(e) => patch({ phone: e.target.value } as Partial<AutomationAction>)}
+          placeholder="+15555550123"
+          className={inputCls}
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <Label>City</Label>
+          <input
+            type="text"
+            value={action.city ?? ''}
+            onChange={(e) => patch({ city: e.target.value } as Partial<AutomationAction>)}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <Label>State</Label>
+          <input
+            type="text"
+            value={action.state ?? ''}
+            onChange={(e) => patch({ state: e.target.value } as Partial<AutomationAction>)}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <Label>Zip</Label>
+          <input
+            type="text"
+            value={action.zip ?? ''}
+            onChange={(e) => patch({ zip: e.target.value } as Partial<AutomationAction>)}
+            className={inputCls}
+          />
+        </div>
+      </div>
+      <div>
+        <Label>Notes</Label>
+        <textarea
+          rows={2}
+          value={action.notes ?? ''}
+          onChange={(e) => patch({ notes: e.target.value } as Partial<AutomationAction>)}
+          className={`${inputCls} resize-y`}
+        />
+      </div>
+      <div>
+        <Label>Initial stage (optional)</Label>
+        <select
+          value={action.stage_id ?? ''}
+          onChange={(e) => patch({ stage_id: e.target.value || undefined } as Partial<AutomationAction>)}
+          className={inputCls}
+        >
+          <option value="">None</option>
+          {ctx.stages.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <label className="flex items-start gap-2 text-[11.5px] text-txt-2">
+        <input
+          type="checkbox"
+          checked={action.set_as_run_lead ?? true}
+          onChange={(e) => patch({ set_as_run_lead: e.target.checked } as Partial<AutomationAction>)}
+          className="mt-0.5"
+        />
+        <span>
+          Use this contact for the rest of the run — downstream actions like Send email or Move
+          stage will target it.
+        </span>
+      </label>
+      <p className="text-[11px] text-txt-3">
+        At least one of name, email, or phone must resolve to a non-empty value or the row is
+        skipped.
+      </p>
     </div>
   );
 }

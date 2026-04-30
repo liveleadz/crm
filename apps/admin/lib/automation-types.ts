@@ -59,6 +59,21 @@ export type AutomationAction =
       kind: 'update_lead_field';
       field: LeadFieldKey;
       value: string;
+    }
+  | {
+      kind: 'create_contact';
+      first_name?: string;
+      last_name?: string;
+      email?: string;
+      phone?: string;
+      city?: string;
+      state?: string;
+      zip?: string;
+      notes?: string;
+      stage_id?: string;
+      // When true, ctx.leadId is set to the new contact so downstream
+      // lead-bound actions (send_email, move_stage, etc.) target it.
+      set_as_run_lead?: boolean;
     };
 
 export type AutomationMode = 'simple' | 'graph';
@@ -268,6 +283,11 @@ export function describeAction(
     }
     case 'update_lead_field': {
       return `Set lead.${action.field} = ${truncate(action.value, 28)}`;
+    }
+    case 'create_contact': {
+      const name = [action.first_name, action.last_name].filter(Boolean).join(' ').trim();
+      const ident = name || action.email || action.phone || 'new contact';
+      return `Create contact ${truncate(ident, 28)}${action.set_as_run_lead ? ' (use as run lead)' : ''}`;
     }
     default:
       return 'Unknown action';

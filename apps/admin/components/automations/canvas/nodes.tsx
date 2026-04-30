@@ -229,6 +229,8 @@ function titleForAction(kind: AutomationAction['kind']): string {
       return 'HTTP request';
     case 'update_lead_field':
       return 'Update lead';
+    case 'create_contact':
+      return 'Create contact';
   }
 }
 
@@ -241,6 +243,7 @@ function accentForAction(kind: AutomationAction['kind']): string {
     case 'http_request':
       return 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400';
     case 'update_lead_field':
+    case 'create_contact':
       return 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400';
     default:
       return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400';
@@ -307,6 +310,14 @@ function iconForAction(kind: AutomationAction['kind']): React.ReactNode {
       return (
         <svg {...common}>
           <path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4z" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'create_contact':
+      return (
+        <svg {...common}>
+          <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M19 8v6M22 11h-6" strokeLinecap="round" />
         </svg>
       );
   }

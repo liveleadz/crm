@@ -135,6 +135,20 @@ const OPTIONS: Array<{
           </svg>
         ),
       },
+      {
+        kind: 'action',
+        actionKind: 'create_contact',
+        label: 'Create contact',
+        description: 'Insert a new lead from webhook payload or templated values.',
+        accent: DATA_ACCENT,
+        icon: (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M19 8v6M22 11h-6" strokeLinecap="round" />
+          </svg>
+        ),
+      },
     ],
   },
   {
@@ -274,6 +288,16 @@ export function NodePicker({
           break;
         case 'update_lead_field':
           action = { kind: 'update_lead_field', field: 'first_name', value: '' };
+          break;
+        case 'create_contact':
+          action = {
+            kind: 'create_contact',
+            first_name: '{{webhook.body.first_name}}',
+            last_name: '{{webhook.body.last_name}}',
+            email: '{{webhook.body.email}}',
+            phone: '{{webhook.body.phone}}',
+            set_as_run_lead: true,
+          };
           break;
         default:
           return;

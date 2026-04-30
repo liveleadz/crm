@@ -597,6 +597,8 @@ function labelFor(kind: AutomationAction['kind']): string {
       return 'HTTP request';
     case 'update_lead_field':
       return 'Update lead field';
+    case 'create_contact':
+      return 'Create contact';
     default:
       return 'Action';
   }

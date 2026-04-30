@@ -172,9 +172,17 @@ async function walkFrom(
         cursor = next ? next.target : null;
         continue;
       }
+      // Persist the current ctx alongside the wait so a resume after this
+      // suspension sees any mid-walk mutations (e.g. ctx.leadId set by a
+      // create_contact step earlier in the chain).
       await supabase
         .from('workflow_runs')
-        .update({ status: 'waiting', next_run_at: due.toISOString(), current_node_id: node.id })
+        .update({
+          status: 'waiting',
+          next_run_at: due.toISOString(),
+          current_node_id: node.id,
+          state: { ctx } as unknown as never,
+        })
         .eq('id', runId);
       return;
     }
@@ -480,6 +488,43 @@ export async function executeAction(action: AutomationAction, ctx: GraphRunConte
         .from('leads')
         .update(patch as unknown as never)
         .eq('id', ctx.leadId!);
+      return;
+    }
+
+    case 'create_contact': {
+      // Render every templated field. Empty strings stay empty (becomes null
+      // for FK-style fields like stage_id).
+      const row = {
+        brand_id: ctx.brandId,
+        first_name: action.first_name ? renderTemplate(action.first_name, vars) || null : null,
+        last_name: action.last_name ? renderTemplate(action.last_name, vars) || null : null,
+        email: action.email ? renderTemplate(action.email, vars) || null : null,
+        phone: action.phone ? renderTemplate(action.phone, vars) || null : null,
+        city: action.city ? renderTemplate(action.city, vars) || null : null,
+        state: action.state ? renderTemplate(action.state, vars) || null : null,
+        zip: action.zip ? renderTemplate(action.zip, vars) || null : null,
+        notes: action.notes ? renderTemplate(action.notes, vars) || null : null,
+        stage_id: action.stage_id || null,
+      };
+      // Refuse to create a row with no identifying field — protects against
+      // unbounded inserts when an upstream template resolves to nothing.
+      if (!row.first_name && !row.last_name && !row.email && !row.phone) {
+        console.warn('[graph-engine] create_contact skipped: no identifying field');
+        return;
+      }
+      const { data: created, error } = await supabase
+        .from('leads')
+        .insert(row)
+        .select('id')
+        .single();
+      if (error) {
+        console.warn('[graph-engine] create_contact failed', error.message);
+        return;
+      }
+      // Optionally route subsequent lead-bound actions to the new contact.
+      if (action.set_as_run_lead && created?.id) {
+        ctx.leadId = created.id;
+      }
       return;
     }
   }
