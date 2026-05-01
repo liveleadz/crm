@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { Route } from 'next';
 import type { Tag } from '@/lib/tags';
 import { TagChip } from '@/components/tags/tag-chip';
-import { saveSmartList } from '@/app/actions/lists';
+import { saveSmartList, updateSmartList } from '@/app/actions/lists';
 
 const SOURCES = [
   { value: '', label: 'Any source' },
@@ -26,6 +26,7 @@ export function LeadFilters({
   initialTagIds,
   initialDnc,
   initialDne,
+  activeSmartList = null,
 }: {
   tagLibrary: Tag[];
   initialSearch: string;
@@ -33,6 +34,10 @@ export function LeadFilters({
   initialTagIds: string[];
   initialDnc: boolean;
   initialDne: boolean;
+  // When a `source='filter'` smart list is currently pinned, surface its
+  // identity so the user can overwrite it via the "Update list" button
+  // instead of saving yet another duplicate.
+  activeSmartList?: { id: string; name: string } | null;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -153,6 +158,28 @@ export function LeadFilters({
     }
     setSavingName(null);
     setSaveError(null);
+    router.refresh();
+  }
+
+  async function handleUpdateList() {
+    if (!activeSmartList) return;
+    setSaveError(null);
+    setSaveBusy(true);
+    const res = await updateSmartList({
+      listId: activeSmartList.id,
+      criteria: {
+        search: search || null,
+        source: source || null,
+        tagIds: tagIds.length > 0 ? tagIds : null,
+        excludeDnc: dnc,
+        excludeDne: dne,
+      },
+    });
+    setSaveBusy(false);
+    if (!res.ok) {
+      setSaveError(res.error);
+      return;
+    }
     router.refresh();
   }
 
@@ -328,13 +355,29 @@ export function LeadFilters({
               )}
             </div>
           ) : (
-            <button
-              type="button"
-              onClick={() => setSavingName('')}
-              className="rounded-md border border-line bg-surface px-2 py-1 text-[11.5px] font-medium text-txt-2 hover:bg-canvas"
-            >
-              Save as list
-            </button>
+            <>
+              {activeSmartList && (
+                <button
+                  type="button"
+                  onClick={() => void handleUpdateList()}
+                  disabled={saveBusy}
+                  title={`Overwrite "${activeSmartList.name}" with current filters`}
+                  className="rounded-md border border-teal/40 bg-teal/10 px-2 py-1 text-[11.5px] font-medium text-teal hover:bg-teal/20 disabled:opacity-40"
+                >
+                  Update “{activeSmartList.name}”
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSavingName('')}
+                className="rounded-md border border-line bg-surface px-2 py-1 text-[11.5px] font-medium text-txt-2 hover:bg-canvas"
+              >
+                Save as list
+              </button>
+              {saveError && (
+                <span className="text-[11px] text-hp">{saveError}</span>
+              )}
+            </>
           )}
           <button
             type="button"

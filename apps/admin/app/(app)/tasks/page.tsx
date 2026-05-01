@@ -3,6 +3,7 @@ import { loadTaskCounts, loadTasks, type TaskFilter } from '@/lib/tasks';
 import { loadTeam } from '@/lib/team';
 import { PageHeader } from '@/components/page-header';
 import { TasksView } from '@/components/tasks/tasks-view';
+import { RealtimeRefresher } from '@/components/realtime-refresher';
 
 const VALID_TABS: TaskFilter[] = ['today', 'overdue', 'upcoming', 'done'];
 
@@ -32,6 +33,7 @@ export default async function TasksPage({
   return (
     <>
       <PageHeader title="Tasks" subtitle={subtitle} />
+      <RealtimeRefresher channel="tasks-list" tables={['tasks']} />
       <TasksView
         activeTab={tab}
         counts={counts}

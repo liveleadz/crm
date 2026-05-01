@@ -117,6 +117,43 @@ export async function saveSmartList(input: {
   return { ok: true as const, id: data.id };
 }
 
+// Overwrite the criteria of an existing filter-source list. Used by the
+// "Update list" affordance on /leads when a smart list is pinned and the
+// user has tweaked their filters. Brand-scoped, and limited to
+// source='filter' rows so we never accidentally repurpose a materialized
+// import/manual list.
+export async function updateSmartList(input: {
+  listId: string;
+  criteria: SmartListCriteria;
+}) {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false as const, error: 'No active brand.' };
+
+  const c = input.criteria;
+  const criteria: SmartListCriteria = {};
+  if (c.search) criteria.search = c.search;
+  if (c.source) criteria.source = c.source;
+  if (c.tagIds && c.tagIds.length > 0) criteria.tagIds = c.tagIds;
+  if (c.excludeDnc) criteria.excludeDnc = true;
+  if (c.excludeDne) criteria.excludeDne = true;
+
+  const supabase = await createServerClient();
+  const { error, count } = await supabase
+    .from('lead_lists')
+    .update({ criteria, updated_at: new Date().toISOString() }, { count: 'exact' })
+    .eq('id', input.listId)
+    .eq('brand_id', active.id)
+    .eq('source', 'filter');
+  if (error) return { ok: false as const, error: error.message };
+  if ((count ?? 0) === 0) {
+    return { ok: false as const, error: 'List not found or not a smart list.' };
+  }
+
+  revalidatePath('/leads');
+  revalidatePath('/pipelines');
+  return { ok: true as const };
+}
+
 // Bulk delete several smart lists. Brand-scoped via the active brand check
 // plus a brand_id filter on the delete itself. Leads belonging to deleted
 // lists keep their rows (list_id is FK on delete set null).

@@ -14,6 +14,7 @@ import { LeadFilters } from '@/components/leads/lead-filters';
 import { ListPills } from '@/components/leads/list-pills';
 import { NewLeadButton } from '@/components/leads/new-lead-button';
 import { LeadsTable } from '@/components/leads/leads-table';
+import { RealtimeRefresher } from '@/components/realtime-refresher';
 
 export default async function LeadsListPage({
   searchParams,
@@ -111,6 +112,7 @@ export default async function LeadsListPage({
           ) : null
         }
       />
+      <RealtimeRefresher channel="leads-list" tables={['leads']} />
       {lists.length > 0 && <ListPills lists={lists} activeListId={activeListId} />}
       <LeadFilters
         tagLibrary={tagLibrary}
@@ -119,6 +121,11 @@ export default async function LeadsListPage({
         initialTagIds={tagIds}
         initialDnc={excludeDnc}
         initialDne={excludeDne}
+        activeSmartList={
+          activeList && activeList.source === 'filter'
+            ? { id: activeList.id, name: activeList.name }
+            : null
+        }
       />
       {stages.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-12">
