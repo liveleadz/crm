@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from 'react';
 import {
   inviteMember,
   removeMember,
+  resendInvite,
   setMemberActive,
   updateMemberRole,
 } from '@/app/actions/team';
@@ -94,6 +95,14 @@ export function TeamManager({
     });
   }
 
+  function resend(memberId: string) {
+    setError(null);
+    startTransition(async () => {
+      const res = await resendInvite(memberId);
+      if (!res.ok) setError(res.error);
+    });
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -175,20 +184,30 @@ export function TeamManager({
                     {isOwner ? (
                       <span className="text-[12px] text-txt-3">Active</span>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => toggleActive(m.memberId, !m.isActive)}
-                        className={`inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                          m.isActive ? 'bg-teal' : 'bg-line-2'
-                        }`}
-                        aria-label={m.isActive ? 'Deactivate' : 'Activate'}
-                      >
-                        <span
-                          className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                            m.isActive ? 'translate-x-5' : 'translate-x-0.5'
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleActive(m.memberId, !m.isActive)}
+                          className={`inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                            m.isActive ? 'bg-teal' : 'bg-line-2'
                           }`}
-                        />
-                      </button>
+                          aria-label={m.isActive ? 'Deactivate' : 'Activate'}
+                        >
+                          <span
+                            className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                              m.isActive ? 'translate-x-5' : 'translate-x-0.5'
+                            }`}
+                          />
+                        </button>
+                        {m.pendingInvite && (
+                          <span
+                            title="Invite link not yet accepted"
+                            className="rounded-full border border-bi/40 bg-bi/10 px-2 py-0.5 text-[10.5px] font-medium text-bi"
+                          >
+                            Pending
+                          </span>
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-[11.5px] text-txt-3">
@@ -200,13 +219,24 @@ export function TeamManager({
                   </td>
                   <td className="px-2 py-2.5 text-right">
                     {!isOwner && !isSelf && (
-                      <button
-                        type="button"
-                        onClick={() => remove(m.memberId)}
-                        className="rounded-lg px-2 py-1 text-[11.5px] text-txt-3 hover:bg-hp/10 hover:text-hp"
-                      >
-                        Remove
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        {m.pendingInvite && (
+                          <button
+                            type="button"
+                            onClick={() => resend(m.memberId)}
+                            className="rounded-lg px-2 py-1 text-[11.5px] text-teal hover:bg-teal/10"
+                          >
+                            Resend invite
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => remove(m.memberId)}
+                          className="rounded-lg px-2 py-1 text-[11.5px] text-txt-3 hover:bg-hp/10 hover:text-hp"
+                        >
+                          Remove
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -273,6 +303,7 @@ function InviteDialog({
         role,
         isActive: true,
         joinedAt: new Date().toISOString(),
+        pendingInvite: true,
       });
     });
   }

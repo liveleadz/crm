@@ -9,6 +9,7 @@ import 'server-only';
 // explicit brand_id filter.
 
 import { createServerClient } from '@leadpilot/db/server';
+import { addDaysToDateKey, getLocalParts, localDayKey } from './datetime';
 
 export type ReportRange = '7d' | '30d' | '90d' | 'custom';
 export type DirectionFilter = 'all' | 'inbound' | 'outbound';
@@ -20,6 +21,9 @@ export type ReportFilter = {
   toIso?: string | null;
   agentId?: string | null;
   direction?: DirectionFilter;
+  /** IANA tz used to bucket the trend (per-day) and heatmap (dow×hour).
+   *  Falls back to UTC when omitted. */
+  timezone?: string | null;
 };
 
 export type ReportKpis = {
@@ -56,7 +60,7 @@ export type DispositionRow = {
 };
 
 export type TrendPoint = {
-  date: string;                 // YYYY-MM-DD in brand-naive UTC bucket
+  date: string;                 // YYYY-MM-DD in the brand's local tz
   calls: number;
   connects: number;
 };
@@ -150,18 +154,15 @@ function computeKpis(rows: CallRow[]): ReportKpis {
   };
 }
 
-function bucketDate(iso: string): string {
-  // Naive UTC day bucket. Good enough for a daily trend; adopting brand
-  // timezone is a follow-up that doesn't change the API shape.
-  return iso.slice(0, 10);
-}
-
 export async function loadCallReport(
   brandId: string,
   filter: ReportFilter,
 ): Promise<CallReport> {
   const supabase = await createServerClient();
   const { fromIso, toIso } = rangeBounds(filter);
+  // Default to UTC when no tz is provided so callers (e.g. CSV export)
+  // that don't care about presentation continue to work.
+  const tz = filter.timezone || 'UTC';
 
   let query = supabase
     .from('calls')
@@ -301,9 +302,9 @@ export async function loadCallReport(
     .sort((a, b) => b.calls - a.calls);
 
   // ---------- Day-of-week × hour-of-day heatmap ----------
-  // Naive UTC bucketing matches the daily trend; brand-timezone correction
-  // is a follow-up. We keep all 168 cells (7×24) so the renderer can
-  // draw a stable grid even when buckets are sparse.
+  // Bucketing uses brand-local time so 9am Monday means 9am in the
+  // brand's tz — not UTC. We keep all 168 cells (7×24) so the renderer
+  // can draw a stable grid even when buckets are sparse.
   const heatmap: HeatmapCell[] = [];
   const heatIndex = new Map<string, HeatmapCell>();
   for (let dow = 0; dow < 7; dow += 1) {
@@ -314,8 +315,8 @@ export async function loadCallReport(
     }
   }
   for (const r of rows) {
-    const d = new Date(r.started_at);
-    const cell = heatIndex.get(`${d.getUTCDay()}:${d.getUTCHours()}`);
+    const lp = getLocalParts(r.started_at, tz);
+    const cell = heatIndex.get(`${lp.weekday}:${lp.hour}`);
     if (!cell) continue;
     cell.calls += 1;
     if (r.disposition && CONNECTED_CODES.has(r.disposition)) cell.connects += 1;
@@ -323,15 +324,17 @@ export async function loadCallReport(
 
   // ---------- Daily trend ----------
   // Build a complete date axis from fromIso..toIso so days with zero
-  // calls still render a tick (otherwise the line jumps gaps).
-  const startMs = Math.floor(new Date(fromIso).getTime() / DAY_MS) * DAY_MS;
-  const endMs = Math.floor(new Date(toIso).getTime() / DAY_MS) * DAY_MS;
+  // calls still render a tick (otherwise the line jumps gaps). Days are
+  // brand-local — fromIso's local day through toIso's local day,
+  // inclusive.
+  const startKey = localDayKey(fromIso, tz);
+  const endKey = localDayKey(toIso, tz);
   const trendMap = new Map<string, { calls: number; connects: number }>();
-  for (let t = startMs; t <= endMs; t += DAY_MS) {
-    trendMap.set(new Date(t).toISOString().slice(0, 10), { calls: 0, connects: 0 });
+  for (let cursor = startKey; cursor <= endKey; cursor = addDaysToDateKey(cursor, 1)) {
+    trendMap.set(cursor, { calls: 0, connects: 0 });
   }
   for (const r of rows) {
-    const key = bucketDate(r.started_at);
+    const key = localDayKey(r.started_at, tz);
     const cur = trendMap.get(key);
     if (!cur) continue;
     cur.calls += 1;

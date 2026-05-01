@@ -10,6 +10,7 @@ export type ActiveBrand = {
   id: BrandId;
   name: string;
   color: string | null;
+  timezone: string;
 };
 
 const ALLOWED: BrandId[] = ['hp', 'vl', 'bs', 'll', 'hb', 'bi'];
@@ -25,14 +26,15 @@ export async function getMembershipBrands(): Promise<ActiveBrand[]> {
   // when multiple owners share the same set.
   const { data } = await supabase
     .from('brand_members')
-    .select('brand_id, brands!inner(id, name, color)')
+    .select('brand_id, brands!inner(id, name, color, timezone)')
     .eq('member_id', user.id)
     .order('brand_id');
   if (!data) return [];
   return data
     .map((row) => row.brands)
-    .filter((b): b is { id: BrandId; name: string; color: string | null } =>
-      ALLOWED.includes(b.id as BrandId),
+    .filter(
+      (b): b is { id: BrandId; name: string; color: string | null; timezone: string } =>
+        ALLOWED.includes(b.id as BrandId),
     );
 }
 

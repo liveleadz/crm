@@ -303,7 +303,13 @@ function toneFor(code: string): string {
   }
 }
 
-export function TrendChart({ points }: { points: TrendPoint[] }) {
+export function TrendChart({
+  points,
+  timezone,
+}: {
+  points: TrendPoint[];
+  timezone?: string;
+}) {
   // Inline-SVG sparkline. Two series: total calls (faded) and connects
   // (foreground teal). 800×120 viewBox; the parent makes it responsive.
   const W = 800;
@@ -340,7 +346,8 @@ export function TrendChart({ points }: { points: TrendPoint[] }) {
           <h3 className="text-[13.5px] font-semibold">Daily trend</h3>
           <p className="text-[11.5px] text-txt-3">
             Calls per day, connects overlay. {points.length} day
-            {points.length === 1 ? '' : 's'} shown.
+            {points.length === 1 ? '' : 's'} shown
+            {timezone ? ` (${timezone})` : ''}.
           </p>
         </div>
         <div className="flex items-center gap-4 text-[11.5px]">
@@ -460,7 +467,13 @@ const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // 7×24 grid showing call density by hour-of-day × day-of-week. Cells
 // shaded by call count relative to the busiest cell. Tooltip via title
 // attribute keeps the markup tiny; a real popover is overkill here.
-export function DayOfWeekHeatmap({ cells }: { cells: HeatmapCell[] }) {
+export function DayOfWeekHeatmap({
+  cells,
+  timezone,
+}: {
+  cells: HeatmapCell[];
+  timezone?: string;
+}) {
   const max = Math.max(1, ...cells.map((c) => c.calls));
   const totalCalls = cells.reduce((a, c) => a + c.calls, 0);
   if (totalCalls === 0) {
@@ -483,8 +496,9 @@ export function DayOfWeekHeatmap({ cells }: { cells: HeatmapCell[] }) {
       <div className="border-b border-line bg-canvas px-5 py-3">
         <h3 className="text-[13.5px] font-semibold">When calls happen</h3>
         <p className="text-[11.5px] text-txt-3">
-          Day-of-week × hour density (UTC). Darker cells = more calls; the
-          teal tint lifts when a slot also has connects.
+          Day-of-week × hour density{timezone ? ` (${timezone})` : ''}. Darker
+          cells = more calls; the teal tint lifts when a slot also has
+          connects.
         </p>
       </div>
       <div className="overflow-x-auto px-5 py-4">

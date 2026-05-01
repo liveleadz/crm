@@ -4,6 +4,13 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { CalendarAppointment } from '@/lib/appointment-types';
+import {
+  addLocalDaysIso,
+  formatLocalTime,
+  getLocalParts,
+  localDayKey,
+  zonedToUtcIso,
+} from '@/lib/datetime';
 import { AppointmentDialog, type AppointmentDialogTeamOpt } from './appointment-dialog';
 
 const STATUS_TONE: Record<string, string> = {
@@ -21,27 +28,20 @@ const START_HOUR = 7;
 const END_HOUR = 21;
 const SLOT_PX = 56;
 
-function dayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function formatTimeRange(startIso: string, endIso: string | null, tz: string): string {
+  const s = formatLocalTime(startIso, tz);
+  const e = endIso ? formatLocalTime(endIso, tz) : null;
+  return e ? `${s}–${e}` : s;
 }
 
-function dayKeyOfIso(iso: string): string {
-  return dayKey(new Date(iso));
-}
-
-function formatTimeRange(startIso: string, endIso: string | null): string {
-  const s = new Date(startIso);
-  const e = endIso ? new Date(endIso) : null;
-  const fmt = (d: Date) =>
-    d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  return e ? `${fmt(s)}–${fmt(e)}` : fmt(s);
-}
-
-// Position an appointment vertically based on its start time within the
-// 7am..9pm grid. Out-of-window appointments still render at the edges.
-function topPx(iso: string): number {
-  const d = new Date(iso);
-  const minutes = d.getHours() * 60 + d.getMinutes() - START_HOUR * 60;
+// Position an appointment vertically based on its brand-local start
+// time within the 7am..9pm grid. Out-of-window appointments still
+// render at the edges.
+function topPx(iso: string, tz: string): number {
+  const p = getLocalParts(iso, tz);
+  const minutes = p.hour * 60 + p.minute - START_HOUR * 60;
   return Math.max(0, (minutes / 60) * SLOT_PX);
 }
 
@@ -59,12 +59,14 @@ export function WeekView({
   team,
   agentFilterId,
   agentOptions,
+  timezone,
 }: {
   weekStartIso: string;
   appointments: CalendarAppointment[];
   team: AppointmentDialogTeamOpt[];
   agentFilterId: string | null;
   agentOptions: AppointmentDialogTeamOpt[];
+  timezone: string;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -72,25 +74,28 @@ export function WeekView({
   const [createPreset, setCreatePreset] = useState<{ startIso: string } | null>(null);
   const [editing, setEditing] = useState<CalendarAppointment | null>(null);
 
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStartIso);
-    d.setDate(d.getDate() + i);
-    return d;
-  });
+  // Each day in the week-grid is the brand-local 00:00 of a calendar
+  // day, expressed as a UTC ISO instant. The visual columns are keyed
+  // by the brand-local YYYY-MM-DD of those instants.
+  const days = Array.from({ length: 7 }, (_, i) =>
+    addLocalDaysIso(weekStartIso, i, timezone),
+  );
+  const dayKeys = days.map((iso) => localDayKey(iso, timezone));
+  const dayParts = days.map((iso) => getLocalParts(iso, timezone));
+  const todayKey = localDayKey(new Date(), timezone);
 
   const byDay = new Map<string, CalendarAppointment[]>();
   for (const a of appointments) {
-    const key = dayKeyOfIso(a.startsAt);
+    const key = localDayKey(a.startsAt, timezone);
     const list = byDay.get(key) ?? [];
     list.push(a);
     byDay.set(key, list);
   }
 
   function shiftWeek(deltaDays: number) {
-    const d = new Date(weekStartIso);
-    d.setDate(d.getDate() + deltaDays);
+    const nextStart = addLocalDaysIso(weekStartIso, deltaDays, timezone);
     const params = new URLSearchParams(searchParams.toString());
-    params.set('week', dayKey(d));
+    params.set('week', localDayKey(nextStart, timezone));
     router.push(`/calendar?${params.toString()}`);
   }
 
@@ -109,8 +114,11 @@ export function WeekView({
     router.push(qs ? `/calendar?${qs}` : '/calendar');
   }
 
-  const rangeLabel = `${days[0]!.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${days[6]!.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
-  const today = dayKey(new Date());
+  const monthShort = (m: number) =>
+    ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1] ?? '';
+  const first = dayParts[0]!;
+  const last = dayParts[6]!;
+  const rangeLabel = `${monthShort(first.month)} ${first.day} – ${monthShort(last.month)} ${last.day}`;
 
   return (
     <>
@@ -174,25 +182,29 @@ export function WeekView({
 
       <div className="grid grid-cols-[56px_repeat(7,minmax(0,1fr))] border-b border-line bg-canvas/40">
         <div />
-        {days.map((d) => {
-          const isToday = dayKey(d) === today;
+        {days.map((iso, i) => {
+          const key = dayKeys[i]!;
+          const parts = dayParts[i]!;
+          const isToday = key === todayKey;
           return (
             <div
-              key={dayKey(d)}
+              key={key}
               className={`flex items-center gap-2 px-3 py-2 ${isToday ? 'text-teal' : 'text-txt-2'}`}
             >
               <div className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
-                {d.toLocaleDateString([], { weekday: 'short' })}
+                {WEEKDAY_LABELS[i]}
               </div>
               <div className={`text-[14px] font-semibold ${isToday ? 'text-teal' : ''}`}>
-                {d.getDate()}
+                {parts.day}
               </div>
               <button
                 type="button"
                 onClick={() => {
-                  const start = new Date(d);
-                  start.setHours(9, 0, 0, 0);
-                  setCreatePreset({ startIso: start.toISOString() });
+                  // Open the dialog at 9am brand-local for that day.
+                  const startIso = zonedToUtcIso(
+                    parts.year, parts.month, parts.day, 9, 0, 0, timezone,
+                  );
+                  setCreatePreset({ startIso });
                 }}
                 className="ml-auto grid h-6 w-6 place-items-center rounded-md text-txt-3 hover:bg-canvas hover:text-txt-1"
                 aria-label="Add appointment to this day"
@@ -221,18 +233,19 @@ export function WeekView({
             );
           })}
         </div>
-        {days.map((d) => {
-          const list = byDay.get(dayKey(d)) ?? [];
-          const isToday = dayKey(d) === today;
+        {days.map((_iso, i) => {
+          const key = dayKeys[i]!;
+          const list = byDay.get(key) ?? [];
+          const isToday = key === todayKey;
           return (
             <div
-              key={dayKey(d)}
+              key={key}
               className={`relative border-r border-line ${isToday ? 'bg-teal/[0.03]' : ''}`}
               style={{ height: (END_HOUR - START_HOUR) * SLOT_PX }}
             >
-              {Array.from({ length: END_HOUR - START_HOUR }, (_, i) => (
+              {Array.from({ length: END_HOUR - START_HOUR }, (_, j) => (
                 <div
-                  key={i}
+                  key={j}
                   className="border-b border-line/60"
                   style={{ height: SLOT_PX }}
                 />
@@ -245,11 +258,11 @@ export function WeekView({
                     type="button"
                     onClick={() => setEditing(a)}
                     className={`absolute inset-x-1 overflow-hidden rounded-md border px-2 py-1 text-left text-[11px] shadow-sm transition hover:shadow-md ${tone}`}
-                    style={{ top: topPx(a.startsAt), height: heightPx(a.startsAt, a.endsAt) }}
+                    style={{ top: topPx(a.startsAt, timezone), height: heightPx(a.startsAt, a.endsAt) }}
                   >
                     <div className="truncate font-semibold">{a.title}</div>
                     <div className="truncate text-[10.5px] opacity-80">
-                      {formatTimeRange(a.startsAt, a.endsAt)} · {a.leadName ?? 'Lead'}
+                      {formatTimeRange(a.startsAt, a.endsAt, timezone)} · {a.leadName ?? 'Lead'}
                     </div>
                     {a.location && (
                       <div className="truncate text-[10px] opacity-70">{a.location}</div>

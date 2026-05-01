@@ -1,5 +1,6 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
+import { addLocalDaysIso, localStartOfWeekIso } from './datetime';
 import type {
   AppointmentStatus,
   CalendarAppointment,
@@ -70,30 +71,31 @@ export async function loadCalendarAppointments(
   });
 }
 
-// Returns the local-day Monday for the given date. Used by the calendar
-// page to align week buckets so Mon..Sun always renders together.
-export function startOfWeekIso(d: Date): string {
-  const date = new Date(d);
-  date.setHours(0, 0, 0, 0);
-  // 0=Sun..6=Sat. Shift so Monday is week start.
-  const dow = date.getDay();
-  const diff = (dow + 6) % 7;
-  date.setDate(date.getDate() - diff);
-  return date.toISOString();
+// Returns the brand-local Monday for the given date as a UTC ISO at
+// 00:00 in `tz`. Used by the calendar page to align week buckets so
+// Mon..Sun always renders together regardless of the server's TZ.
+export function startOfWeekIso(d: Date, tz: string): string {
+  return localStartOfWeekIso(d, tz);
 }
 
-export function addDaysIso(iso: string, days: number): string {
-  const d = new Date(iso);
-  d.setDate(d.getDate() + days);
-  return d.toISOString();
+// Adds N brand-local calendar days to a UTC ISO instant, preserving
+// wall-clock time. DST-safe.
+export function addDaysIso(iso: string, days: number, tz: string): string {
+  return addLocalDaysIso(iso, days, tz);
 }
 
-// Parses a "?week=YYYY-MM-DD" param into the Monday of that week. Falls
-// back to the current week when missing or malformed.
-export function parseWeekParam(value: string | undefined): string {
+// Parses a "?week=YYYY-MM-DD" param into the brand-local Monday of that
+// week. Falls back to the current week when missing or malformed. The
+// date string is interpreted as a calendar date in the brand's tz.
+export function parseWeekParam(value: string | undefined, tz: string): string {
   if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    const d = new Date(`${value}T00:00:00`);
-    if (!Number.isNaN(d.getTime())) return startOfWeekIso(d);
+    // Treat the date string as noon in the brand's tz so the resulting
+    // Monday lookup is unambiguous on either side of a DST transition.
+    const [y, m, d] = value.split('-').map(Number);
+    const probeMs = Date.UTC(y!, (m ?? 1) - 1, d ?? 1, 12, 0, 0);
+    if (!Number.isNaN(probeMs)) {
+      return localStartOfWeekIso(new Date(probeMs), tz);
+    }
   }
-  return startOfWeekIso(new Date());
+  return localStartOfWeekIso(undefined, tz);
 }

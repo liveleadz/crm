@@ -79,6 +79,7 @@ export default async function ReportsPage({
       direction,
       fromIso: range === 'custom' && fromDate ? startIso(fromDate) : null,
       toIso: range === 'custom' && toDate ? endIso(toDate) : null,
+      timezone: active.timezone,
     }),
     loadTeam(active.id),
   ]);
@@ -125,8 +126,8 @@ export default async function ReportsPage({
           initialToDate={toDate}
         />
         <KpiCards kpis={report.kpis} prevKpis={report.prevKpis} />
-        <TrendChart points={report.trend} />
-        <DayOfWeekHeatmap cells={report.heatmap} />
+        <TrendChart points={report.trend} timezone={active.timezone} />
+        <DayOfWeekHeatmap cells={report.heatmap} timezone={active.timezone} />
         <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
           <AgentTable rows={report.byAgent} activeAgentId={agentId} />
           <DispositionBars rows={report.byDisposition} />

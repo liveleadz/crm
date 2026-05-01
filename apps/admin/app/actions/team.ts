@@ -128,6 +128,39 @@ export async function setMemberActive(memberId: string, isActive: boolean) {
   return { ok: true as const };
 }
 
+export async function resendInvite(memberId: string) {
+  const guard = await requireManager();
+  if (!guard.ok) return guard;
+
+  const admin = createAdminClient();
+  const { data: target } = await admin
+    .from('members')
+    .select('email')
+    .eq('id', memberId)
+    .maybeSingle();
+  if (!target?.email) {
+    return { ok: false as const, error: 'Member not found' };
+  }
+
+  // Confirm the invitee is still in the brand before sending another link.
+  const { data: bm } = await admin
+    .from('brand_members')
+    .select('role')
+    .eq('brand_id', guard.brandId)
+    .eq('member_id', memberId)
+    .maybeSingle();
+  if (!bm) return { ok: false as const, error: 'Not a member of this brand' };
+
+  // Supabase resends the invite email when the user is unconfirmed; for a
+  // confirmed user it errors with "User already registered" — we surface
+  // that message verbatim so the manager can act on it.
+  const { error } = await admin.auth.admin.inviteUserByEmail(target.email);
+  if (error) return { ok: false as const, error: error.message };
+
+  bump();
+  return { ok: true as const };
+}
+
 export async function removeMember(memberId: string) {
   const guard = await requireManager();
   if (!guard.ok) return guard;

@@ -17,8 +17,8 @@ export default async function CalendarPage({
   const active = await getActiveBrand();
   if (!active) return null;
   const sp = await searchParams;
-  const weekStartIso = parseWeekParam(sp.week);
-  const weekEndIso = addDaysIso(weekStartIso, 7);
+  const weekStartIso = parseWeekParam(sp.week, active.timezone);
+  const weekEndIso = addDaysIso(weekStartIso, 7, active.timezone);
   const memberFilter = sp.member?.trim() || null;
 
   const [appointments, team] = await Promise.all([
@@ -42,6 +42,7 @@ export default async function CalendarPage({
         team={teamOpts}
         agentFilterId={memberFilter}
         agentOptions={teamOpts}
+        timezone={active.timezone}
       />
     </>
   );

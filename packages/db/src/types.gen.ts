@@ -253,6 +253,7 @@ export type Database = {
           id: string
           name: string
           slug: string
+          timezone: string
         }
         Insert: {
           active?: boolean
@@ -263,6 +264,7 @@ export type Database = {
           id: string
           name: string
           slug: string
+          timezone?: string
         }
         Update: {
           active?: boolean
@@ -273,6 +275,7 @@ export type Database = {
           id?: string
           name?: string
           slug?: string
+          timezone?: string
         }
         Relationships: []
       }
