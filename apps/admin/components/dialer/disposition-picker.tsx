@@ -27,8 +27,9 @@ type Props = {
   callId: string;
   choices: DispositionChoice[];
   // Called after a successful save so the parent can clean up (return to
-  // idle, close modal, refresh data, etc.).
-  onSaved: () => void;
+  // idle, close modal, refresh data, etc.). Receives the saved code so
+  // the caller can display the outcome without a re-fetch.
+  onSaved: (code: string) => void;
   // Optional cancel — only used when this picker is shown retroactively
   // for a past call (in /calls list). Hidden in the live dialer flow.
   onCancel?: () => void;
@@ -62,7 +63,7 @@ export function DispositionPicker({ callId, choices, onSaved, onCancel }: Props)
         setError(res.error);
         return;
       }
-      onSaved();
+      onSaved(code);
     });
   }
 

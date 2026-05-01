@@ -74,15 +74,46 @@ export function autoMapHeaders(headers: string[]): FieldMapping {
   return map;
 }
 
-// Normalize a phone string to E.164 (US default). Returns null if unusable.
-export function normalizePhone(raw: string | null | undefined): string | null {
+// Country defaults for phone normalization. We only carry the dial code
+// and the "national number length" used to detect whether a bare digit
+// string is already in national format and just needs the prefix.
+//
+// Adding a country is one row here; the wizard surfaces this whole list
+// in its dropdown.
+export const PHONE_COUNTRIES = [
+  { code: 'US', label: 'United States (+1)', dial: '1', national: 10 },
+  { code: 'CA', label: 'Canada (+1)', dial: '1', national: 10 },
+  { code: 'GB', label: 'United Kingdom (+44)', dial: '44', national: 10 },
+  { code: 'AU', label: 'Australia (+61)', dial: '61', national: 9 },
+  { code: 'BR', label: 'Brazil (+55)', dial: '55', national: 11 },
+] as const;
+
+export type PhoneCountry = (typeof PHONE_COUNTRIES)[number]['code'];
+
+const COUNTRY_BY_CODE = new Map(PHONE_COUNTRIES.map((c) => [c.code, c]));
+
+// Normalize a phone string to E.164. `country` picks the dial code used
+// when the input has no leading `+` and isn't already prefixed with the
+// dial code itself. Returns null if unusable.
+export function normalizePhone(
+  raw: string | null | undefined,
+  country: PhoneCountry = 'US',
+): string | null {
   if (!raw) return null;
-  const digits = raw.replace(/\D/g, '');
+  const trimmed = raw.trim();
+  const digits = trimmed.replace(/\D/g, '');
   if (!digits) return null;
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
-  if (raw.trim().startsWith('+')) return `+${digits}`;
-  // Anything else, return null so we can flag the row.
+  // Explicit international format always wins.
+  if (trimmed.startsWith('+')) return `+${digits}`;
+  const meta = COUNTRY_BY_CODE.get(country) ?? COUNTRY_BY_CODE.get('US')!;
+  if (digits.length === meta.national) return `+${meta.dial}${digits}`;
+  if (
+    digits.length === meta.national + meta.dial.length &&
+    digits.startsWith(meta.dial)
+  ) {
+    return `+${digits}`;
+  }
+  // Anything else, null — flagged as a warning by applyMapping.
   return null;
 }
 
@@ -120,6 +151,7 @@ export type MappedLead = {
 export function applyMapping(
   row: Record<string, string>,
   mapping: FieldMapping,
+  opts?: { defaultCountry?: PhoneCountry },
 ): MappedLead {
   const out: MappedLead = {
     first_name: null,
@@ -154,7 +186,7 @@ export function applyMapping(
       if (e) out.email = e;
       else out.warnings.push(`Bad email: "${raw}"`);
     } else if (target === 'phone') {
-      const p = normalizePhone(raw);
+      const p = normalizePhone(raw, opts?.defaultCountry ?? 'US');
       if (p) out.phone = p;
       else out.warnings.push(`Bad phone: "${raw}"`);
     } else if (target === 'state') {

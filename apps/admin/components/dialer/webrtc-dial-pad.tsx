@@ -84,6 +84,31 @@ export function WebRTCDialPad({
     };
   }, []);
 
+  // Keyboard shortcuts during a live call: M=mute toggle, Esc=hangup.
+  // Disabled while focus is in an input (so dialing the keypad via the
+  // tel <input> isn't hijacked).
+  useEffect(() => {
+    if (status.kind !== 'in_call') return;
+    function onKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt) {
+        const tag = tgt.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tgt.isContentEditable) return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        void hangup();
+      } else if (e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        void toggleMute();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status.kind]);
+
   function press(k: string) {
     setNumber((n) => (n + k).slice(0, 20));
   }

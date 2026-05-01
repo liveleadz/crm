@@ -4,7 +4,11 @@ import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadLeadDetail } from '@/lib/leads';
-import { applyMapping, type FieldMapping } from '@/lib/leads-import';
+import {
+  applyMapping,
+  type FieldMapping,
+  type PhoneCountry,
+} from '@/lib/leads-import';
 
 export async function createLead(input: {
   firstName?: string | null;
@@ -330,6 +334,10 @@ export async function importLeads(input: {
   stageId: string | null;
   listName: string;
   skipDedup?: boolean;
+  defaultCountry?: PhoneCountry;
+  // Tag IDs applied to every inserted lead in addition to whatever the
+  // CSV's "tags" column resolves to.
+  extraTagIds?: string[];
 }) {
   try {
     return await importLeadsInner(input);
@@ -347,6 +355,8 @@ async function importLeadsInner(input: {
   stageId: string | null;
   listName: string;
   skipDedup?: boolean;
+  defaultCountry?: PhoneCountry;
+  extraTagIds?: string[];
 }) {
   const active = await getActiveBrand();
   if (!active) return { ok: false as const, error: 'No active brand' };
@@ -359,7 +369,9 @@ async function importLeadsInner(input: {
   const listName = input.listName.trim();
   if (!listName) return { ok: false as const, error: 'List name is required' };
 
-  const mapped = input.rows.map((r) => applyMapping(r, input.mapping));
+  const mapped = input.rows.map((r) =>
+    applyMapping(r, input.mapping, { defaultCountry: input.defaultCountry }),
+  );
   const valid = mapped.filter((m) => m.errors.length === 0);
   const invalidCount = mapped.length - valid.length;
 
@@ -568,6 +580,35 @@ async function importLeadsInner(input: {
         const { error: linkErr, count } = await supabase
           .from('lead_tags')
           .insert(links.slice(i, i + LINK_CHUNK), { count: 'exact' });
+        if (!linkErr) tagAttachments += count ?? 0;
+      }
+    }
+  }
+
+  // Bulk tags applied to every inserted lead regardless of CSV content.
+  // We re-verify the supplied tag IDs belong to this brand (RLS would
+  // also reject cross-brand inserts, but failing fast keeps the row
+  // count honest).
+  const extraTagIds = Array.from(new Set((input.extraTagIds ?? []).filter(Boolean)));
+  if (extraTagIds.length > 0 && insertedIds.length > 0) {
+    const { data: ownTags } = await supabase
+      .from('tags')
+      .select('id')
+      .eq('brand_id', active.id)
+      .in('id', extraTagIds);
+    const validIds = (ownTags ?? []).map((t) => t.id);
+    if (validIds.length > 0) {
+      const bulkLinks: { lead_id: string; tag_id: string; created_by: string }[] = [];
+      for (const leadId of insertedIds) {
+        for (const tagId of validIds) {
+          bulkLinks.push({ lead_id: leadId, tag_id: tagId, created_by: user.id });
+        }
+      }
+      const LINK_CHUNK = 1000;
+      for (let i = 0; i < bulkLinks.length; i += LINK_CHUNK) {
+        const { error: linkErr, count } = await supabase
+          .from('lead_tags')
+          .insert(bulkLinks.slice(i, i + LINK_CHUNK), { count: 'exact' });
         if (!linkErr) tagAttachments += count ?? 0;
       }
     }

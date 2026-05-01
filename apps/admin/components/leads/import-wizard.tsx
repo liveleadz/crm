@@ -10,11 +10,14 @@ import {
   autoMapHeaders,
   isCustomTarget,
   LEAD_COLUMNS,
+  PHONE_COUNTRIES,
   type FieldMapping,
   type MappingTarget,
+  type PhoneCountry,
 } from '@/lib/leads-import';
 import type { LeadStage } from '@/lib/leads';
 import type { CustomField } from '@/lib/lists';
+import type { Tag } from '@/lib/tags';
 
 type Step = 'upload' | 'map' | 'preview' | 'done';
 
@@ -33,9 +36,11 @@ type Result = {
 export function ImportWizard({
   stages,
   initialCustomFields,
+  tagLibrary,
 }: {
   stages: LeadStage[];
   initialCustomFields: CustomField[];
+  tagLibrary: Tag[];
 }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>('upload');
@@ -48,6 +53,10 @@ export function ImportWizard({
   const sortedStages = [...stages].sort((a, b) => a.position - b.position);
   const [stageId, setStageId] = useState<string>(sortedStages[0]?.id ?? '');
   const [skipDedup, setSkipDedup] = useState(false);
+  const [defaultCountry, setDefaultCountry] = useState<PhoneCountry>('US');
+  // Tags applied to every imported lead in addition to whatever the
+  // CSV's "tags" column resolves to.
+  const [extraTagIds, setExtraTagIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const [, startTransition] = useTransition();
@@ -137,12 +146,15 @@ export function ImportWizard({
 
   const previewRows = useMemo(() => {
     if (step !== 'preview' && step !== 'map') return [];
-    return rows.slice(0, 5).map((r) => applyMapping(r, mapping));
-  }, [rows, mapping, step]);
+    return rows.slice(0, 5).map((r) => applyMapping(r, mapping, { defaultCountry }));
+  }, [rows, mapping, step, defaultCountry]);
 
   const validCount = useMemo(
-    () => rows.filter((r) => applyMapping(r, mapping).errors.length === 0).length,
-    [rows, mapping],
+    () =>
+      rows.filter(
+        (r) => applyMapping(r, mapping, { defaultCountry }).errors.length === 0,
+      ).length,
+    [rows, mapping, defaultCountry],
   );
 
   function commit() {
@@ -182,6 +194,8 @@ export function ImportWizard({
           stageId: stageId || null,
           listName: listName.trim(),
           skipDedup,
+          defaultCountry,
+          extraTagIds,
         });
       } catch (err) {
         console.error('[import-wizard] action threw', err);
@@ -222,6 +236,7 @@ export function ImportWizard({
     setRows([]);
     setMapping({});
     setListName('');
+    setExtraTagIds([]);
     setResult(null);
     setError(null);
     cancelCreate();
@@ -447,6 +462,23 @@ export function ImportWizard({
                   ))}
                 </select>
               </label>
+              <label className="block">
+                <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+                  Phone country (default)
+                </div>
+                <select
+                  value={defaultCountry}
+                  onChange={(e) => setDefaultCountry(e.target.value as PhoneCountry)}
+                  className="w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60"
+                  title="Used to add the dial code to numbers that arrive without a + prefix."
+                >
+                  {PHONE_COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="flex cursor-pointer items-center gap-2 self-end">
                 <input
                   type="checkbox"
@@ -458,6 +490,18 @@ export function ImportWizard({
                   Skip duplicates (existing phone/email in this brand)
                 </span>
               </label>
+              {tagLibrary.length > 0 && (
+                <div className="col-span-2">
+                  <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+                    Apply tags to all imported leads
+                  </div>
+                  <TagMultiselect
+                    library={tagLibrary}
+                    selected={extraTagIds}
+                    onChange={setExtraTagIds}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -805,6 +849,51 @@ function MapSummary({
         </span>{' '}
         <span className="text-txt-3">rows ready to import</span>
       </span>
+    </div>
+  );
+}
+
+// Compact tag chooser used in Import options. Click a tag to toggle it
+// in/out of `selected`. Avoids pulling in a full combobox component for
+// what is effectively a one-pass picker.
+function TagMultiselect({
+  library,
+  selected,
+  onChange,
+}: {
+  library: Tag[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const selSet = new Set(selected);
+  function toggle(id: string) {
+    if (selSet.has(id)) onChange(selected.filter((x) => x !== id));
+    else onChange([...selected, id]);
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5 rounded-lg border border-line bg-canvas p-2">
+      {library.map((t) => {
+        const on = selSet.has(t.id);
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => toggle(t.id)}
+            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11.5px] font-medium ring-1 transition-colors ${
+              on
+                ? 'bg-teal/15 text-teal ring-teal/40'
+                : 'bg-surface text-txt-2 ring-line hover:ring-line-2'
+            }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                on ? 'bg-teal' : 'bg-line-2'
+              }`}
+            />
+            {t.name}
+          </button>
+        );
+      })}
     </div>
   );
 }

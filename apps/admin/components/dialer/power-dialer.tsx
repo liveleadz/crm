@@ -202,10 +202,10 @@ export function PowerDialer({
     // wrap_up; from there, jump straight to advance(null).
   }
 
-  function onDispositionSaved() {
-    // We don't know the code from inside the picker (it's already saved
-    // server-side). Mark "completed" with a placeholder.
-    advance('saved');
+  function onDispositionSaved(code: string) {
+    // Picker hands us the saved code so the "Done" sidebar can show the
+    // actual outcome (e.g. "no_answer") instead of a generic "saved".
+    advance(code);
   }
 
   function startQueue() {
@@ -251,6 +251,52 @@ export function PowerDialer({
     }
   }
 
+  // Keyboard shortcuts. Suspended while the disposition note/textarea
+  // is focused so typing notes doesn't accidentally hang up the call.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt) {
+        const tag = tgt.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tgt.isContentEditable) return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        endQueue();
+        return;
+      }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (status.kind === 'idle') startQueue();
+        else if (status.kind === 'paused') resumeQueue();
+        else if (status.kind === 'in_call' || status.kind === 'connecting') pauseQueue();
+        return;
+      }
+      if (status.kind !== 'in_call') return;
+      const k = e.key.toLowerCase();
+      if (k === 'm') {
+        e.preventDefault();
+        void toggleMute();
+      } else if (k === 'h') {
+        e.preventDefault();
+        void hangupCurrent();
+      } else if (k === 's') {
+        e.preventDefault();
+        void skipNoDisp();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status.kind]);
+
+  const dispMeta = useMemo(() => {
+    const m = new Map<string, DispositionChoice>();
+    for (const c of dispositions) m.set(c.code, c);
+    return m;
+  }, [dispositions]);
+
   const headline = useMemo(() => {
     if (queue.length === 0) return 'No leads queued';
     if (status.kind === 'done') return 'Queue complete';
@@ -289,6 +335,11 @@ export function PowerDialer({
                 {current && (
                   <div className="mt-0.5 truncate font-mono text-[12px] text-txt-3">
                     {current.phone}
+                    {current.email && (
+                      <span className="ml-2 font-sans normal-case text-txt-3">
+                        · {current.email}
+                      </span>
+                    )}
                   </div>
                 )}
                 {status.kind === 'in_call' && (
@@ -367,21 +418,26 @@ export function PowerDialer({
                 .reverse()
                 .map((o, idx) => {
                   const lead = queue.find((q) => q.id === o.leadId);
+                  const meta = o.disposition ? dispMeta.get(o.disposition) : null;
+                  const dotCls =
+                    !o.disposition
+                      ? 'bg-line-2'
+                      : meta?.tone === 'good'
+                        ? 'bg-teal'
+                        : meta?.tone === 'bad'
+                          ? 'bg-hp'
+                          : 'bg-txt-3/50';
                   return (
                     <div
                       key={`${o.leadId}-${idx}`}
                       className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-txt-3"
                     >
-                      <span
-                        className={`h-1.5 w-1.5 rounded-full ${
-                          o.disposition ? 'bg-teal/60' : 'bg-line-2'
-                        }`}
-                      />
+                      <span className={`h-1.5 w-1.5 rounded-full ${dotCls}`} />
                       <span className="truncate">
                         {lead ? leadDisplay(lead) : '—'}
                       </span>
                       <span className="ml-auto text-[10.5px]">
-                        {o.disposition ?? 'skipped'}
+                        {o.disposition ? meta?.label ?? o.disposition : 'skipped'}
                       </span>
                     </div>
                   );

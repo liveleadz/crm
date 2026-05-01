@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadStages } from '@/lib/leads';
 import { loadCustomFields } from '@/lib/lists';
+import { loadBrandTags } from '@/lib/tags';
 import { PageHeader } from '@/components/page-header';
 import { ImportWizard } from '@/components/leads/import-wizard';
 
@@ -19,13 +20,17 @@ import { ImportWizard } from '@/components/leads/import-wizard';
 export default async function ImportLeadsPage() {
   const active = await getActiveBrand();
   if (!active) redirect('/');
-  const [stages, customFields] = await Promise.all([
+  const [stages, customFields, tagLibrary] = await Promise.all([
     loadStages(active.id).catch((err) => {
       console.error('[pipelines/import] loadStages failed', err);
       return [];
     }),
     loadCustomFields(active.id).catch((err) => {
       console.error('[pipelines/import] loadCustomFields failed', err);
+      return [];
+    }),
+    loadBrandTags(active.id).catch((err) => {
+      console.error('[pipelines/import] loadBrandTags failed', err);
       return [];
     }),
   ]);
@@ -37,7 +42,11 @@ export default async function ImportLeadsPage() {
         subtitle={`Upload a CSV and map fields to ${active.name}`}
       />
       <div className="flex-1 overflow-auto p-6">
-        <ImportWizard stages={stages} initialCustomFields={customFields} />
+        <ImportWizard
+          stages={stages}
+          initialCustomFields={customFields}
+          tagLibrary={tagLibrary}
+        />
       </div>
     </>
   );
