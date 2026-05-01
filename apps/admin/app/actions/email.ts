@@ -226,6 +226,221 @@ export async function sendEmailToLead(input: {
   return { ok: true, threadId: dbThreadId, messageId: result.id };
 }
 
+// Returns the caller's email-send context: whether they can send, the
+// From address, and their signature. Used by the conversations composer
+// to decide whether to render the Compose button.
+export async function getMyEmailContext(): Promise<{
+  canSend: boolean;
+  fromAddr: string | null;
+  signature: string | null;
+  memberId: string | null;
+}> {
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { canSend: false, fromAddr: null, signature: null, memberId: null };
+  const admin = createAdminClient();
+  const { data: m } = await admin
+    .from('members')
+    .select('email_provider, email_oauth, oauth_scopes, email_signature')
+    .eq('id', user.id)
+    .maybeSingle();
+  const oauth = (m?.email_oauth ?? null) as { account_email?: string } | null;
+  const canSend =
+    !!m && m.email_provider === 'google' && (m.oauth_scopes ?? []).includes('email');
+  return {
+    canSend,
+    fromAddr: oauth?.account_email ?? null,
+    signature: m?.email_signature ?? null,
+    memberId: user.id,
+  };
+}
+
+// Generalized send used by the conversations composer. Supports either a
+// CRM lead (looks up the email + enforces DNC) or a free-form recipient
+// address. Reuses the same thread + message persistence as
+// sendEmailToLead. When `threadId` is set, the message is sent as a reply
+// within that Gmail thread.
+export async function sendEmail(input: {
+  leadId?: string | null;
+  toAddr?: string | null;
+  subject: string;
+  bodyHtml: string;
+  bodyText?: string | null;
+  threadId?: string | null;
+}): Promise<
+  { ok: true; threadId: string; messageId: string } | { ok: false; error: string }
+> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand' };
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: 'Not authenticated' };
+
+  const subject = input.subject.trim();
+  const bodyHtml = input.bodyHtml.trim();
+  if (!subject) return { ok: false, error: 'Subject is required' };
+  if (!bodyHtml) return { ok: false, error: 'Body is required' };
+
+  const admin = createAdminClient();
+  const { data: m } = await admin
+    .from('members')
+    .select('email_provider, email_oauth, oauth_scopes, full_name')
+    .eq('id', user.id)
+    .maybeSingle();
+  const oauth = (m?.email_oauth ?? null) as { account_email?: string } | null;
+  if (!m || m.email_provider !== 'google' || !(m.oauth_scopes ?? []).includes('email')) {
+    return { ok: false, error: 'Email is not connected. Visit /settings/connections.' };
+  }
+  if (!oauth?.account_email) {
+    return { ok: false, error: 'Connected Google account is missing an email address.' };
+  }
+
+  // Resolve recipient: lead lookup OR free-form address.
+  let toAddr: string;
+  let leadId: string | null = null;
+  if (input.leadId) {
+    const { data: lead } = await supabase
+      .from('leads')
+      .select('id, brand_id, email, do_not_email')
+      .eq('id', input.leadId)
+      .maybeSingle();
+    if (!lead) return { ok: false, error: 'Lead not found' };
+    if (lead.brand_id !== active.id) return { ok: false, error: 'Forbidden' };
+    if (!lead.email) return { ok: false, error: 'Lead has no email address' };
+    if (lead.do_not_email) return { ok: false, error: 'Lead is opted out of email' };
+    toAddr = lead.email;
+    leadId = lead.id;
+  } else {
+    const trimmed = (input.toAddr ?? '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      return { ok: false, error: 'Recipient email is required' };
+    }
+    toAddr = trimmed;
+    // Best-effort: link to a brand lead if one exists with this email.
+    const { data: matchedLead } = await supabase
+      .from('leads')
+      .select('id, do_not_email')
+      .eq('brand_id', active.id)
+      .ilike('email', trimmed)
+      .limit(1)
+      .maybeSingle();
+    if (matchedLead) {
+      if (matchedLead.do_not_email) {
+        return { ok: false, error: 'A matching lead is opted out of email' };
+      }
+      leadId = matchedLead.id;
+    }
+  }
+
+  // For replies: pull prior message id for In-Reply-To + ext thread id.
+  let inReplyTo: string | null = null;
+  let references: string[] = [];
+  let extThreadId: string | null = null;
+  if (input.threadId) {
+    const { data: t } = await supabase
+      .from('email_threads')
+      .select('ext_thread_id')
+      .eq('id', input.threadId)
+      .maybeSingle();
+    if (!t) return { ok: false, error: 'Thread not found' };
+    extThreadId = t.ext_thread_id;
+    const { data: prior } = await supabase
+      .from('email_messages')
+      .select('ext_message_id')
+      .eq('thread_id', input.threadId)
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (prior?.ext_message_id) {
+      inReplyTo = `<${prior.ext_message_id}>`;
+      references = [`<${prior.ext_message_id}>`];
+    }
+  }
+
+  let result;
+  try {
+    result = await sendMessage({
+      memberId: user.id,
+      fromAddr: oauth.account_email,
+      fromName: m.full_name ?? null,
+      toAddrs: [toAddr],
+      subject,
+      bodyHtml,
+      bodyText: input.bodyText ?? null,
+      inReplyTo,
+      references,
+      threadId: extThreadId,
+    });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+
+  const sentAt = new Date().toISOString();
+  const snippet = textSnippet(input.bodyText ?? stripHtml(bodyHtml));
+
+  let dbThreadId = input.threadId ?? null;
+  if (!dbThreadId) {
+    const { data: existing } = await supabase
+      .from('email_threads')
+      .select('id')
+      .eq('member_id', user.id)
+      .eq('ext_thread_id', result.threadId)
+      .maybeSingle();
+    dbThreadId = existing?.id ?? null;
+  }
+
+  if (!dbThreadId) {
+    const { data: ins, error: insErr } = await supabase
+      .from('email_threads')
+      .insert({
+        brand_id: active.id,
+        lead_id: leadId,
+        member_id: user.id,
+        ext_provider: 'google',
+        ext_thread_id: result.threadId,
+        subject,
+        snippet,
+        last_message_at: sentAt,
+      })
+      .select('id')
+      .single();
+    if (insErr || !ins) {
+      return { ok: false, error: insErr?.message ?? 'Failed to record thread' };
+    }
+    dbThreadId = ins.id;
+  } else {
+    await supabase
+      .from('email_threads')
+      .update({ subject, snippet, last_message_at: sentAt })
+      .eq('id', dbThreadId);
+  }
+
+  const { error: msgErr } = await supabase.from('email_messages').insert({
+    thread_id: dbThreadId,
+    direction: 'outbound',
+    ext_message_id: result.id,
+    from_addr: oauth.account_email,
+    to_addrs: [toAddr],
+    subject,
+    snippet,
+    body_html: bodyHtml,
+    body_text: input.bodyText ?? null,
+    sent_at: sentAt,
+    member_id: user.id,
+  });
+  if (msgErr) {
+    return { ok: false, error: msgErr.message };
+  }
+
+  revalidatePath('/conversations');
+  if (leadId) revalidatePath('/leads');
+  return { ok: true, threadId: dbThreadId, messageId: result.id };
+}
+
 export async function updateMyEmailSignature(input: {
   signature: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {

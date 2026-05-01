@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getEmailThreadMessages } from '@/app/actions/email';
 import type { BrandEmailThreadRow } from '@/lib/email/threads';
+import { ConversationComposer } from './conversation-composer';
 
 type Message = {
   id: string;
@@ -36,17 +37,32 @@ export function ConversationsView({
   scope,
   initialThreadId,
   currentMemberId,
+  canSend,
+  fromAddr,
+  signature,
 }: {
   threads: BrandEmailThreadRow[];
   scope: 'mine' | 'all';
   initialThreadId: string | null;
   currentMemberId: string | null;
+  canSend: boolean;
+  fromAddr: string | null;
+  signature: string | null;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [activeId, setActiveId] = useState<string | null>(initialThreadId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const [composerMode, setComposerMode] = useState<'compose' | 'reply' | null>(null);
+
+  async function reloadActive() {
+    if (!activeId) return;
+    setLoading(true);
+    const res = await getEmailThreadMessages({ threadId: activeId });
+    setMessages(res.messages as Message[]);
+    setLoading(false);
+  }
 
   useEffect(() => {
     if (!activeId) {
@@ -61,6 +77,13 @@ export function ConversationsView({
   }, [activeId]);
 
   const activeThread = threads.find((t) => t.id === activeId) ?? null;
+  // Pick the most recent inbound message's From: as the reply target.
+  // Fallback to the thread's leadEmail for outbound-only threads.
+  const replyToAddr = (() => {
+    if (!activeThread) return null;
+    const lastInbound = [...messages].reverse().find((m) => m.direction === 'inbound');
+    return lastInbound?.fromAddr || activeThread.leadEmail || null;
+  })();
 
   function setScope(next: 'mine' | 'all') {
     const params = new URLSearchParams(searchParams.toString());
@@ -72,6 +95,7 @@ export function ConversationsView({
 
   function selectThread(id: string) {
     setActiveId(id);
+    setComposerMode(null);
     const params = new URLSearchParams(searchParams.toString());
     params.set('thread', id);
     router.replace(`/conversations?${params.toString()}`, { scroll: false });
@@ -81,6 +105,21 @@ export function ConversationsView({
     <div className="flex flex-1 overflow-hidden">
       {/* Left pane — thread list */}
       <div className="flex w-[340px] shrink-0 flex-col border-r border-line bg-canvas">
+        {/* Compose row */}
+        {canSend && (
+          <div className="shrink-0 border-b border-line p-3">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveId(null);
+                setComposerMode('compose');
+              }}
+              className="w-full rounded-lg bg-teal px-3 py-2 text-[12.5px] font-medium text-white hover:bg-teal/90"
+            >
+              + New email
+            </button>
+          </div>
+        )}
         {/* Channel filter — today only Email is wired. */}
         <div className="flex shrink-0 gap-1 border-b border-line p-3">
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-teal/15 px-3 py-1.5 text-[11.5px] font-medium text-teal">
@@ -168,32 +207,72 @@ export function ConversationsView({
         </ul>
       </div>
 
-      {/* Right pane — messages */}
+      {/* Right pane — messages or composer */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {!activeThread ? (
+        {composerMode === 'compose' && canSend && fromAddr ? (
+          <ConversationComposer
+            mode={{ kind: 'compose' }}
+            fromAddr={fromAddr}
+            signature={signature}
+            onCancel={() => setComposerMode(null)}
+            onSent={() => {
+              setComposerMode(null);
+              router.refresh();
+            }}
+          />
+        ) : composerMode === 'reply' && canSend && fromAddr && activeThread && replyToAddr ? (
+          <ConversationComposer
+            mode={{
+              kind: 'reply',
+              threadId: activeThread.id,
+              subject: activeThread.subject ?? '',
+              toAddr: replyToAddr,
+              leadId: activeThread.leadId,
+            }}
+            fromAddr={fromAddr}
+            signature={signature}
+            onCancel={() => setComposerMode(null)}
+            onSent={async () => {
+              setComposerMode(null);
+              await reloadActive();
+              router.refresh();
+            }}
+          />
+        ) : !activeThread ? (
           <div className="flex flex-1 items-center justify-center text-[12.5px] text-txt-3">
             Select a conversation to view messages.
           </div>
         ) : (
           <>
-            <div className="shrink-0 border-b border-line bg-surface px-6 py-4">
-              <div className="text-[14px] font-semibold text-txt-1">
-                {activeThread.subject || '(no subject)'}
+            <div className="flex shrink-0 items-start justify-between border-b border-line bg-surface px-6 py-4">
+              <div>
+                <div className="text-[14px] font-semibold text-txt-1">
+                  {activeThread.subject || '(no subject)'}
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-[11.5px] text-txt-3">
+                  {activeThread.leadId ? (
+                    <Link
+                      href={`/leads?lead=${activeThread.leadId}`}
+                      className="text-teal hover:underline"
+                    >
+                      {activeThread.leadName || activeThread.leadEmail || 'Open lead'}
+                    </Link>
+                  ) : (
+                    <span>{activeThread.leadEmail || 'Unmatched'}</span>
+                  )}
+                  <span>·</span>
+                  <span>{activeThread.memberName ?? ''}</span>
+                </div>
               </div>
-              <div className="mt-1 flex items-center gap-2 text-[11.5px] text-txt-3">
-                {activeThread.leadId ? (
-                  <Link
-                    href={`/leads?lead=${activeThread.leadId}`}
-                    className="text-teal hover:underline"
-                  >
-                    {activeThread.leadName || activeThread.leadEmail || 'Open lead'}
-                  </Link>
-                ) : (
-                  <span>{activeThread.leadEmail || 'Unmatched'}</span>
-                )}
-                <span>·</span>
-                <span>{activeThread.memberName ?? ''}</span>
-              </div>
+              {canSend && replyToAddr && (
+                <button
+                  type="button"
+                  onClick={() => setComposerMode('reply')}
+                  className="shrink-0 rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90"
+                >
+                  Reply
+                </button>
+              )}
             </div>
             <div className="flex-1 overflow-auto p-6">
               {loading ? (
