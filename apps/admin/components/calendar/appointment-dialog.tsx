@@ -11,6 +11,12 @@ import { searchLeads } from '@/app/actions/leads';
 import { APPT_STATUSES, type AppointmentStatus, type CalendarAppointment } from '@/lib/appointment-types';
 
 export type AppointmentDialogTeamOpt = { id: string; name: string };
+export type AppointmentDialogCalendarOpt = {
+  id: string;
+  name: string;
+  color: string | null;
+  ownerMemberId: string | null;
+};
 
 type LeadOpt = { id: string; name: string; phone: string | null; email: string | null };
 
@@ -37,6 +43,7 @@ export function AppointmentDialog({
   presetStartIso,
   presetLead,
   team,
+  calendars = [],
   onClose,
 }: {
   mode: 'create' | 'edit';
@@ -44,6 +51,7 @@ export function AppointmentDialog({
   presetStartIso?: string | null;
   presetLead?: { id: string; name: string } | null;
   team: AppointmentDialogTeamOpt[];
+  calendars?: AppointmentDialogCalendarOpt[];
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -56,16 +64,30 @@ export function AppointmentDialog({
   const [endsLocal, setEndsLocal] = useState(isoToLocalInput(appointment?.endsAt ?? null));
   const [location, setLocation] = useState(appointment?.location ?? '');
   const [notes, setNotes] = useState(appointment?.notes ?? '');
+  const initialCalendarId =
+    appointment?.calendarId ?? calendars[0]?.id ?? '';
+  const [calendarId, setCalendarId] = useState<string>(initialCalendarId);
+  const initialCalendar = calendars.find((c) => c.id === initialCalendarId) ?? null;
   const [memberId, setMemberId] = useState<string>(
-    appointment?.memberId ?? team[0]?.id ?? '',
+    appointment?.memberId ?? initialCalendar?.ownerMemberId ?? team[0]?.id ?? '',
   );
   const [status, setStatus] = useState<AppointmentStatus>(appointment?.status ?? 'scheduled');
+
+  // When the agent picks a different calendar, default the assigned setter to
+  // that calendar's owner so the closer sees their own appointments.
+  function pickCalendar(id: string) {
+    setCalendarId(id);
+    if (mode === 'create') {
+      const cal = calendars.find((c) => c.id === id);
+      if (cal?.ownerMemberId) setMemberId(cal.ownerMemberId);
+    }
+  }
 
   // Lead picker state — only relevant in create mode.
   const [selectedLead, setSelectedLead] = useState<LeadOpt | null>(
     presetLead
       ? { id: presetLead.id, name: presetLead.name, phone: null, email: null }
-      : appointment
+      : appointment?.leadId
         ? {
             id: appointment.leadId,
             name: appointment.leadName ?? 'Lead',
@@ -128,6 +150,11 @@ export function AppointmentDialog({
         setSaving(false);
         return;
       }
+      if (calendars.length > 0 && !calendarId) {
+        setError('Pick a calendar.');
+        setSaving(false);
+        return;
+      }
       const res = await createAppointment({
         leadId: selectedLead.id,
         title: title.trim(),
@@ -136,6 +163,7 @@ export function AppointmentDialog({
         location: location || null,
         notes: notes || null,
         memberId: memberId || null,
+        calendarId: calendarId || null,
         status,
       });
       setSaving(false);
@@ -152,6 +180,7 @@ export function AppointmentDialog({
         location: location || null,
         notes: notes || null,
         memberId: memberId || null,
+        calendarId: calendarId || null,
         status,
       });
       setSaving(false);
@@ -299,6 +328,23 @@ export function AppointmentDialog({
               />
             </Field>
           </div>
+
+          {calendars.length > 0 && (
+            <Field label="Calendar">
+              <select
+                value={calendarId}
+                onChange={(e) => pickCalendar(e.target.value)}
+                className="w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60"
+              >
+                <option value="">No calendar</option>
+                {calendars.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
 
           <Field label="Assigned to">
             <select

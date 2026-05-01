@@ -11,7 +11,11 @@ import {
   localDayKey,
   zonedToUtcIso,
 } from '@/lib/datetime';
-import { AppointmentDialog, type AppointmentDialogTeamOpt } from './appointment-dialog';
+import {
+  AppointmentDialog,
+  type AppointmentDialogCalendarOpt,
+  type AppointmentDialogTeamOpt,
+} from './appointment-dialog';
 
 const STATUS_TONE: Record<string, string> = {
   confirmed: 'border-ll/60 bg-ll/15 text-ll',
@@ -21,6 +25,16 @@ const STATUS_TONE: Record<string, string> = {
   rescheduled: 'border-hb/60 bg-hb/15 text-hb',
   no_show: 'border-hp/60 bg-hp/15 text-hp',
   cancelled: 'border-line-2 bg-canvas text-txt-3 line-through',
+};
+
+// Per-calendar accent map. The calendar.color value is a design token from
+// the calendars-manager picker (teal/hp/vl/amber). Falls back to the status
+// tone so legacy untagged appointments keep their colors.
+const CALENDAR_TONE: Record<string, string> = {
+  teal: 'border-teal/60 bg-teal/15 text-teal',
+  hp: 'border-hp/60 bg-hp/15 text-hp',
+  vl: 'border-vl/60 bg-vl/15 text-vl',
+  amber: 'border-amber-500/60 bg-amber-500/15 text-amber-700',
 };
 
 // Start hour and total hours rendered. We render 7am..9pm (14 rows × 56px).
@@ -59,6 +73,8 @@ export function WeekView({
   team,
   agentFilterId,
   agentOptions,
+  calendars,
+  calendarFilterId,
   timezone,
 }: {
   weekStartIso: string;
@@ -66,8 +82,11 @@ export function WeekView({
   team: AppointmentDialogTeamOpt[];
   agentFilterId: string | null;
   agentOptions: AppointmentDialogTeamOpt[];
+  calendars: AppointmentDialogCalendarOpt[];
+  calendarFilterId: string | null;
   timezone: string;
 }) {
+  const calendarById = new Map(calendars.map((c) => [c.id, c]));
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -114,6 +133,14 @@ export function WeekView({
     router.push(qs ? `/calendar?${qs}` : '/calendar');
   }
 
+  function setCalendar(value: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set('calendar', value);
+    else params.delete('calendar');
+    const qs = params.toString();
+    router.push(qs ? `/calendar?${qs}` : '/calendar');
+  }
+
   const monthShort = (m: number) =>
     ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1] ?? '';
   const first = dayParts[0]!;
@@ -154,6 +181,20 @@ export function WeekView({
         </div>
         <div className="text-[13px] font-semibold">{rangeLabel}</div>
         <div className="ml-auto flex items-center gap-2">
+          {calendars.length > 0 && (
+            <select
+              value={calendarFilterId ?? ''}
+              onChange={(e) => setCalendar(e.target.value)}
+              className="rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12px] outline-none focus:border-teal/60"
+            >
+              <option value="">All calendars</option>
+              {calendars.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
           <select
             value={agentFilterId ?? ''}
             onChange={(e) => setAgent(e.target.value)}
@@ -251,7 +292,9 @@ export function WeekView({
                 />
               ))}
               {list.map((a) => {
-                const tone = STATUS_TONE[a.status] ?? 'border-line bg-canvas text-txt-2';
+                const cal = a.calendarId ? calendarById.get(a.calendarId) : null;
+                const calTone = cal?.color ? CALENDAR_TONE[cal.color] : null;
+                const tone = calTone ?? STATUS_TONE[a.status] ?? 'border-line bg-canvas text-txt-2';
                 return (
                   <button
                     key={a.id}
@@ -281,6 +324,7 @@ export function WeekView({
           appointment={editing}
           presetStartIso={createPreset?.startIso ?? null}
           team={team}
+          calendars={calendars}
           onClose={() => {
             setCreatePreset(null);
             setEditing(null);

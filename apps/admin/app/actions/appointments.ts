@@ -4,6 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
 import { APPT_STATUSES, type AppointmentStatus } from '@/lib/appointments';
+import { memberCanBookCalendar } from '@/lib/calendars';
+import { pushAppointment, deleteExternalEvent } from '@/lib/calendar/sync';
 
 function isStatus(value: string): value is AppointmentStatus {
   return (APPT_STATUSES as readonly string[]).includes(value);
@@ -17,6 +19,7 @@ export async function createAppointment(input: {
   location?: string | null;
   notes?: string | null;
   memberId?: string | null;
+  calendarId?: string | null;
   status?: AppointmentStatus;
 }) {
   const active = await getActiveBrand();
@@ -39,12 +42,19 @@ export async function createAppointment(input: {
     .maybeSingle();
   if (!lead) return { ok: false as const, error: 'Lead not found.' };
 
+  // If a calendar is requested, the caller must be allowed to book into it.
+  if (input.calendarId) {
+    const allowed = await memberCanBookCalendar(active.id, input.calendarId, user.id);
+    if (!allowed) return { ok: false as const, error: 'Not allowed to book this calendar.' };
+  }
+
   const { data, error } = await supabase
     .from('appointments')
     .insert({
       brand_id: active.id,
       lead_id: input.leadId,
       member_id: input.memberId ?? user.id,
+      calendar_id: input.calendarId ?? null,
       title,
       starts_at: input.startsAt,
       ends_at: input.endsAt ?? null,
@@ -64,6 +74,9 @@ export async function createAppointment(input: {
     payload: { appointment_id: data.id, starts_at: input.startsAt, title },
   });
 
+  // Best-effort external push; failures degrade to ext_status='failed'.
+  if (input.calendarId) await pushAppointment(data.id);
+
   revalidatePath('/calendar');
   revalidatePath('/dashboard');
   revalidatePath('/leads');
@@ -78,6 +91,7 @@ export async function updateAppointment(input: {
   location?: string | null;
   notes?: string | null;
   memberId?: string | null;
+  calendarId?: string | null;
   status?: AppointmentStatus;
 }) {
   const active = await getActiveBrand();
@@ -89,6 +103,7 @@ export async function updateAppointment(input: {
     location?: string | null;
     notes?: string | null;
     member_id?: string | null;
+    calendar_id?: string | null;
     status?: AppointmentStatus;
   };
   const patch: AppointmentPatch = {};
@@ -102,6 +117,7 @@ export async function updateAppointment(input: {
   if (input.location !== undefined) patch.location = input.location?.trim() || null;
   if (input.notes !== undefined) patch.notes = input.notes?.trim() || null;
   if (input.memberId !== undefined) patch.member_id = input.memberId;
+  if (input.calendarId !== undefined) patch.calendar_id = input.calendarId;
   if (input.status !== undefined) {
     if (!isStatus(input.status)) return { ok: false as const, error: 'Invalid status.' };
     patch.status = input.status;
@@ -109,12 +125,30 @@ export async function updateAppointment(input: {
   if (Object.keys(patch).length === 0) return { ok: true as const };
 
   const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false as const, error: 'Not authenticated.' };
+
+  if (input.calendarId !== undefined && input.calendarId) {
+    const allowed = await memberCanBookCalendar(active.id, input.calendarId, user.id);
+    if (!allowed) return { ok: false as const, error: 'Not allowed to book this calendar.' };
+  }
+
   const { error } = await supabase
     .from('appointments')
     .update(patch)
     .eq('id', input.id)
     .eq('brand_id', active.id);
   if (error) return { ok: false as const, error: error.message };
+
+  // Push if there's a calendar binding (whether changed or pre-existing).
+  const { data: row } = await supabase
+    .from('appointments')
+    .select('calendar_id')
+    .eq('id', input.id)
+    .maybeSingle();
+  if (row?.calendar_id) await pushAppointment(input.id);
 
   revalidatePath('/calendar');
   revalidatePath('/dashboard');
@@ -133,12 +167,25 @@ export async function deleteAppointment(input: { id: string }) {
   const active = await getActiveBrand();
   if (!active) return { ok: false as const, error: 'No active brand.' };
   const supabase = await createServerClient();
+  // Capture the external binding before delete so we can mirror the deletion.
+  const { data: row } = await supabase
+    .from('appointments')
+    .select('calendar_id, ext_event_id')
+    .eq('id', input.id)
+    .eq('brand_id', active.id)
+    .maybeSingle();
+
   const { error } = await supabase
     .from('appointments')
     .delete()
     .eq('id', input.id)
     .eq('brand_id', active.id);
   if (error) return { ok: false as const, error: error.message };
+
+  if (row?.calendar_id && row.ext_event_id) {
+    await deleteExternalEvent({ calendarId: row.calendar_id, extEventId: row.ext_event_id });
+  }
+
   revalidatePath('/calendar');
   revalidatePath('/dashboard');
   revalidatePath('/leads');

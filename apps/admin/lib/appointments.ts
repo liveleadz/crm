@@ -2,11 +2,16 @@ import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
 import { addLocalDaysIso, localStartOfWeekIso } from './datetime';
 import type {
+  AppointmentExtStatus,
   AppointmentStatus,
   CalendarAppointment,
 } from './appointment-types';
 
-export type { AppointmentStatus, CalendarAppointment } from './appointment-types';
+export type {
+  AppointmentExtStatus,
+  AppointmentStatus,
+  CalendarAppointment,
+} from './appointment-types';
 export { APPT_STATUSES } from './appointment-types';
 
 // Loads every appointment that intersects [fromIso, toIso) for the brand.
@@ -22,7 +27,7 @@ export async function loadCalendarAppointments(
   let query = supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, title, status, location, notes, member_id, lead_id, leads(first_name, last_name, phone)',
+      'id, starts_at, ends_at, title, status, location, notes, member_id, lead_id, calendar_id, ext_status, ext_event_id, leads(first_name, last_name, phone)',
     )
     .eq('brand_id', brandId)
     .gte('starts_at', fromIso)
@@ -67,6 +72,9 @@ export async function loadCalendarAppointments(
       leadPhone: lead?.phone ?? null,
       memberId: a.member_id,
       memberName: a.member_id ? memberById.get(a.member_id) ?? null : null,
+      calendarId: a.calendar_id ?? null,
+      extStatus: (a.ext_status ?? 'local') as AppointmentExtStatus,
+      extEventId: a.ext_event_id ?? null,
     };
   });
 }

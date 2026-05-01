@@ -21,6 +21,8 @@ export const APPT_STATUSES: AppointmentStatus[] = [
   'pending',
 ];
 
+export type AppointmentExtStatus = 'local' | 'pushed' | 'failed' | 'ext_only';
+
 export type CalendarAppointment = {
   id: string;
   startsAt: string;
@@ -29,9 +31,12 @@ export type CalendarAppointment = {
   status: AppointmentStatus;
   location: string | null;
   notes: string | null;
-  leadId: string;
+  leadId: string | null;
   leadName: string | null;
   leadPhone: string | null;
   memberId: string | null;
   memberName: string | null;
+  calendarId: string | null;
+  extStatus: AppointmentExtStatus;
+  extEventId: string | null;
 };

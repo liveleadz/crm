@@ -17,10 +17,14 @@ export type Database = {
       appointments: {
         Row: {
           brand_id: string
+          calendar_id: string | null
           created_at: string
           ends_at: string | null
+          ext_etag: string | null
+          ext_event_id: string | null
+          ext_status: string
           id: string
-          lead_id: string
+          lead_id: string | null
           location: string | null
           member_id: string | null
           notes: string | null
@@ -30,10 +34,14 @@ export type Database = {
         }
         Insert: {
           brand_id: string
+          calendar_id?: string | null
           created_at?: string
           ends_at?: string | null
+          ext_etag?: string | null
+          ext_event_id?: string | null
+          ext_status?: string
           id?: string
-          lead_id: string
+          lead_id?: string | null
           location?: string | null
           member_id?: string | null
           notes?: string | null
@@ -43,10 +51,14 @@ export type Database = {
         }
         Update: {
           brand_id?: string
+          calendar_id?: string | null
           created_at?: string
           ends_at?: string | null
+          ext_etag?: string | null
+          ext_event_id?: string | null
+          ext_status?: string
           id?: string
-          lead_id?: string
+          lead_id?: string | null
           location?: string | null
           member_id?: string | null
           notes?: string | null
@@ -60,6 +72,13 @@ export type Database = {
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "appointments_calendar_id_fkey"
+            columns: ["calendar_id"]
+            isOneToOne: false
+            referencedRelation: "calendars"
             referencedColumns: ["id"]
           },
           {
@@ -279,6 +298,108 @@ export type Database = {
         }
         Relationships: []
       }
+      calendar_members: {
+        Row: {
+          calendar_id: string
+          can_book: boolean
+          created_at: string
+          is_owner: boolean
+          member_id: string
+        }
+        Insert: {
+          calendar_id: string
+          can_book?: boolean
+          created_at?: string
+          is_owner?: boolean
+          member_id: string
+        }
+        Update: {
+          calendar_id?: string
+          can_book?: boolean
+          created_at?: string
+          is_owner?: boolean
+          member_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "calendar_members_calendar_id_fkey"
+            columns: ["calendar_id"]
+            isOneToOne: false
+            referencedRelation: "calendars"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "calendar_members_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      calendars: {
+        Row: {
+          brand_id: string
+          color: string | null
+          created_at: string
+          default_duration_min: number
+          ext_calendar_id: string | null
+          ext_last_sync_at: string | null
+          ext_provider: string | null
+          ext_sync_token: string | null
+          id: string
+          is_active: boolean
+          name: string
+          owner_member_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          brand_id: string
+          color?: string | null
+          created_at?: string
+          default_duration_min?: number
+          ext_calendar_id?: string | null
+          ext_last_sync_at?: string | null
+          ext_provider?: string | null
+          ext_sync_token?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          owner_member_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          brand_id?: string
+          color?: string | null
+          created_at?: string
+          default_duration_min?: number
+          ext_calendar_id?: string | null
+          ext_last_sync_at?: string | null
+          ext_provider?: string | null
+          ext_sync_token?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          owner_member_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "calendars_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "calendars_owner_member_id_fkey"
+            columns: ["owner_member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       calls: {
         Row: {
           brand_id: string
@@ -439,57 +560,6 @@ export type Database = {
           },
         ]
       }
-      inbound_routes: {
-        Row: {
-          brand_id: string
-          last_rung_member_id: string | null
-          member_ids: string[]
-          number_id: string
-          ring_timeout_sec: number
-          strategy: string
-          updated_at: string
-          voicemail_enabled: boolean
-          voicemail_greeting: string | null
-        }
-        Insert: {
-          brand_id: string
-          last_rung_member_id?: string | null
-          member_ids?: string[]
-          number_id: string
-          ring_timeout_sec?: number
-          strategy?: string
-          updated_at?: string
-          voicemail_enabled?: boolean
-          voicemail_greeting?: string | null
-        }
-        Update: {
-          brand_id?: string
-          last_rung_member_id?: string | null
-          member_ids?: string[]
-          number_id?: string
-          ring_timeout_sec?: number
-          strategy?: string
-          updated_at?: string
-          voicemail_enabled?: boolean
-          voicemail_greeting?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "inbound_routes_brand_id_fkey"
-            columns: ["brand_id"]
-            isOneToOne: false
-            referencedRelation: "brands"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "inbound_routes_number_id_fkey"
-            columns: ["number_id"]
-            isOneToOne: true
-            referencedRelation: "numbers"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       import_presets: {
         Row: {
           brand_id: string
@@ -550,6 +620,57 @@ export type Database = {
             columns: ["stage_id"]
             isOneToOne: false
             referencedRelation: "stages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      inbound_routes: {
+        Row: {
+          brand_id: string
+          last_rung_member_id: string | null
+          member_ids: string[]
+          number_id: string
+          ring_timeout_sec: number
+          strategy: string
+          updated_at: string
+          voicemail_enabled: boolean
+          voicemail_greeting: string | null
+        }
+        Insert: {
+          brand_id: string
+          last_rung_member_id?: string | null
+          member_ids?: string[]
+          number_id: string
+          ring_timeout_sec?: number
+          strategy?: string
+          updated_at?: string
+          voicemail_enabled?: boolean
+          voicemail_greeting?: string | null
+        }
+        Update: {
+          brand_id?: string
+          last_rung_member_id?: string | null
+          member_ids?: string[]
+          number_id?: string
+          ring_timeout_sec?: number
+          strategy?: string
+          updated_at?: string
+          voicemail_enabled?: boolean
+          voicemail_greeting?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "inbound_routes_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inbound_routes_number_id_fkey"
+            columns: ["number_id"]
+            isOneToOne: true
+            referencedRelation: "numbers"
             referencedColumns: ["id"]
           },
         ]
@@ -844,6 +965,7 @@ export type Database = {
           full_name: string | null
           id: string
           mobile_phone: string | null
+          oauth_scopes: string[]
           updated_at: string
         }
         Insert: {
@@ -855,6 +977,7 @@ export type Database = {
           full_name?: string | null
           id: string
           mobile_phone?: string | null
+          oauth_scopes?: string[]
           updated_at?: string
         }
         Update: {
@@ -866,6 +989,7 @@ export type Database = {
           full_name?: string | null
           id?: string
           mobile_phone?: string | null
+          oauth_scopes?: string[]
           updated_at?: string
         }
         Relationships: []
