@@ -17,7 +17,10 @@ import { runAutomations } from '@/lib/automation-engine';
 // profile and return (we do not backfill historical mail in Phase 2).
 //
 // Returns counts so the cron route can log a summary.
-export async function pullForMember(memberId: string): Promise<{
+export async function pullForMember(
+  memberId: string,
+  options: { force?: boolean } = {},
+): Promise<{
   inserted: number;
   skipped: number;
 }> {
@@ -41,9 +44,19 @@ export async function pullForMember(memberId: string): Promise<{
 
   const { data: state } = await admin
     .from('email_sync_state')
-    .select('last_history_id')
+    .select('last_history_id, last_synced_at')
     .eq('member_id', memberId)
     .maybeSingle();
+
+  // Debounce — if a sync ran less than 5s ago, treat this call as a no-op.
+  // Stops the cron and active-thread polling from racing each other. The
+  // cron's retry pass passes force=true to deliberately bypass it.
+  if (!options.force && state?.last_synced_at) {
+    const ageMs = Date.now() - new Date(state.last_synced_at).getTime();
+    if (ageMs >= 0 && ageMs < 5_000) {
+      return { inserted: 0, skipped: 0 };
+    }
+  }
 
   // First sync: seed checkpoint and return. Future ticks pull deltas.
   if (!state?.last_history_id) {

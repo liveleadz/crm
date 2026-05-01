@@ -5,6 +5,8 @@ import { useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getEmailThreadMessages, sendEmail } from '@/app/actions/email';
 import { searchLeads } from '@/app/actions/leads';
+import { refreshActiveThread } from '@/app/actions/email-refresh';
+import { useVisiblePoll } from '@/lib/use-visible-poll';
 import type { BrandEmailThreadRow } from '@/lib/email/threads';
 
 type Message = {
@@ -100,6 +102,27 @@ export function ConversationsView({
       });
     });
   }, [activeId]);
+
+  // Poll the open thread every 10s while the tab is visible. The hook
+  // pauses on hidden tabs to avoid burning Gmail API quota in the
+  // background. Only refetches messages when the server reports a new
+  // landing — keeps the UI from flickering on idle ticks.
+  useVisiblePoll(async () => {
+    if (!activeId) return;
+    const res = await refreshActiveThread(activeId);
+    if (!res.ok || !res.updated) return;
+    const next = await getEmailThreadMessages({ threadId: activeId });
+    setMessages(next.messages as Message[]);
+    // Refresh the thread list so the snippet/timestamp on the rail
+    // updates as well. Server component re-renders quickly enough that
+    // the active selection is preserved.
+    router.refresh();
+    requestAnimationFrame(() => {
+      messagesScrollRef.current?.scrollTo({
+        top: messagesScrollRef.current.scrollHeight,
+      });
+    });
+  }, 10_000);
 
   const activeThread = threads.find((t) => t.id === activeId) ?? null;
   // Reply target: the most recent inbound message's From, falling back

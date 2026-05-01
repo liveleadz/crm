@@ -53,6 +53,14 @@ export async function GET(request: Request) {
       const r = await pullForMember(m.id);
       inserted += r.inserted;
       skipped += r.skipped;
+      // Double-pass: if the first pull surfaced new messages, run one
+      // more delta immediately to catch mail that landed mid-pull. We
+      // bypass the 5s debounce here so the retry actually runs.
+      if (r.inserted > 0) {
+        const r2 = await pullForMember(m.id, { force: true });
+        inserted += r2.inserted;
+        skipped += r2.skipped;
+      }
     } catch (e) {
       failed += 1;
       console.error('[cron.email-pull]', m.id, (e as Error).message);
