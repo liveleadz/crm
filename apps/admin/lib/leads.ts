@@ -44,6 +44,7 @@ export type LeadDetail = {
   email: string | null;
   source: string;
   stageId: string | null;
+  ownerId: string | null;
   city: string | null;
   state: string | null;
   zip: string | null;
@@ -85,7 +86,7 @@ export async function loadLeadDetail(leadId: string, brandId: string) {
     supabase
       .from('leads')
       .select(
-        'id, first_name, last_name, phone, email, source, stage_id, city, state, zip, notes, do_not_call, do_not_email, created_at, updated_at',
+        'id, first_name, last_name, phone, email, source, stage_id, owner_id, city, state, zip, notes, do_not_call, do_not_email, created_at, updated_at',
       )
       .eq('id', leadId)
       .eq('brand_id', brandId)
@@ -120,6 +121,7 @@ export async function loadLeadDetail(leadId: string, brandId: string) {
     email: l.email,
     source: l.source,
     stageId: l.stage_id,
+    ownerId: l.owner_id ?? null,
     city: l.city,
     state: l.state,
     zip: l.zip,

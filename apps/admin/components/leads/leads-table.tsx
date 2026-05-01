@@ -301,6 +301,7 @@ export function LeadsTable({ leads, stages, stageById, tagLibrary, team }: Props
       <LeadDetailDrawer
         leadId={openLeadId}
         stages={stages}
+        team={team}
         onClose={() => setOpenLeadId(null)}
       />
       {bulkMode && (

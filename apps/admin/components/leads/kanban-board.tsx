@@ -61,10 +61,12 @@ export function KanbanBoard({
   stages,
   leads: initialLeads,
   tags,
+  team = [],
 }: {
   stages: LeadStage[];
   leads: LeadCard[];
   tags?: { id: string; name: string }[];
+  team?: { id: string; name: string }[];
 }) {
   const [leads, setLeads] = useState(initialLeads);
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
@@ -257,6 +259,7 @@ export function KanbanBoard({
       <LeadDetailDrawer
         leadId={openLeadId}
         stages={stages}
+        team={team}
         onClose={() => setOpenLeadId(null)}
       />
     </>

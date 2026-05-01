@@ -63,10 +63,12 @@ export function CallsList({
   stages,
   calls,
   dispositions,
+  team = [],
 }: {
   stages: LeadStage[];
   calls: CallRow[];
   dispositions: DispositionChoice[];
+  team?: { id: string; name: string }[];
 }) {
   // Map by code so the disposition column can resolve labels for both
   // active and archived codes (archived ones still appear on history but
@@ -442,6 +444,7 @@ export function CallsList({
       <LeadDetailDrawer
         leadId={openLeadId}
         stages={stages}
+        team={team}
         onClose={() => setOpenLeadId(null)}
       />
       <DispositionModal

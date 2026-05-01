@@ -1,0 +1,99 @@
+import 'server-only';
+import { createServerClient } from '@leadpilot/db/server';
+import type {
+  AppointmentStatus,
+  CalendarAppointment,
+} from './appointment-types';
+
+export type { AppointmentStatus, CalendarAppointment } from './appointment-types';
+export { APPT_STATUSES } from './appointment-types';
+
+// Loads every appointment that intersects [fromIso, toIso) for the brand.
+// Optionally filtered to a single member. Joins the lead row for display
+// labels and the member row for the assigned-setter avatar.
+export async function loadCalendarAppointments(
+  brandId: string,
+  fromIso: string,
+  toIso: string,
+  memberId?: string | null,
+): Promise<CalendarAppointment[]> {
+  const supabase = await createServerClient();
+  let query = supabase
+    .from('appointments')
+    .select(
+      'id, starts_at, ends_at, title, status, location, notes, member_id, lead_id, leads(first_name, last_name, phone)',
+    )
+    .eq('brand_id', brandId)
+    .gte('starts_at', fromIso)
+    .lt('starts_at', toIso)
+    .order('starts_at', { ascending: true })
+    .limit(500);
+  if (memberId) query = query.eq('member_id', memberId);
+  const { data } = await query;
+  const rows = data ?? [];
+
+  // Hydrate member display names in a single follow-up query (avoids
+  // ambiguous embedded-resource selection on the calls/members FK chain).
+  const memberIds = Array.from(
+    new Set(rows.map((r) => r.member_id).filter((m): m is string => !!m)),
+  );
+  const memberById = new Map<string, string>();
+  if (memberIds.length > 0) {
+    const { data: members } = await supabase
+      .from('members')
+      .select('id, full_name, email')
+      .in('id', memberIds);
+    for (const m of members ?? []) {
+      memberById.set(m.id, m.full_name?.trim() || m.email || 'Unknown');
+    }
+  }
+
+  return rows.map((a) => {
+    const lead = Array.isArray(a.leads) ? a.leads[0] : a.leads;
+    const leadName = lead
+      ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null
+      : null;
+    return {
+      id: a.id,
+      startsAt: a.starts_at,
+      endsAt: a.ends_at,
+      title: a.title,
+      status: a.status as AppointmentStatus,
+      location: a.location,
+      notes: a.notes,
+      leadId: a.lead_id,
+      leadName,
+      leadPhone: lead?.phone ?? null,
+      memberId: a.member_id,
+      memberName: a.member_id ? memberById.get(a.member_id) ?? null : null,
+    };
+  });
+}
+
+// Returns the local-day Monday for the given date. Used by the calendar
+// page to align week buckets so Mon..Sun always renders together.
+export function startOfWeekIso(d: Date): string {
+  const date = new Date(d);
+  date.setHours(0, 0, 0, 0);
+  // 0=Sun..6=Sat. Shift so Monday is week start.
+  const dow = date.getDay();
+  const diff = (dow + 6) % 7;
+  date.setDate(date.getDate() - diff);
+  return date.toISOString();
+}
+
+export function addDaysIso(iso: string, days: number): string {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
+}
+
+// Parses a "?week=YYYY-MM-DD" param into the Monday of that week. Falls
+// back to the current week when missing or malformed.
+export function parseWeekParam(value: string | undefined): string {
+  if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const d = new Date(`${value}T00:00:00`);
+    if (!Number.isNaN(d.getTime())) return startOfWeekIso(d);
+  }
+  return startOfWeekIso(new Date());
+}

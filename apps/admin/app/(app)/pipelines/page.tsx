@@ -3,6 +3,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadKanban } from '@/lib/leads';
 import { loadLists } from '@/lib/lists';
 import { loadBrandTags } from '@/lib/tags';
+import { loadTeam } from '@/lib/team';
 import { PageHeader } from '@/components/page-header';
 import { KanbanBoard } from '@/components/leads/kanban-board';
 import { NewLeadButton } from '@/components/leads/new-lead-button';
@@ -37,10 +38,15 @@ export default async function PipelinesPage({
   const excludeDnc = sp.dnc === '1';
   const excludeDne = sp.dne === '1';
 
-  const [lists, tagLibrary] = await Promise.all([
+  const [lists, tagLibrary, team] = await Promise.all([
     loadLists(active.id),
     loadBrandTags(active.id),
+    loadTeam(active.id),
   ]);
+  const teamOpts = team.map((t) => ({
+    id: t.memberId,
+    name: t.fullName ?? t.email,
+  }));
 
   const activeList = activeListId ? lists.find((l) => l.id === activeListId) ?? null : null;
   // Filter-source lists carry their criteria in URL params (q/source/tags/...);
@@ -127,6 +133,7 @@ export default async function PipelinesPage({
             stages={stages}
             leads={leads}
             tags={tagLibrary.map((t) => ({ id: t.id, name: t.name }))}
+            team={teamOpts}
           />
         </div>
       )}

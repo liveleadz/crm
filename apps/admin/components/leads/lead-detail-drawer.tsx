@@ -5,7 +5,10 @@ import { useRouter } from 'next/navigation';
 import {
   getLeadDetail,
   logCall,
+  moveLeadStage,
   setLeadConsent,
+  setLeadOwner,
+  updateLeadFields,
   updateLeadNotes,
   type CallDirection,
   type CallDisposition,
@@ -14,6 +17,7 @@ import type { LeadDetail, LeadStage, TimelineEntry } from '@/lib/leads';
 import { LeadTasksPanel } from '@/components/tasks/lead-tasks-panel';
 import { LeadTagsSection } from '@/components/tags/lead-tags-section';
 import { LeadScriptsSection } from '@/components/scripts/lead-scripts-section';
+import { AppointmentDialog } from '@/components/calendar/appointment-dialog';
 
 const DISPOSITION_LABEL: Record<string, string> = {
   connected: 'Connected',
@@ -66,18 +70,17 @@ function formatDuration(seconds: number | null) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function locationLine(l: LeadDetail) {
-  const parts = [l.city, l.state, l.zip].filter(Boolean);
-  return parts.length > 0 ? parts.join(', ') : '—';
-}
+export type DrawerTeamOpt = { id: string; name: string };
 
 export function LeadDetailDrawer({
   leadId,
   stages,
+  team = [],
   onClose,
 }: {
   leadId: string | null;
   stages: LeadStage[];
+  team?: DrawerTeamOpt[];
   onClose: () => void;
 }) {
   const [data, setData] = useState<{ lead: LeadDetail; timeline: TimelineEntry[] } | null>(
@@ -87,6 +90,7 @@ export function LeadDetailDrawer({
   const [notes, setNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [, startTransition] = useTransition();
   const router = useRouter();
 
@@ -154,10 +158,60 @@ export function LeadDetailDrawer({
     });
   }
 
+  // Optimistic field-level update. We patch local state first so the
+  // input doesn't flicker while the server round-trips, then revert on
+  // failure. The server normalizes empty strings to NULL.
+  function updateField<K extends keyof LeadDetail>(field: K, value: LeadDetail[K]) {
+    if (!data) return;
+    const prev = data.lead[field];
+    if (prev === value) return;
+    setData((d) => (d ? { ...d, lead: { ...d.lead, [field]: value } } : d));
+    startTransition(async () => {
+      const payload: Record<string, unknown> = { leadId: data.lead.id };
+      const map: Partial<Record<keyof LeadDetail, string>> = {
+        firstName: 'firstName',
+        lastName: 'lastName',
+        phone: 'phone',
+        email: 'email',
+        city: 'city',
+        state: 'state',
+        zip: 'zip',
+      };
+      const key = map[field];
+      if (!key) return;
+      payload[key] = value;
+      const res = await updateLeadFields(payload as Parameters<typeof updateLeadFields>[0]);
+      if (!res.ok) {
+        setData((d) => (d ? { ...d, lead: { ...d.lead, [field]: prev } } : d));
+      }
+    });
+  }
+
+  function changeStage(stageId: string) {
+    if (!data) return;
+    const prev = data.lead.stageId;
+    setData((d) => (d ? { ...d, lead: { ...d.lead, stageId } } : d));
+    startTransition(async () => {
+      const res = await moveLeadStage(data.lead.id, stageId);
+      if (!res.ok) {
+        setData((d) => (d ? { ...d, lead: { ...d.lead, stageId: prev } } : d));
+      }
+    });
+  }
+
+  function changeOwner(ownerId: string | null) {
+    if (!data) return;
+    const prev = data.lead.ownerId;
+    setData((d) => (d ? { ...d, lead: { ...d.lead, ownerId } } : d));
+    startTransition(async () => {
+      const res = await setLeadOwner({ leadId: data.lead.id, ownerId });
+      if (!res.ok) {
+        setData((d) => (d ? { ...d, lead: { ...d.lead, ownerId: prev } } : d));
+      }
+    });
+  }
+
   const lead = data?.lead;
-  const stageName = lead?.stageId
-    ? stages.find((s) => s.id === lead.stageId)?.name ?? '—'
-    : '—';
 
   return (
     <>
@@ -196,6 +250,20 @@ export function LeadDetailDrawer({
               Call
             </button>
           )}
+          {lead && (
+            <button
+              type="button"
+              onClick={() => setScheduleOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1 text-[11.5px] font-medium text-txt-2 hover:bg-canvas"
+              aria-label="Schedule appointment"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="5" width="18" height="16" rx="2" />
+                <path d="M16 3v4M8 3v4M3 11h18" strokeLinecap="round" />
+              </svg>
+              Schedule
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -218,17 +286,90 @@ export function LeadDetailDrawer({
               <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-txt-3">
                 Details
               </h4>
-              <dl className="grid grid-cols-[88px_1fr] gap-y-2 text-[12.5px]">
-                <dt className="text-txt-3">Stage</dt>
-                <dd className="font-medium">{stageName}</dd>
-                <dt className="text-txt-3">Source</dt>
+              <div className="grid grid-cols-2 gap-2.5">
+                <FieldInput
+                  label="First name"
+                  value={lead.firstName ?? ''}
+                  onCommit={(v) => updateField('firstName', v || null)}
+                />
+                <FieldInput
+                  label="Last name"
+                  value={lead.lastName ?? ''}
+                  onCommit={(v) => updateField('lastName', v || null)}
+                />
+                <FieldInput
+                  label="Phone"
+                  value={lead.phone ?? ''}
+                  onCommit={(v) => updateField('phone', v || null)}
+                  className="col-span-2"
+                />
+                <FieldInput
+                  label="Email"
+                  value={lead.email ?? ''}
+                  onCommit={(v) => updateField('email', v || null)}
+                  className="col-span-2"
+                />
+                <FieldInput
+                  label="City"
+                  value={lead.city ?? ''}
+                  onCommit={(v) => updateField('city', v || null)}
+                />
+                <div className="grid grid-cols-[1fr_88px] gap-2">
+                  <FieldInput
+                    label="State"
+                    value={lead.state ?? ''}
+                    onCommit={(v) => updateField('state', v || null)}
+                  />
+                  <FieldInput
+                    label="Zip"
+                    value={lead.zip ?? ''}
+                    onCommit={(v) => updateField('zip', v || null)}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2.5">
+                <label className="block">
+                  <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+                    Stage
+                  </span>
+                  <select
+                    value={lead.stageId ?? ''}
+                    onChange={(e) => changeStage(e.target.value)}
+                    className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-[12.5px] outline-none focus:border-teal/60"
+                  >
+                    {!lead.stageId && <option value="">—</option>}
+                    {stages.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+                    Owner
+                  </span>
+                  <select
+                    value={lead.ownerId ?? ''}
+                    onChange={(e) => changeOwner(e.target.value || null)}
+                    className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-[12.5px] outline-none focus:border-teal/60"
+                  >
+                    <option value="">Unassigned</option>
+                    {team.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <dl className="mt-3 grid grid-cols-[88px_1fr] gap-y-1.5 text-[11.5px] text-txt-3">
+                <dt>Source</dt>
                 <dd className="capitalize">{lead.source.replace('_', ' ')}</dd>
-                <dt className="text-txt-3">Email</dt>
-                <dd className="truncate">{lead.email ?? '—'}</dd>
-                <dt className="text-txt-3">Location</dt>
-                <dd>{locationLine(lead)}</dd>
-                <dt className="text-txt-3">Created</dt>
-                <dd className="text-txt-2">{formatDateTime(lead.createdAt)}</dd>
+                <dt>Created</dt>
+                <dd>{formatDateTime(lead.createdAt)}</dd>
               </dl>
             </section>
 
@@ -343,7 +484,61 @@ export function LeadDetailDrawer({
           </div>
         )}
       </aside>
+      {scheduleOpen && lead && (
+        <AppointmentDialog
+          mode="create"
+          presetLead={{ id: lead.id, name: fullName(lead) }}
+          team={team}
+          onClose={() => setScheduleOpen(false)}
+        />
+      )}
     </>
+  );
+}
+
+// Compact label + input that commits its value on blur (or Enter). Used
+// for the inline edits in the Details section. We mirror prop value into
+// local state so the input stays controlled but doesn't fire a server
+// update on every keystroke.
+function FieldInput({
+  label,
+  value,
+  onCommit,
+  className,
+}: {
+  label: string;
+  value: string;
+  onCommit: (next: string) => void;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+  return (
+    <label className={`block ${className ?? ''}`}>
+      <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        {label}
+      </span>
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          const next = draft.trim();
+          if (next !== (value ?? '')) onCommit(next);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            (e.target as HTMLInputElement).blur();
+          } else if (e.key === 'Escape') {
+            setDraft(value);
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-[12.5px] outline-none focus:border-teal/60"
+      />
+    </label>
   );
 }
 

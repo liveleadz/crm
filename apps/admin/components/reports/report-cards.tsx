@@ -2,10 +2,13 @@
 // disposition breakdown bars, daily trend sparkline. Pure presentation
 // — all aggregation lives in lib/reports.ts.
 
+import { Fragment } from 'react';
 import {
   type AgentRow,
   type DispositionRow,
+  type HeatmapCell,
   type ReportKpis,
+  type SourceRow,
   type TrendPoint,
   dispositionLabel,
   formatDuration,
@@ -365,6 +368,166 @@ export function TrendChart({ points }: { points: TrendPoint[] }) {
             strokeWidth={1.75}
           />
         </svg>
+      </div>
+    </div>
+  );
+}
+
+// Compact funnel-style breakdown of call performance per lead source.
+// Sorted by call volume; each row reads "calls — connects (rate) — sales".
+// 'unknown' is rendered last with a muted label so unmapped calls still
+// surface but don't dominate the eye.
+export function SourceFunnel({ rows }: { rows: SourceRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-line-2 bg-surface p-8 text-center text-[12px] text-txt-3">
+        No source data in this range.
+      </div>
+    );
+  }
+  const max = Math.max(1, ...rows.map((r) => r.calls));
+  return (
+    <div className="rounded-2xl border border-line bg-surface">
+      <div className="border-b border-line bg-canvas px-5 py-3">
+        <h3 className="text-[13.5px] font-semibold">By lead source</h3>
+        <p className="text-[11.5px] text-txt-3">
+          Where the connected leads came from. Connect and close rates per source.
+        </p>
+      </div>
+      <table className="w-full text-[12.5px]">
+        <thead>
+          <tr className="border-b border-line bg-canvas/50 text-left text-[10.5px] uppercase tracking-wide text-txt-3">
+            <th className="px-5 py-2 font-semibold">Source</th>
+            <th className="px-5 py-2 font-semibold">Volume</th>
+            <th className="px-5 py-2 text-right font-semibold">Calls</th>
+            <th className="px-5 py-2 text-right font-semibold">Connects</th>
+            <th className="px-5 py-2 text-right font-semibold">Connect %</th>
+            <th className="px-5 py-2 text-right font-semibold">Sales</th>
+            <th className="px-5 py-2 text-right font-semibold">Close %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const pct = max > 0 ? Math.max(2, Math.round((r.calls / max) * 100)) : 0;
+            const isUnknown = r.source === 'unknown';
+            return (
+              <tr
+                key={r.source}
+                className="border-b border-line last:border-b-0 hover:bg-canvas/40"
+              >
+                <td className="px-5 py-2">
+                  <span
+                    className={`text-[12.5px] capitalize ${isUnknown ? 'text-txt-3' : 'font-medium'}`}
+                  >
+                    {r.source.replace(/_/g, ' ')}
+                  </span>
+                </td>
+                <td className="px-5 py-2">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-canvas">
+                    <div
+                      className={`h-full ${isUnknown ? 'bg-txt-3/40' : 'bg-teal'}`}
+                      style={{ width: `${pct}%` }}
+                      aria-hidden
+                    />
+                  </div>
+                </td>
+                <td className="px-5 py-2 text-right tabular-nums">
+                  {r.calls.toLocaleString()}
+                </td>
+                <td className="px-5 py-2 text-right tabular-nums">
+                  {r.connects.toLocaleString()}
+                </td>
+                <td className="px-5 py-2 text-right tabular-nums text-txt-2">
+                  {formatPct(r.connectRate)}
+                </td>
+                <td className="px-5 py-2 text-right tabular-nums">
+                  {r.sales.toLocaleString()}
+                </td>
+                <td className="px-5 py-2 text-right tabular-nums text-txt-2">
+                  {formatPct(r.salesRate)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// 7×24 grid showing call density by hour-of-day × day-of-week. Cells
+// shaded by call count relative to the busiest cell. Tooltip via title
+// attribute keeps the markup tiny; a real popover is overkill here.
+export function DayOfWeekHeatmap({ cells }: { cells: HeatmapCell[] }) {
+  const max = Math.max(1, ...cells.map((c) => c.calls));
+  const totalCalls = cells.reduce((a, c) => a + c.calls, 0);
+  if (totalCalls === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-line-2 bg-surface p-8 text-center text-[12px] text-txt-3">
+        No calls in this range, so no heatmap to draw.
+      </div>
+    );
+  }
+  const byDow = new Map<number, HeatmapCell[]>();
+  for (const c of cells) {
+    const list = byDow.get(c.dow) ?? [];
+    list.push(c);
+    byDow.set(c.dow, list);
+  }
+  for (const list of byDow.values()) list.sort((a, b) => a.hour - b.hour);
+
+  return (
+    <div className="rounded-2xl border border-line bg-surface">
+      <div className="border-b border-line bg-canvas px-5 py-3">
+        <h3 className="text-[13.5px] font-semibold">When calls happen</h3>
+        <p className="text-[11.5px] text-txt-3">
+          Day-of-week × hour density (UTC). Darker cells = more calls; the
+          teal tint lifts when a slot also has connects.
+        </p>
+      </div>
+      <div className="overflow-x-auto px-5 py-4">
+        <div className="min-w-[640px]">
+          <div
+            className="grid items-center gap-1 text-[10px] text-txt-3"
+            style={{ gridTemplateColumns: '36px repeat(24, minmax(0, 1fr))' }}
+          >
+            <div />
+            {Array.from({ length: 24 }, (_, h) => (
+              <div key={h} className="text-center tabular-nums">
+                {h % 3 === 0 ? String(h).padStart(2, '0') : ''}
+              </div>
+            ))}
+            {DOW_LABELS.map((label, dow) => {
+              const row = byDow.get(dow) ?? [];
+              return (
+                <Fragment key={dow}>
+                  <div className="pr-2 text-right font-medium text-txt-3">
+                    {label}
+                  </div>
+                  {row.map((c) => {
+                    const intensity = c.calls === 0 ? 0 : 0.15 + 0.85 * (c.calls / max);
+                    const connectRate = c.calls > 0 ? c.connects / c.calls : 0;
+                    const tone = c.calls === 0
+                      ? 'bg-canvas border border-line/60'
+                      : connectRate >= 0.4
+                        ? 'bg-teal'
+                        : 'bg-txt-3';
+                    return (
+                      <div
+                        key={`${c.dow}-${c.hour}`}
+                        className={`h-5 rounded-sm ${tone}`}
+                        style={c.calls === 0 ? undefined : { opacity: intensity }}
+                        title={`${DOW_LABELS[c.dow]} ${String(c.hour).padStart(2, '0')}:00 — ${c.calls} calls, ${c.connects} connects (${formatPct(connectRate)})`}
+                      />
+                    );
+                  })}
+                </Fragment>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );

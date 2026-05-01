@@ -15,8 +15,10 @@ import { PageHeader } from '@/components/page-header';
 import { ReportFilters } from '@/components/reports/report-filters';
 import {
   AgentTable,
+  DayOfWeekHeatmap,
   DispositionBars,
   KpiCards,
+  SourceFunnel,
   TrendChart,
 } from '@/components/reports/report-cards';
 import { ExportButton } from '@/components/reports/export-button';
@@ -124,10 +126,12 @@ export default async function ReportsPage({
         />
         <KpiCards kpis={report.kpis} prevKpis={report.prevKpis} />
         <TrendChart points={report.trend} />
+        <DayOfWeekHeatmap cells={report.heatmap} />
         <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
           <AgentTable rows={report.byAgent} activeAgentId={agentId} />
           <DispositionBars rows={report.byDisposition} />
         </div>
+        <SourceFunnel rows={report.bySource} />
       </div>
     </>
   );

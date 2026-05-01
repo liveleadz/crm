@@ -136,6 +136,97 @@ export async function updateLeadNotes(leadId: string, notes: string) {
   return { ok: true as const };
 }
 
+// Inline edits from the lead detail drawer. Each field is optional; only
+// the keys present in `input` are applied. RLS + brand_id keep this safe.
+export async function updateLeadFields(input: {
+  leadId: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+}) {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false as const, error: 'No active brand.' };
+  type LeadPatch = {
+    updated_at: string;
+    first_name?: string | null;
+    last_name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    city?: string | null;
+    state?: string | null;
+    zip?: string | null;
+  };
+  const patch: LeadPatch = { updated_at: new Date().toISOString() };
+  const norm = (v: string | null | undefined) =>
+    v === undefined ? undefined : v === null ? null : v.trim() || null;
+  if (input.firstName !== undefined) patch.first_name = norm(input.firstName);
+  if (input.lastName !== undefined) patch.last_name = norm(input.lastName);
+  if (input.phone !== undefined) patch.phone = norm(input.phone);
+  if (input.email !== undefined) patch.email = norm(input.email);
+  if (input.city !== undefined) patch.city = norm(input.city);
+  if (input.state !== undefined) patch.state = norm(input.state);
+  if (input.zip !== undefined) patch.zip = norm(input.zip);
+  if (Object.keys(patch).length === 1) return { ok: true as const };
+
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('leads')
+    .update(patch)
+    .eq('id', input.leadId)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false as const, error: error.message };
+  revalidatePath('/leads');
+  revalidatePath('/dashboard');
+  return { ok: true as const };
+}
+
+// Single-lead owner assign used by the detail drawer. Mirrors
+// bulkAssignLeadsOwner but for one row. ownerId=null clears the owner.
+export async function setLeadOwner(input: { leadId: string; ownerId: string | null }) {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false as const, error: 'No active brand.' };
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('leads')
+    .update({ owner_id: input.ownerId, updated_at: new Date().toISOString() })
+    .eq('id', input.leadId)
+    .eq('brand_id', active.id);
+  if (error) return { ok: false as const, error: error.message };
+  revalidatePath('/leads');
+  return { ok: true as const };
+}
+
+// Typeahead helper for the appointment dialog's lead picker. Searches
+// name / phone / email; returns up to 10 matches scoped to the brand.
+export async function searchLeads(input: { query: string }) {
+  const active = await getActiveBrand();
+  if (!active) return [] as { id: string; name: string; phone: string | null; email: string | null }[];
+  const q = input.query.trim();
+  if (!q) return [];
+  const supabase = await createServerClient();
+  const esc = q.replace(/[%,]/g, ' ');
+  const pattern = `%${esc}%`;
+  const { data } = await supabase
+    .from('leads')
+    .select('id, first_name, last_name, phone, email')
+    .eq('brand_id', active.id)
+    .or(
+      `first_name.ilike.${pattern},last_name.ilike.${pattern},phone.ilike.${pattern},email.ilike.${pattern}`,
+    )
+    .order('updated_at', { ascending: false })
+    .limit(10);
+  return (data ?? []).map((l) => ({
+    id: l.id,
+    name: [l.first_name, l.last_name].filter(Boolean).join(' ').trim() || l.phone || l.email || 'Unnamed',
+    phone: l.phone,
+    email: l.email,
+  }));
+}
+
 export type CallDirection = 'outbound' | 'inbound';
 export type CallDisposition =
   | 'connected'

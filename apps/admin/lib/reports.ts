@@ -61,6 +61,22 @@ export type TrendPoint = {
   connects: number;
 };
 
+export type SourceRow = {
+  source: string;               // lead source code, or 'unknown'
+  calls: number;
+  connects: number;
+  connectRate: number;
+  sales: number;
+  salesRate: number;
+};
+
+export type HeatmapCell = {
+  dow: number;                  // 0=Sun..6=Sat
+  hour: number;                 // 0..23
+  calls: number;
+  connects: number;
+};
+
 export type CallReport = {
   fromIso: string;
   toIso: string;
@@ -70,6 +86,8 @@ export type CallReport = {
   prevKpis: ReportKpis | null;
   byAgent: AgentRow[];
   byDisposition: DispositionRow[];
+  bySource: SourceRow[];
+  heatmap: HeatmapCell[];
   trend: TrendPoint[];
 };
 
@@ -147,7 +165,7 @@ export async function loadCallReport(
 
   let query = supabase
     .from('calls')
-    .select('id, member_id, direction, disposition, duration_sec, started_at')
+    .select('id, member_id, lead_id, direction, disposition, duration_sec, started_at')
     .eq('brand_id', brandId)
     .gte('started_at', fromIso)
     .lte('started_at', toIso)
@@ -244,6 +262,65 @@ export async function loadCallReport(
     }))
     .sort((a, b) => b.count - a.count);
 
+  // ---------- By lead source ----------
+  // Pulls leads.source for the lead_ids referenced by these calls. A
+  // call can have a null lead_id (e.g. inbound from an unknown number);
+  // we bucket those under 'unknown'.
+  const leadIds = Array.from(
+    new Set(rows.map((r) => r.lead_id).filter((l): l is string => !!l)),
+  );
+  const sourceByLeadId = new Map<string, string>();
+  if (leadIds.length > 0) {
+    const { data: leads } = await supabase
+      .from('leads')
+      .select('id, source')
+      .in('id', leadIds);
+    for (const l of leads ?? []) {
+      if (l.source) sourceByLeadId.set(l.id, l.source);
+    }
+  }
+  type SourceAgg = { calls: number; connects: number; sales: number };
+  const sourceMap = new Map<string, SourceAgg>();
+  for (const r of rows) {
+    const key = (r.lead_id && sourceByLeadId.get(r.lead_id)) || 'unknown';
+    const a = sourceMap.get(key) ?? { calls: 0, connects: 0, sales: 0 };
+    a.calls += 1;
+    if (r.disposition && CONNECTED_CODES.has(r.disposition)) a.connects += 1;
+    if (r.disposition === 'sale') a.sales += 1;
+    sourceMap.set(key, a);
+  }
+  const bySource: SourceRow[] = Array.from(sourceMap.entries())
+    .map(([source, a]) => ({
+      source,
+      calls: a.calls,
+      connects: a.connects,
+      connectRate: a.calls > 0 ? a.connects / a.calls : 0,
+      sales: a.sales,
+      salesRate: a.calls > 0 ? a.sales / a.calls : 0,
+    }))
+    .sort((a, b) => b.calls - a.calls);
+
+  // ---------- Day-of-week × hour-of-day heatmap ----------
+  // Naive UTC bucketing matches the daily trend; brand-timezone correction
+  // is a follow-up. We keep all 168 cells (7×24) so the renderer can
+  // draw a stable grid even when buckets are sparse.
+  const heatmap: HeatmapCell[] = [];
+  const heatIndex = new Map<string, HeatmapCell>();
+  for (let dow = 0; dow < 7; dow += 1) {
+    for (let hour = 0; hour < 24; hour += 1) {
+      const cell: HeatmapCell = { dow, hour, calls: 0, connects: 0 };
+      heatmap.push(cell);
+      heatIndex.set(`${dow}:${hour}`, cell);
+    }
+  }
+  for (const r of rows) {
+    const d = new Date(r.started_at);
+    const cell = heatIndex.get(`${d.getUTCDay()}:${d.getUTCHours()}`);
+    if (!cell) continue;
+    cell.calls += 1;
+    if (r.disposition && CONNECTED_CODES.has(r.disposition)) cell.connects += 1;
+  }
+
   // ---------- Daily trend ----------
   // Build a complete date axis from fromIso..toIso so days with zero
   // calls still render a tick (otherwise the line jumps gaps).
@@ -288,7 +365,17 @@ export async function loadCallReport(
   const { data: prevRows } = await prevQuery;
   const prevKpis = computeKpis(prevRows ?? []);
 
-  return { fromIso, toIso, kpis, prevKpis, byAgent, byDisposition, trend };
+  return {
+    fromIso,
+    toIso,
+    kpis,
+    prevKpis,
+    byAgent,
+    byDisposition,
+    bySource,
+    heatmap,
+    trend,
+  };
 }
 
 // Friendly disposition labels — keep in sync with /lib/dispositions.
