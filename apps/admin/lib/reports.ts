@@ -409,3 +409,484 @@ export function formatDuration(sec: number): string {
 export function formatPct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
+
+// ---------------------------------------------------------------------------
+// Email report (Phase B)
+// ---------------------------------------------------------------------------
+
+export type EmailKpis = {
+  sent: number;
+  received: number;
+  threadsOpen: number;
+  replyRate: number;
+  avgResponseMin: number;
+};
+
+export type EmailAgentRow = {
+  memberId: string;
+  name: string;
+  email: string;
+  sent: number;
+  received: number;
+  replied: number;
+  replyRate: number;
+  avgResponseMin: number;
+};
+
+export type EmailTrendPoint = {
+  date: string;
+  sent: number;
+  received: number;
+};
+
+export type EmailReport = {
+  fromIso: string;
+  toIso: string;
+  kpis: EmailKpis;
+  perAgent: EmailAgentRow[];
+  trend: EmailTrendPoint[];
+};
+
+export async function loadEmailReport(
+  brandId: string,
+  filter: ReportFilter,
+): Promise<EmailReport> {
+  const supabase = await createServerClient();
+  const { fromIso, toIso } = rangeBounds(filter);
+  const tz = filter.timezone || 'UTC';
+
+  // Fetch threads for the brand. We need thread→member mapping to attribute
+  // outbound sends and inbound receipts to the right agent.
+  const { data: threads } = await supabase
+    .from('email_threads')
+    .select('id, member_id, last_message_at')
+    .eq('brand_id', brandId);
+  const threadRows = threads ?? [];
+  const threadIds = threadRows.map((t) => t.id);
+  const threadOwner = new Map(threadRows.map((t) => [t.id, t.member_id]));
+
+  if (threadIds.length === 0) {
+    const dayKeys = buildEmptyTrend(fromIso, toIso, tz);
+    return {
+      fromIso,
+      toIso,
+      kpis: { sent: 0, received: 0, threadsOpen: 0, replyRate: 0, avgResponseMin: 0 },
+      perAgent: [],
+      trend: dayKeys.map((d) => ({ date: d, sent: 0, received: 0 })),
+    };
+  }
+
+  const { data: msgs } = await supabase
+    .from('email_messages')
+    .select('id, thread_id, direction, sent_at')
+    .in('thread_id', threadIds)
+    .gte('sent_at', fromIso)
+    .lte('sent_at', toIso)
+    .order('sent_at', { ascending: true })
+    .limit(50_000);
+  const rows = msgs ?? [];
+
+  // Threads-open = threads with last_message_at inside the window. Cheap heuristic.
+  let threadsOpen = 0;
+  for (const t of threadRows) {
+    if (!t.last_message_at) continue;
+    if (t.last_message_at < fromIso || t.last_message_at > toIso) continue;
+    threadsOpen += 1;
+  }
+
+  let sent = 0;
+  let received = 0;
+  for (const r of rows) {
+    if (r.direction === 'outbound') sent += 1;
+    else if (r.direction === 'inbound') received += 1;
+  }
+
+  // Reply analysis: walk each thread chronologically. For every outbound
+  // message, look for the next inbound within 14 days; if found, count the
+  // reply and accumulate response time.
+  const REPLY_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+  type Msg = { id: string; thread_id: string; direction: string; sent_at: string };
+  const byThread = new Map<string, Msg[]>();
+  for (const r of rows) {
+    const arr = byThread.get(r.thread_id) ?? [];
+    arr.push(r);
+    byThread.set(r.thread_id, arr);
+  }
+  let outboundWithReply = 0;
+  let outboundForReplyDenom = 0;
+  let totalResponseMs = 0;
+  let responseSamples = 0;
+  type AgentAgg = { sent: number; received: number; replied: number; respMs: number; respN: number };
+  const agentMap = new Map<string, AgentAgg>();
+
+  for (const [threadId, threadMsgs] of byThread.entries()) {
+    threadMsgs.sort((a, b) => (a.sent_at < b.sent_at ? -1 : 1));
+    const ownerId = threadOwner.get(threadId) ?? null;
+    if (ownerId) {
+      const a = agentMap.get(ownerId) ?? { sent: 0, received: 0, replied: 0, respMs: 0, respN: 0 };
+      for (const m of threadMsgs) {
+        if (m.direction === 'outbound') a.sent += 1;
+        else if (m.direction === 'inbound') a.received += 1;
+      }
+      agentMap.set(ownerId, a);
+    }
+    for (let i = 0; i < threadMsgs.length; i += 1) {
+      const m = threadMsgs[i];
+      if (!m || m.direction !== 'outbound') continue;
+      outboundForReplyDenom += 1;
+      const sentMs = new Date(m.sent_at).getTime();
+      for (let j = i + 1; j < threadMsgs.length; j += 1) {
+        const next = threadMsgs[j];
+        if (!next || next.direction !== 'inbound') continue;
+        const replyMs = new Date(next.sent_at).getTime();
+        if (replyMs - sentMs > REPLY_WINDOW_MS) break;
+        outboundWithReply += 1;
+        totalResponseMs += replyMs - sentMs;
+        responseSamples += 1;
+        if (ownerId) {
+          const a = agentMap.get(ownerId)!;
+          a.replied += 1;
+          a.respMs += replyMs - sentMs;
+          a.respN += 1;
+        }
+        break;
+      }
+    }
+  }
+
+  const replyRate = outboundForReplyDenom > 0 ? outboundWithReply / outboundForReplyDenom : 0;
+  const avgResponseMin = responseSamples > 0 ? Math.round(totalResponseMs / responseSamples / 60000) : 0;
+
+  const memberIds = Array.from(agentMap.keys());
+  const memberById = new Map<string, { fullName: string | null; email: string }>();
+  if (memberIds.length > 0) {
+    const { data: members } = await supabase
+      .from('members')
+      .select('id, full_name, email')
+      .in('id', memberIds);
+    for (const m of members ?? []) memberById.set(m.id, { fullName: m.full_name, email: m.email });
+  }
+  const perAgent: EmailAgentRow[] = Array.from(agentMap.entries())
+    .map(([memberId, a]) => {
+      const m = memberById.get(memberId);
+      return {
+        memberId,
+        name: m?.fullName?.trim() || m?.email || 'Unknown agent',
+        email: m?.email ?? '',
+        sent: a.sent,
+        received: a.received,
+        replied: a.replied,
+        replyRate: a.sent > 0 ? a.replied / a.sent : 0,
+        avgResponseMin: a.respN > 0 ? Math.round(a.respMs / a.respN / 60000) : 0,
+      };
+    })
+    .sort((a, b) => b.sent - a.sent);
+
+  const dayKeys = buildEmptyTrend(fromIso, toIso, tz);
+  const trendMap = new Map<string, { sent: number; received: number }>(
+    dayKeys.map((d) => [d, { sent: 0, received: 0 }]),
+  );
+  for (const r of rows) {
+    const key = localDayKey(r.sent_at, tz);
+    const cur = trendMap.get(key);
+    if (!cur) continue;
+    if (r.direction === 'outbound') cur.sent += 1;
+    else if (r.direction === 'inbound') cur.received += 1;
+  }
+  const trend: EmailTrendPoint[] = Array.from(trendMap.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([date, v]) => ({ date, sent: v.sent, received: v.received }));
+
+  return {
+    fromIso,
+    toIso,
+    kpis: { sent, received, threadsOpen, replyRate, avgResponseMin },
+    perAgent,
+    trend,
+  };
+}
+
+function buildEmptyTrend(fromIso: string, toIso: string, tz: string): string[] {
+  const startKey = localDayKey(fromIso, tz);
+  const endKey = localDayKey(toIso, tz);
+  const out: string[] = [];
+  for (let cursor = startKey; cursor <= endKey; cursor = addDaysToDateKey(cursor, 1)) {
+    out.push(cursor);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline report (Phase B) — current snapshot funnel by stage position.
+// ---------------------------------------------------------------------------
+
+export type PipelineStageRow = {
+  stageId: string;
+  name: string;
+  position: number;
+  isWon: boolean;
+  isLost: boolean;
+  count: number;
+  pctOfTop: number;
+  // Conversion to the next stage by position. Null on the last stage.
+  conversion: number | null;
+};
+
+export type PipelineReport = {
+  fromIso: string;
+  toIso: string;
+  totalLeads: number;
+  stages: PipelineStageRow[];
+};
+
+export async function loadPipelineReport(
+  brandId: string,
+  filter: ReportFilter,
+): Promise<PipelineReport> {
+  const supabase = await createServerClient();
+  const { fromIso, toIso } = rangeBounds(filter);
+
+  const [{ data: stages }, { data: leadCounts }] = await Promise.all([
+    supabase
+      .from('stages')
+      .select('id, name, position, is_won, is_lost')
+      .eq('brand_id', brandId)
+      .order('position', { ascending: true }),
+    supabase
+      .from('leads')
+      .select('id, stage_id')
+      .eq('brand_id', brandId)
+      .limit(50_000),
+  ]);
+
+  const stageList = stages ?? [];
+  const leads = leadCounts ?? [];
+  const totalLeads = leads.length;
+
+  const countByStage = new Map<string, number>();
+  for (const l of leads) {
+    if (!l.stage_id) continue;
+    countByStage.set(l.stage_id, (countByStage.get(l.stage_id) ?? 0) + 1);
+  }
+
+  const top = stageList[0];
+  const topCount = top ? countByStage.get(top.id) ?? 0 : 0;
+
+  const rowsOut: PipelineStageRow[] = stageList.map((s, i) => {
+    const count = countByStage.get(s.id) ?? 0;
+    const next = stageList[i + 1];
+    const nextCount = next ? countByStage.get(next.id) ?? 0 : null;
+    return {
+      stageId: s.id,
+      name: s.name,
+      position: s.position,
+      isWon: s.is_won,
+      isLost: s.is_lost,
+      count,
+      pctOfTop: topCount > 0 ? count / topCount : 0,
+      conversion: nextCount === null ? null : count > 0 ? nextCount / count : 0,
+    };
+  });
+
+  return { fromIso, toIso, totalLeads, stages: rowsOut };
+}
+
+// ---------------------------------------------------------------------------
+// Appointments report (Phase B)
+// ---------------------------------------------------------------------------
+
+export type AppointmentsKpis = {
+  booked: number;
+  showed: number;
+  noShowed: number;
+  cancelled: number;
+  showRate: number;
+};
+
+export type AppointmentsAgentRow = {
+  memberId: string;
+  name: string;
+  email: string;
+  booked: number;
+  showed: number;
+  noShowed: number;
+  cancelled: number;
+  showRate: number;
+};
+
+export type AppointmentsTrendPoint = {
+  date: string;
+  booked: number;
+  showed: number;
+};
+
+export type AppointmentsReport = {
+  fromIso: string;
+  toIso: string;
+  kpis: AppointmentsKpis;
+  perCloser: AppointmentsAgentRow[];
+  trend: AppointmentsTrendPoint[];
+};
+
+export async function loadAppointmentsReport(
+  brandId: string,
+  filter: ReportFilter,
+): Promise<AppointmentsReport> {
+  const supabase = await createServerClient();
+  const { fromIso, toIso } = rangeBounds(filter);
+  const tz = filter.timezone || 'UTC';
+
+  const { data: appts } = await supabase
+    .from('appointments')
+    .select('id, status, member_id, starts_at')
+    .eq('brand_id', brandId)
+    .gte('starts_at', fromIso)
+    .lte('starts_at', toIso)
+    .limit(50_000);
+  const rowsOut = appts ?? [];
+
+  let booked = 0;
+  let showed = 0;
+  let noShowed = 0;
+  let cancelled = 0;
+  type Agg = { booked: number; showed: number; noShowed: number; cancelled: number };
+  const byMember = new Map<string, Agg>();
+  for (const r of rowsOut) {
+    booked += 1;
+    if (r.status === 'showed') showed += 1;
+    else if (r.status === 'no_show') noShowed += 1;
+    else if (r.status === 'cancelled') cancelled += 1;
+    if (r.member_id) {
+      const a = byMember.get(r.member_id) ?? { booked: 0, showed: 0, noShowed: 0, cancelled: 0 };
+      a.booked += 1;
+      if (r.status === 'showed') a.showed += 1;
+      else if (r.status === 'no_show') a.noShowed += 1;
+      else if (r.status === 'cancelled') a.cancelled += 1;
+      byMember.set(r.member_id, a);
+    }
+  }
+  const completed = showed + noShowed;
+  const showRate = completed > 0 ? showed / completed : 0;
+
+  const memberIds = Array.from(byMember.keys());
+  const memberById = new Map<string, { fullName: string | null; email: string }>();
+  if (memberIds.length > 0) {
+    const { data: members } = await supabase
+      .from('members')
+      .select('id, full_name, email')
+      .in('id', memberIds);
+    for (const m of members ?? []) memberById.set(m.id, { fullName: m.full_name, email: m.email });
+  }
+  const perCloser: AppointmentsAgentRow[] = Array.from(byMember.entries())
+    .map(([memberId, a]) => {
+      const m = memberById.get(memberId);
+      const completedRows = a.showed + a.noShowed;
+      return {
+        memberId,
+        name: m?.fullName?.trim() || m?.email || 'Unknown agent',
+        email: m?.email ?? '',
+        booked: a.booked,
+        showed: a.showed,
+        noShowed: a.noShowed,
+        cancelled: a.cancelled,
+        showRate: completedRows > 0 ? a.showed / completedRows : 0,
+      };
+    })
+    .sort((a, b) => b.booked - a.booked);
+
+  const dayKeys = buildEmptyTrend(fromIso, toIso, tz);
+  const trendMap = new Map<string, { booked: number; showed: number }>(
+    dayKeys.map((d) => [d, { booked: 0, showed: 0 }]),
+  );
+  for (const r of rowsOut) {
+    const key = localDayKey(r.starts_at, tz);
+    const cur = trendMap.get(key);
+    if (!cur) continue;
+    cur.booked += 1;
+    if (r.status === 'showed') cur.showed += 1;
+  }
+  const trend: AppointmentsTrendPoint[] = Array.from(trendMap.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([date, v]) => ({ date, booked: v.booked, showed: v.showed }));
+
+  return {
+    fromIso,
+    toIso,
+    kpis: { booked, showed, noShowed, cancelled, showRate },
+    perCloser,
+    trend,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SMS report (Phase B) — sourced from message_outbox.channel='sms'.
+// ---------------------------------------------------------------------------
+
+export type SmsKpis = {
+  sent: number;
+  delivered: number;
+  failed: number;
+  pending: number;
+};
+
+export type SmsTrendPoint = {
+  date: string;
+  sent: number;
+  delivered: number;
+};
+
+export type SmsReport = {
+  fromIso: string;
+  toIso: string;
+  kpis: SmsKpis;
+  trend: SmsTrendPoint[];
+};
+
+export async function loadSmsReport(brandId: string, filter: ReportFilter): Promise<SmsReport> {
+  const supabase = await createServerClient();
+  const { fromIso, toIso } = rangeBounds(filter);
+  const tz = filter.timezone || 'UTC';
+
+  const { data: outbox } = await supabase
+    .from('message_outbox')
+    .select('id, status, created_at')
+    .eq('brand_id', brandId)
+    .eq('channel', 'sms')
+    .gte('created_at', fromIso)
+    .lte('created_at', toIso)
+    .limit(50_000);
+  const rowsOut = outbox ?? [];
+
+  let sent = 0;
+  let delivered = 0;
+  let failed = 0;
+  let pending = 0;
+  for (const r of rowsOut) {
+    if (r.status === 'sent' || r.status === 'delivered') sent += 1;
+    if (r.status === 'delivered') delivered += 1;
+    if (r.status === 'failed') failed += 1;
+    if (r.status === 'pending' || r.status === 'queued') pending += 1;
+  }
+
+  const dayKeys = buildEmptyTrend(fromIso, toIso, tz);
+  const trendMap = new Map<string, { sent: number; delivered: number }>(
+    dayKeys.map((d) => [d, { sent: 0, delivered: 0 }]),
+  );
+  for (const r of rowsOut) {
+    const key = localDayKey(r.created_at, tz);
+    const cur = trendMap.get(key);
+    if (!cur) continue;
+    if (r.status === 'sent' || r.status === 'delivered') cur.sent += 1;
+    if (r.status === 'delivered') cur.delivered += 1;
+  }
+  const trend: SmsTrendPoint[] = Array.from(trendMap.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([date, v]) => ({ date, sent: v.sent, delivered: v.delivered }));
+
+  return {
+    fromIso,
+    toIso,
+    kpis: { sent, delivered, failed, pending },
+    trend,
+  };
+}

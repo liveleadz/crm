@@ -4,16 +4,18 @@
 // triggers a browser download.
 
 import { useState, useTransition } from 'react';
-import { exportAgentReportCsv } from '@/app/actions/reports';
+import { exportAgentReportCsv, type ReportTabKind } from '@/app/actions/reports';
 import type { ReportRange, DirectionFilter } from '@/lib/reports';
 
 export function ExportButton({
+  tab,
   range,
   agentId,
   direction,
   fromDate,
   toDate,
 }: {
+  tab?: ReportTabKind;
   range: ReportRange;
   agentId: string | null;
   direction: DirectionFilter;
@@ -33,6 +35,7 @@ export function ExportButton({
         ? new Date(`${toDate}T23:59:59.999Z`).toISOString()
         : null;
       const res = await exportAgentReportCsv({
+        tab,
         range,
         agentId,
         direction,
