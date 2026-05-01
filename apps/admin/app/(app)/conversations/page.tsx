@@ -2,12 +2,16 @@ import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadBrandThreads } from '@/lib/email/threads';
 import { PageHeader } from '@/components/page-header';
-import { InboxView } from '@/components/inbox/inbox-view';
+import { ConversationsView } from '@/components/conversations/conversations-view';
 
-export default async function InboxPage({
+// Unified Conversations inbox. Today the only wired channel is email;
+// SMS plugs in once A2P 10DLC registration completes and the messages
+// table is wired in. The channel filter is rendered in
+// ConversationsView so SMS appears as a disabled pill until then.
+export default async function ConversationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ scope?: string; thread?: string }>;
+  searchParams: Promise<{ scope?: string; channel?: string; thread?: string }>;
 }) {
   const active = await getActiveBrand();
   if (!active) return null;
@@ -26,10 +30,10 @@ export default async function InboxPage({
   return (
     <>
       <PageHeader
-        title="Inbox"
-        subtitle={`${threads.length} thread${threads.length === 1 ? '' : 's'}`}
+        title="Conversations"
+        subtitle={`${threads.length} thread${threads.length === 1 ? '' : 's'} · email${' '}`}
       />
-      <InboxView
+      <ConversationsView
         threads={threads}
         scope={mineOnly ? 'mine' : 'all'}
         initialThreadId={initialThreadId}

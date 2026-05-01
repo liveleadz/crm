@@ -70,7 +70,59 @@ export default async function ConnectionsPage({
             read replies on behalf of you from the lead detail composer.
           </p>
           {conn.scopes.includes('email') && (
-            <SignatureEditor initial={conn.signature} />
+            <>
+              <SignatureEditor initial={conn.signature} />
+              <div className="rounded-2xl border border-line bg-surface p-5 text-[12px] leading-relaxed text-txt-2">
+                <h4 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-txt-3">
+                  Improving deliverability
+                </h4>
+                <p className="mb-2 text-txt-3">
+                  Cold first-touch emails frequently land in Spam or Promotions.
+                  Gmail learns your reputation over weeks — these practices keep
+                  you out of the spam folder:
+                </p>
+                <ul className="ml-4 list-disc space-y-1 text-txt-2">
+                  <li>
+                    <span className="font-medium text-txt-1">Warm up the account.</span>{' '}
+                    Start with 5–10 sends/day for the first two weeks. Reply to
+                    your own outbound from another inbox to build engagement signal.
+                  </li>
+                  <li>
+                    <span className="font-medium text-txt-1">Avoid spam triggers.</span>{' '}
+                    Skip ALL CAPS, excessive punctuation, money symbols, and
+                    words like "free", "guarantee", "act now", "100%".
+                  </li>
+                  <li>
+                    <span className="font-medium text-txt-1">Personalize.</span>{' '}
+                    Reference the lead by name and something specific. Generic
+                    blasts are flagged fast.
+                  </li>
+                  <li>
+                    <span className="font-medium text-txt-1">Keep it short and link-light.</span>{' '}
+                    1–2 paragraphs, at most 1 link, no tracking pixels on cold mail.
+                  </li>
+                  <li>
+                    <span className="font-medium text-txt-1">Custom domain?</span>{' '}
+                    If you send from a Google Workspace domain, configure SPF,
+                    DKIM, and DMARC in your DNS — see{' '}
+                    <a
+                      href="https://support.google.com/a/answer/33786"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-teal hover:underline"
+                    >
+                      Google&apos;s setup guide
+                    </a>
+                    . @gmail.com addresses are already authenticated.
+                  </li>
+                  <li>
+                    <span className="font-medium text-txt-1">Ask the lead to reply.</span>{' '}
+                    Once a recipient replies once, future mail from you almost
+                    always lands in their primary tab.
+                  </li>
+                </ul>
+              </div>
+            </>
           )}
         </div>
       </div>

@@ -28,7 +28,10 @@ function formatWhen(iso: string | null) {
   });
 }
 
-export function InboxView({
+// Channel-aware unified conversations view. The channel pill row at the
+// top is forward-looking — SMS lights up when A2P 10DLC ships. Until
+// then it renders disabled. Email threads come from email_threads.
+export function ConversationsView({
   threads,
   scope,
   initialThreadId,
@@ -64,20 +67,36 @@ export function InboxView({
     if (next === 'all') params.set('scope', 'all');
     else params.delete('scope');
     params.delete('thread');
-    router.replace(`/inbox?${params.toString()}`);
+    router.replace(`/conversations?${params.toString()}`);
   }
 
   function selectThread(id: string) {
     setActiveId(id);
     const params = new URLSearchParams(searchParams.toString());
     params.set('thread', id);
-    router.replace(`/inbox?${params.toString()}`, { scroll: false });
+    router.replace(`/conversations?${params.toString()}`, { scroll: false });
   }
 
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* Left pane — thread list */}
       <div className="flex w-[340px] shrink-0 flex-col border-r border-line bg-canvas">
+        {/* Channel filter — today only Email is wired. */}
+        <div className="flex shrink-0 gap-1 border-b border-line p-3">
+          <span className="inline-flex items-center gap-1.5 rounded-lg bg-teal/15 px-3 py-1.5 text-[11.5px] font-medium text-teal">
+            <span className="h-1.5 w-1.5 rounded-full bg-teal" /> Email
+          </span>
+          <span
+            className="inline-flex items-center gap-1.5 rounded-lg bg-surface px-3 py-1.5 text-[11.5px] font-medium text-txt-3"
+            title="SMS arrives once A2P 10DLC registration is approved"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-txt-3/40" /> SMS
+            <span className="ml-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] uppercase tracking-wide">
+              soon
+            </span>
+          </span>
+        </div>
+        {/* Mine / All scope */}
         <div className="flex shrink-0 gap-1 border-b border-line p-3">
           <button
             type="button"
@@ -105,7 +124,7 @@ export function InboxView({
         <ul className="flex-1 overflow-auto">
           {threads.length === 0 && (
             <li className="px-4 py-6 text-[12px] text-txt-3">
-              No emails yet.
+              No conversations yet.
             </li>
           )}
           {threads.map((t) => (
@@ -125,8 +144,13 @@ export function InboxView({
                     {formatWhen(t.lastMessageAt)}
                   </span>
                 </div>
-                <div className="mt-0.5 truncate text-[11.5px] text-txt-2">
-                  {t.subject || '(no subject)'}
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <span className="rounded-full bg-teal/10 px-1.5 py-0.5 text-[9.5px] font-medium uppercase tracking-wide text-teal">
+                    Email
+                  </span>
+                  <span className="truncate text-[11.5px] text-txt-2">
+                    {t.subject || '(no subject)'}
+                  </span>
                 </div>
                 {t.snippet && (
                   <div className="mt-0.5 truncate text-[11px] text-txt-3">
@@ -148,7 +172,7 @@ export function InboxView({
       <div className="flex flex-1 flex-col overflow-hidden">
         {!activeThread ? (
           <div className="flex flex-1 items-center justify-center text-[12.5px] text-txt-3">
-            Select a thread to view messages.
+            Select a conversation to view messages.
           </div>
         ) : (
           <>
@@ -188,6 +212,9 @@ export function InboxView({
                       }`}
                     >
                       <div className="flex items-baseline gap-2 text-[11.5px] text-txt-3">
+                        <span className="rounded-full bg-teal/10 px-1.5 py-0.5 text-[9.5px] font-medium uppercase tracking-wide text-teal">
+                          Email
+                        </span>
                         <span className="font-medium text-txt-2">
                           {m.direction === 'outbound' ? 'Sent' : 'Received'}
                         </span>

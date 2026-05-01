@@ -102,9 +102,30 @@ function buildAddress(addr: string, name?: string | null): string {
   return `${quoteHeaderName(name.trim())} <${addr}>`;
 }
 
+// Strips HTML tags + entities to a usable plain-text fallback. Conservative —
+// keeps line breaks for <br> and block elements so the result reads naturally.
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<\/(p|div|h[1-6]|li|tr)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function buildRfc822(input: SendMessageInput, rfc822MessageId: string): string {
   const headers: string[] = [];
+  headers.push(`Date: ${new Date().toUTCString()}`);
   headers.push(`From: ${buildAddress(input.fromAddr, input.fromName)}`);
+  headers.push(`Reply-To: ${buildAddress(input.fromAddr, input.fromName)}`);
   headers.push(`To: ${input.toAddrs.join(', ')}`);
   if (input.ccAddrs?.length) headers.push(`Cc: ${input.ccAddrs.join(', ')}`);
   headers.push(`Subject: ${input.subject.replace(/[\r\n]/g, ' ')}`);
@@ -113,7 +134,11 @@ function buildRfc822(input: SendMessageInput, rfc822MessageId: string): string {
   if (input.references?.length) headers.push(`References: ${input.references.join(' ')}`);
   headers.push('MIME-Version: 1.0');
 
-  if (input.bodyText && input.bodyHtml) {
+  // Always ship a text/plain alternative — single-part HTML is a common
+  // spam signal for one-to-one mail.
+  const bodyText = input.bodyText?.trim() ? input.bodyText : htmlToPlainText(input.bodyHtml);
+
+  if (bodyText && input.bodyHtml) {
     const boundary = `lp_${Math.random().toString(36).slice(2)}`;
     headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
     const body = [
@@ -122,7 +147,7 @@ function buildRfc822(input: SendMessageInput, rfc822MessageId: string): string {
       'Content-Type: text/plain; charset="UTF-8"',
       'Content-Transfer-Encoding: 7bit',
       '',
-      input.bodyText,
+      bodyText,
       `--${boundary}`,
       'Content-Type: text/html; charset="UTF-8"',
       'Content-Transfer-Encoding: 7bit',
