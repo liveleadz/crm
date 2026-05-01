@@ -125,7 +125,9 @@ export async function deleteEvent(input: {
 }
 
 // Walks pages of events. On first sync (no syncToken), seeds with a
-// 30-day forward window — Google requires either timeMin or syncToken.
+// window from 7 days ago through 60 days ahead — Google requires either
+// timeMin or syncToken. The look-back ensures appointments earlier on
+// the same day (or recently) are imported, not just future events.
 export async function listDelta(input: {
   memberId: string;
   extCalendarId: string;
@@ -147,9 +149,10 @@ export async function listDelta(input: {
     if (pageToken) params.set('pageToken', pageToken);
     else if (input.syncToken) params.set('syncToken', input.syncToken);
     else if (firstParams) {
-      const now = new Date();
-      const horizon = new Date(now.getTime() + 30 * 86400_000);
-      params.set('timeMin', now.toISOString());
+      const now = Date.now();
+      const lookback = new Date(now - 7 * 86400_000);
+      const horizon = new Date(now + 60 * 86400_000);
+      params.set('timeMin', lookback.toISOString());
       params.set('timeMax', horizon.toISOString());
     }
     firstParams = false;
