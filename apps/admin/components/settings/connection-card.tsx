@@ -21,10 +21,15 @@ export function ConnectionCard({
   scopes: string[];
 }) {
   const [pending, start] = useTransition();
-  const startUrl = `/api/oauth/${provider}/start?intent=calendar&return_to=${encodeURIComponent('/settings/connections')}`;
+  const ret = encodeURIComponent('/settings/connections');
+  // Top-tier CRM default: a single Connect button always grants the full
+  // (calendar + email) scope set. 'Add email' shows up only when the user
+  // connected during Phase 1 with calendar-only and hasn't re-granted yet.
+  const startUrl = `/api/oauth/${provider}/start?intent=email&return_to=${ret}`;
+  const hasEmail = scopes.includes('email');
 
   function disconnect() {
-    if (!window.confirm(`Disconnect ${LABELS[provider]}? Calendars owned by you will stop syncing.`)) {
+    if (!window.confirm(`Disconnect ${LABELS[provider]}? Calendars and email owned by you will stop syncing.`)) {
       return;
     }
     start(async () => {
@@ -68,6 +73,14 @@ export function ConnectionCard({
         <div className="flex shrink-0 items-center gap-2">
           {connected ? (
             <>
+              {!hasEmail && (
+                <a
+                  href={startUrl}
+                  className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90"
+                >
+                  Enable email
+                </a>
+              )}
               <a
                 href={startUrl}
                 className="rounded-lg border border-line bg-canvas px-3 py-1.5 text-[12px] font-medium hover:bg-surface-2"

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@leadpilot/db/server';
 import { createAdminClient } from '@leadpilot/db/admin';
-import { exchangeCode } from '@/lib/oauth/google';
+import { exchangeCode, intentsFromGrantedScope } from '@/lib/oauth/google';
 import { verifyState } from '@/lib/oauth/state';
 
 export const runtime = 'nodejs';
@@ -40,21 +40,31 @@ export async function GET(request: Request) {
   // Use admin client to write the OAuth blob — members.email_oauth is
   // protected by RLS for self-update in theory, but service-role keeps
   // the path simple and avoids a per-environment RLS audit.
+  // Project the granted scope string back to our internal scope tokens.
+  // Source of truth is what Google actually granted, not what we asked for —
+  // a user can untick a scope on the consent screen.
+  const granted = intentsFromGrantedScope(tokens.scope);
   const admin = createAdminClient();
   const { data: existing } = await admin
     .from('members')
     .select('oauth_scopes')
     .eq('id', state.memberId)
     .maybeSingle();
-  const scopes = new Set(existing?.oauth_scopes ?? []);
-  scopes.add(state.intent);
+  // Re-grants override prior scope state for this provider — if the user
+  // re-runs Connect and unchecks email, we drop 'email' from the set.
+  // We still preserve any non-google internal scopes (none today, but
+  // safe for future providers).
+  const prior = new Set(existing?.oauth_scopes ?? []);
+  prior.delete('calendar');
+  prior.delete('email');
+  for (const s of granted) prior.add(s);
 
   await admin
     .from('members')
     .update({
       email_provider: 'google',
       email_oauth: tokens as unknown as never,
-      oauth_scopes: Array.from(scopes),
+      oauth_scopes: Array.from(prior),
     })
     .eq('id', state.memberId);
 

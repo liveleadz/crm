@@ -42,7 +42,7 @@ export default async function ConnectionsPage({
     <>
       <PageHeader
         title="Connections"
-        subtitle="Connect your Google account to sync calendars"
+        subtitle="Connect your Google account to send email and sync calendars"
       />
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-2xl space-y-4">
@@ -63,8 +63,8 @@ export default async function ConnectionsPage({
             scopes={conn.provider === 'google' ? conn.scopes : []}
           />
           <p className="text-[11.5px] text-txt-3">
-            Phase 1 grants calendar scope only. Email send + read scopes will be
-            added when email is enabled.
+            Connect grants calendar + email scopes. Email is used to send and
+            read replies on behalf of you from the lead detail composer.
           </p>
         </div>
       </div>

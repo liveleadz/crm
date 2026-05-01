@@ -2,22 +2,50 @@ import 'server-only';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { redirectBase } from './state';
 
-// Google OAuth2 with offline access for refresh tokens. Phase 1 requests
-// only Calendar scope; Phase 2 will append Gmail send/read scopes by
-// re-prompting the user with `prompt=consent` to re-grant the broader
-// scope set.
+// Google OAuth2 with offline access for refresh tokens. We grant scopes
+// incrementally based on the request `intent`:
+//   * intent='calendar' → calendar.events + calendar.readonly only
+//   * intent='email'    → calendar + gmail.send + gmail.readonly (superset)
+// Re-running the flow with `prompt=consent` re-issues the refresh token so
+// already-granted users can upgrade to the broader scope set.
+
+import type { OAuthIntent } from './state';
 
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
 
-export const GOOGLE_CALENDAR_SCOPES = [
-  'openid',
-  'email',
-  'profile',
+const BASE_SCOPES = ['openid', 'email', 'profile'];
+const CALENDAR_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/calendar.readonly',
 ];
+const GMAIL_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.readonly',
+];
+
+export const GOOGLE_CALENDAR_SCOPES = [...BASE_SCOPES, ...CALENDAR_SCOPES];
+export const GOOGLE_EMAIL_SCOPES = [
+  ...BASE_SCOPES,
+  ...CALENDAR_SCOPES,
+  ...GMAIL_SCOPES,
+];
+
+export function scopesForIntent(intent: OAuthIntent): string[] {
+  return intent === 'email' ? GOOGLE_EMAIL_SCOPES : GOOGLE_CALENDAR_SCOPES;
+}
+
+// Reads a granted scope string (space-separated) and projects to our
+// internal high-level scope tokens used in members.oauth_scopes.
+export function intentsFromGrantedScope(scope: string | undefined | null): OAuthIntent[] {
+  if (!scope) return [];
+  const parts = new Set(scope.split(/\s+/).filter(Boolean));
+  const out: OAuthIntent[] = [];
+  if (CALENDAR_SCOPES.some((s) => parts.has(s))) out.push('calendar');
+  if (GMAIL_SCOPES.every((s) => parts.has(s))) out.push('email');
+  return out;
+}
 
 export type GoogleTokenSet = {
   access_token: string;
