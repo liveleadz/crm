@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/calendar-pull",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/email-pull",
+      "schedule": "* * * * *"
     }
   ]
 }
