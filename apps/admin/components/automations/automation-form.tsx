@@ -81,6 +81,15 @@ export function AutomationForm({
     const c = initial?.triggerConfig?.codes;
     return Array.isArray(c) ? (c as string[]) : [];
   });
+  const [toStageIn, setToStageIn] = useState<string[]>(() => {
+    const v = initial?.triggerConfig?.to_stage_in;
+    return Array.isArray(v) ? (v as string[]) : [];
+  });
+  const [sourceIn, setSourceIn] = useState<string[]>(() => {
+    const v = initial?.triggerConfig?.source_in;
+    return Array.isArray(v) ? (v as string[]) : [];
+  });
+  const [sourceDraft, setSourceDraft] = useState('');
   const nextId = useIdGenerator();
   const [actions, setActions] = useState<{ id: string; data: AutomationAction }[]>(() =>
     (initial?.actions ?? []).map((a) => ({ id: nextId(), data: a })),
@@ -168,12 +177,17 @@ export function AutomationForm({
       }
     }
 
+    let triggerConfig: Record<string, unknown> = {};
+    if (triggerType === 'disposition_set') triggerConfig = { codes };
+    else if (triggerType === 'lead_created') triggerConfig = { source_in: sourceIn };
+    else if (triggerType === 'stage_changed') triggerConfig = { to_stage_in: toStageIn };
+
     setSaving(true);
     const err = await onSave({
       name: name.trim(),
       description: description.trim(),
       triggerType,
-      triggerConfig: triggerType === 'disposition_set' ? { codes } : {},
+      triggerConfig,
       actions: actions.map((row) => row.data),
     });
     setSaving(false);
@@ -249,6 +263,10 @@ export function AutomationForm({
                 >
                   <option value="disposition_set">When call disposition is set</option>
                   <option value="webhook_received">When webhook is received</option>
+                  <option value="lead_created">When a lead is created</option>
+                  <option value="stage_changed">When a lead stage changes</option>
+                  <option value="email_received">When an inbound email is received</option>
+                  <option value="appointment_booked">When an appointment is booked</option>
                 </select>
               </div>
 
@@ -292,6 +310,103 @@ export function AutomationForm({
                   <code className="rounded bg-surface px-1">{'{{webhook.body.<key>}}'}</code>.
                   Pass <code className="rounded bg-surface px-1">lead_id</code> to scope the run
                   to a specific lead.
+                </p>
+              )}
+
+              {triggerType === 'lead_created' && (
+                <div>
+                  <p className="mb-2 text-[12px] text-txt-2">
+                    Source filter (optional — leave empty to fire for every new lead):
+                  </p>
+                  <div className="mb-2 flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={sourceDraft}
+                      onChange={(e) => setSourceDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const v = sourceDraft.trim();
+                          if (v && !sourceIn.includes(v)) setSourceIn((prev) => [...prev, v]);
+                          setSourceDraft('');
+                        }
+                      }}
+                      placeholder="e.g. fb_ads"
+                      className="flex-1 rounded-md border border-line bg-surface px-2.5 py-1.5 text-[12px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const v = sourceDraft.trim();
+                        if (v && !sourceIn.includes(v)) setSourceIn((prev) => [...prev, v]);
+                        setSourceDraft('');
+                      }}
+                      className="rounded-md border border-line bg-surface px-2 py-1.5 text-[11.5px] hover:bg-surface-2"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {sourceIn.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {sourceIn.map((s) => (
+                        <button
+                          type="button"
+                          key={s}
+                          onClick={() => setSourceIn((prev) => prev.filter((x) => x !== s))}
+                          className="rounded-full border border-teal/60 bg-teal/10 px-2.5 py-1 text-[11.5px] text-teal hover:bg-teal/20"
+                        >
+                          {s} ×
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {triggerType === 'stage_changed' && (
+                <div>
+                  <p className="mb-2 text-[12px] text-txt-2">
+                    Fires when a lead moves to one of the selected stages (leave empty for any stage):
+                  </p>
+                  {stages.length === 0 ? (
+                    <p className="text-[12px] text-txt-3">No stages defined.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {stages.map((s) => {
+                        const on = toStageIn.includes(s.id);
+                        return (
+                          <button
+                            type="button"
+                            key={s.id}
+                            onClick={() =>
+                              setToStageIn((prev) =>
+                                prev.includes(s.id) ? prev.filter((x) => x !== s.id) : [...prev, s.id],
+                              )
+                            }
+                            className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                              on
+                                ? 'border-teal/60 bg-teal/10 text-teal'
+                                : 'border-line bg-surface text-txt-2 hover:border-teal/30'
+                            }`}
+                          >
+                            {s.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {triggerType === 'email_received' && (
+                <p className="text-[12px] text-txt-3">
+                  Fires when an inbound email arrives that matches a lead by email address.
+                </p>
+              )}
+
+              {triggerType === 'appointment_booked' && (
+                <p className="text-[12px] text-txt-3">
+                  Fires when a new appointment is created for a lead.
                 </p>
               )}
             </div>

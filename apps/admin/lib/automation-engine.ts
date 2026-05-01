@@ -38,7 +38,50 @@ type CallReceivedTrigger = {
   toNumber: string;
 };
 
-export type AutomationTriggerInput = DispositionTrigger | CallReceivedTrigger;
+type LeadCreatedTrigger = {
+  trigger: 'lead_created';
+  brandId: string;
+  leadId: string;
+  memberId: string | null;
+  source: string | null;
+};
+
+type StageChangedTrigger = {
+  trigger: 'stage_changed';
+  brandId: string;
+  leadId: string;
+  memberId: string | null;
+  fromStageId: string | null;
+  toStageId: string | null;
+};
+
+type EmailReceivedTrigger = {
+  trigger: 'email_received';
+  brandId: string;
+  leadId: string;
+  memberId: string | null;
+  threadId: string;
+  messageId: string;
+  fromAddr: string | null;
+  subject: string | null;
+};
+
+type AppointmentBookedTrigger = {
+  trigger: 'appointment_booked';
+  brandId: string;
+  leadId: string;
+  memberId: string | null;
+  appointmentId: string;
+  startsAt: string;
+};
+
+export type AutomationTriggerInput =
+  | DispositionTrigger
+  | CallReceivedTrigger
+  | LeadCreatedTrigger
+  | StageChangedTrigger
+  | EmailReceivedTrigger
+  | AppointmentBookedTrigger;
 
 type Row = {
   id: string;
@@ -75,41 +118,125 @@ export async function runAutomations(input: AutomationTriggerInput): Promise<voi
       continue;
     }
 
-    // Simple mode — fast path.
+    // Simple mode — fast path. Each action runs independently; per-action
+    // failures land in action_log but never abort the rest.
     for (const action of row.actions) {
       try {
         await executeAction(action, ctxBase);
+        await logAction({
+          brandId: ctxBase.brandId,
+          automationId: row.id,
+          leadId: ctxBase.leadId,
+          triggerType: input.trigger,
+          actionKind: action.kind,
+          status: 'ok',
+        });
       } catch (e) {
         console.error('[automations]', row.name, action.kind, (e as Error).message);
+        await logAction({
+          brandId: ctxBase.brandId,
+          automationId: row.id,
+          leadId: ctxBase.leadId,
+          triggerType: input.trigger,
+          actionKind: action.kind,
+          status: 'failed',
+          detail: { error: (e as Error).message.slice(0, 240) },
+        });
       }
     }
   }
 }
 
-function buildCtx(input: AutomationTriggerInput) {
-  if (input.trigger === 'disposition_set') {
-    return {
-      brandId: input.brandId,
-      leadId: input.leadId,
-      memberId: input.memberId,
-      trigger: {
-        kind: input.trigger,
-        disposition: input.disposition,
-        callbackAt: input.callbackAt,
-      },
-    };
+// Helper: append a row to action_log without ever throwing. Both modes call
+// this; graph mode passes workflowRunId, simple mode leaves it null.
+export async function logAction(input: {
+  brandId: string;
+  automationId: string;
+  workflowRunId?: string | null;
+  leadId: string | null;
+  triggerType: string;
+  actionKind: string;
+  status: 'ok' | 'skipped' | 'failed';
+  detail?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const supabase = createAdminClient();
+    await supabase.from('action_log').insert({
+      brand_id: input.brandId,
+      automation_id: input.automationId,
+      workflow_run_id: input.workflowRunId ?? null,
+      lead_id: input.leadId,
+      trigger_type: input.triggerType,
+      action_kind: input.actionKind,
+      status: input.status,
+      detail: (input.detail ?? null) as never,
+    });
+  } catch (e) {
+    console.error('[action_log] insert failed', (e as Error).message);
   }
-  return {
+}
+
+function buildCtx(input: AutomationTriggerInput) {
+  const base = {
     brandId: input.brandId,
-    leadId: input.leadId,
-    memberId: null,
-    trigger: {
-      kind: input.trigger,
-      fromNumber: input.fromNumber,
-      toNumber: input.toNumber,
-      numberId: input.numberId,
-    },
+    leadId: 'leadId' in input ? input.leadId : null,
+    memberId: 'memberId' in input ? input.memberId : null,
   };
+  switch (input.trigger) {
+    case 'disposition_set':
+      return {
+        ...base,
+        trigger: {
+          kind: input.trigger,
+          disposition: input.disposition,
+          callbackAt: input.callbackAt,
+        },
+      };
+    case 'call_received':
+      return {
+        ...base,
+        trigger: {
+          kind: input.trigger,
+          fromNumber: input.fromNumber,
+          toNumber: input.toNumber,
+          numberId: input.numberId,
+        },
+      };
+    case 'lead_created':
+      return {
+        ...base,
+        trigger: { kind: input.trigger, source: input.source ?? null },
+      };
+    case 'stage_changed':
+      return {
+        ...base,
+        trigger: {
+          kind: input.trigger,
+          fromStageId: input.fromStageId,
+          toStageId: input.toStageId,
+        },
+      };
+    case 'email_received':
+      return {
+        ...base,
+        trigger: {
+          kind: input.trigger,
+          threadId: input.threadId,
+          messageId: input.messageId,
+          fromAddr: input.fromAddr,
+          subject: input.subject,
+        },
+      };
+    case 'appointment_booked':
+      return {
+        ...base,
+        trigger: {
+          kind: input.trigger,
+          appointmentId: input.appointmentId,
+          startsAt: input.startsAt,
+        },
+      };
+  }
 }
 
 function matches(config: Record<string, unknown>, input: AutomationTriggerInput): boolean {
@@ -119,11 +246,31 @@ function matches(config: Record<string, unknown>, input: AutomationTriggerInput)
     return codes.includes(input.disposition);
   }
   if (input.trigger === 'call_received') {
-    // Optional filter by specific LeadPilot number; empty/missing = match all.
     const numberIds = config.number_ids;
     if (Array.isArray(numberIds) && numberIds.length > 0) {
       return input.numberId !== null && numberIds.includes(input.numberId);
     }
+    return true;
+  }
+  if (input.trigger === 'lead_created') {
+    const sources = config.source_in;
+    if (Array.isArray(sources) && sources.length > 0) {
+      return input.source !== null && sources.includes(input.source);
+    }
+    return true;
+  }
+  if (input.trigger === 'stage_changed') {
+    const toStages = config.to_stage_in;
+    const fromStages = config.from_stage_in;
+    if (Array.isArray(toStages) && toStages.length > 0) {
+      if (!input.toStageId || !toStages.includes(input.toStageId)) return false;
+    }
+    if (Array.isArray(fromStages) && fromStages.length > 0) {
+      if (!input.fromStageId || !fromStages.includes(input.fromStageId)) return false;
+    }
+    return true;
+  }
+  if (input.trigger === 'email_received' || input.trigger === 'appointment_booked') {
     return true;
   }
   return false;
@@ -194,8 +341,25 @@ export async function runWebhookAutomation(input: WebhookRunInput): Promise<void
   for (const action of automation.actions) {
     try {
       await executeAction(action, ctx);
+      await logAction({
+        brandId: automation.brandId,
+        automationId: automation.id,
+        leadId,
+        triggerType: 'webhook_received',
+        actionKind: action.kind,
+        status: 'ok',
+      });
     } catch (e) {
       console.error('[webhook]', automation.name, action.kind, (e as Error).message);
+      await logAction({
+        brandId: automation.brandId,
+        automationId: automation.id,
+        leadId,
+        triggerType: 'webhook_received',
+        actionKind: action.kind,
+        status: 'failed',
+        detail: { error: (e as Error).message.slice(0, 240) },
+      });
     }
   }
 }

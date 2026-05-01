@@ -58,6 +58,58 @@ const TRIGGER_GROUP: PickerGroup = {
         </svg>
       ),
     },
+    {
+      kind: 'trigger',
+      triggerType: 'lead_created',
+      label: 'When a lead is created',
+      description: 'Fires for every new lead added to this brand.',
+      accent: TRIGGER_ACCENT,
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M19 8v6M22 11h-6" strokeLinecap="round" />
+        </svg>
+      ),
+    },
+    {
+      kind: 'trigger',
+      triggerType: 'stage_changed',
+      label: 'When a lead stage changes',
+      description: 'Fires when a lead moves between pipeline stages.',
+      accent: TRIGGER_ACCENT,
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      kind: 'trigger',
+      triggerType: 'email_received',
+      label: 'When an inbound email is received',
+      description: 'Fires on inbound email matched to a lead.',
+      accent: TRIGGER_ACCENT,
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <path d="M3 7l9 7 9-7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      kind: 'trigger',
+      triggerType: 'appointment_booked',
+      label: 'When an appointment is booked',
+      description: 'Fires when a new appointment is created for a lead.',
+      accent: TRIGGER_ACCENT,
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round" />
+        </svg>
+      ),
+    },
   ],
 };
 
@@ -281,12 +333,13 @@ export function NodePicker({
   function pick(opt: PickerItem) {
     if (opt.kind === 'trigger') {
       const t = opt.triggerType ?? 'disposition_set';
+      let trigger_config: Record<string, unknown> = {};
+      if (t === 'disposition_set') trigger_config = { codes: [] };
+      else if (t === 'lead_created') trigger_config = { source_in: [] };
+      else if (t === 'stage_changed') trigger_config = { to_stage_in: [], from_stage_in: [] };
       onPick({
         type: 'trigger',
-        data: {
-          trigger_type: t,
-          trigger_config: t === 'disposition_set' ? { codes: [] } : {},
-        },
+        data: { trigger_type: t, trigger_config },
       });
       return;
     }

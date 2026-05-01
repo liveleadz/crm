@@ -194,7 +194,24 @@ async function walkFrom(
     if (node.type === 'action') {
       try {
         await executeAction(node.data.action, ctx);
+        await logAction({
+          brandId: ctx.brandId,
+          runId,
+          leadId: ctx.leadId,
+          triggerType: ctx.trigger.kind,
+          actionKind: node.data.action.kind,
+          status: 'ok',
+        });
       } catch (e) {
+        await logAction({
+          brandId: ctx.brandId,
+          runId,
+          leadId: ctx.leadId,
+          triggerType: ctx.trigger.kind,
+          actionKind: node.data.action.kind,
+          status: 'failed',
+          detail: { error: (e as Error).message.slice(0, 240) },
+        });
         await markFailed(runId, (e as Error).message);
         return;
       }
@@ -248,6 +265,40 @@ async function markFailed(runId: string, reason: string): Promise<void> {
     })
     .eq('id', runId);
   console.error('[graph-engine] failed', runId, reason);
+}
+
+// Resolves automation_id from runId on demand so the graph engine doesn't
+// have to thread it through every walk frame. Best-effort; never throws.
+async function logAction(input: {
+  brandId: string;
+  runId: string;
+  leadId: string | null;
+  triggerType: string;
+  actionKind: string;
+  status: 'ok' | 'skipped' | 'failed';
+  detail?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const supabase = createAdminClient();
+    const { data: run } = await supabase
+      .from('workflow_runs')
+      .select('automation_id')
+      .eq('id', input.runId)
+      .maybeSingle();
+    if (!run?.automation_id) return;
+    await supabase.from('action_log').insert({
+      brand_id: input.brandId,
+      automation_id: run.automation_id,
+      workflow_run_id: input.runId,
+      lead_id: input.leadId,
+      trigger_type: input.triggerType,
+      action_kind: input.actionKind,
+      status: input.status,
+      detail: (input.detail ?? null) as never,
+    });
+  } catch (e) {
+    console.error('[graph-engine] action_log failed', (e as Error).message);
+  }
 }
 
 // ---------------------------------------------------------------------------

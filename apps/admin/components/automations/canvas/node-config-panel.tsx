@@ -105,11 +105,15 @@ function TriggerEditor({
 }) {
   const triggerType = node.data.trigger_type;
   function setKind(kind: string) {
+    let config: Record<string, unknown> = {};
+    if (kind === 'disposition_set') config = { codes: [] };
+    else if (kind === 'lead_created') config = { source_in: [] };
+    else if (kind === 'stage_changed') config = { to_stage_in: [], from_stage_in: [] };
     onChange({
       ...node,
       data: {
         trigger_type: kind,
-        trigger_config: kind === 'disposition_set' ? { codes: [] } : {},
+        trigger_config: config,
       },
     });
   }
@@ -122,6 +126,10 @@ function TriggerEditor({
           <option value="disposition_set">When call disposition is set</option>
           <option value="call_received">When inbound call is received</option>
           <option value="webhook_received">When webhook is received</option>
+          <option value="lead_created">When a lead is created</option>
+          <option value="stage_changed">When a lead stage changes</option>
+          <option value="email_received">When an inbound email is received</option>
+          <option value="appointment_booked">When an appointment is booked</option>
         </select>
       </div>
 
@@ -130,6 +138,197 @@ function TriggerEditor({
       )}
       {triggerType === 'call_received' && <CallReceivedTriggerFields />}
       {triggerType === 'webhook_received' && <WebhookTriggerFields ctx={ctx} />}
+      {triggerType === 'lead_created' && (
+        <LeadCreatedTriggerFields node={node} onChange={onChange} />
+      )}
+      {triggerType === 'stage_changed' && (
+        <StageChangedTriggerFields node={node} ctx={ctx} onChange={onChange} />
+      )}
+      {triggerType === 'email_received' && <EmailReceivedTriggerFields />}
+      {triggerType === 'appointment_booked' && <AppointmentBookedTriggerFields />}
+    </div>
+  );
+}
+
+function LeadCreatedTriggerFields({
+  node,
+  onChange,
+}: {
+  node: Extract<GraphNode, { type: 'trigger' }>;
+  onChange: (n: GraphNode) => void;
+}) {
+  const sources = Array.isArray(node.data.trigger_config.source_in)
+    ? (node.data.trigger_config.source_in as string[])
+    : [];
+  const [draft, setDraft] = useState('');
+  function add() {
+    const v = draft.trim();
+    if (!v || sources.includes(v)) return;
+    onChange({
+      ...node,
+      data: {
+        ...node.data,
+        trigger_config: { ...node.data.trigger_config, source_in: [...sources, v] },
+      },
+    });
+    setDraft('');
+  }
+  function remove(s: string) {
+    onChange({
+      ...node,
+      data: {
+        ...node.data,
+        trigger_config: {
+          ...node.data.trigger_config,
+          source_in: sources.filter((x) => x !== s),
+        },
+      },
+    });
+  }
+  return (
+    <div className="space-y-2">
+      <Label>Source filter (optional)</Label>
+      <p className="text-[11px] text-txt-3">
+        Leave empty to fire for every new lead. Otherwise only leads whose <code className="rounded bg-canvas px-1">source</code> matches one of these values trigger the workflow.
+      </p>
+      <div className="flex items-center gap-1">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder="e.g. fb_ads"
+          className={`${inputCls} flex-1`}
+        />
+        <button
+          type="button"
+          onClick={add}
+          className="rounded-md border border-line bg-canvas px-2 py-1.5 text-[11.5px] hover:bg-surface-2"
+        >
+          Add
+        </button>
+      </div>
+      {sources.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {sources.map((s) => (
+            <button
+              type="button"
+              key={s}
+              onClick={() => remove(s)}
+              className="rounded-full border border-teal/60 bg-teal/10 px-2.5 py-1 text-[11.5px] text-teal hover:bg-teal/20"
+            >
+              {s} ×
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StageChangedTriggerFields({
+  node,
+  ctx,
+  onChange,
+}: {
+  node: Extract<GraphNode, { type: 'trigger' }>;
+  ctx: Props['ctx'];
+  onChange: (n: GraphNode) => void;
+}) {
+  const toStages = Array.isArray(node.data.trigger_config.to_stage_in)
+    ? (node.data.trigger_config.to_stage_in as string[])
+    : [];
+  const fromStages = Array.isArray(node.data.trigger_config.from_stage_in)
+    ? (node.data.trigger_config.from_stage_in as string[])
+    : [];
+  function toggle(field: 'to_stage_in' | 'from_stage_in', current: string[], id: string) {
+    const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    onChange({
+      ...node,
+      data: {
+        ...node.data,
+        trigger_config: { ...node.data.trigger_config, [field]: next },
+      },
+    });
+  }
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label>Moves to stage (optional)</Label>
+        <p className="mb-1.5 text-[11px] text-txt-3">
+          Leave empty to fire on any stage change.
+        </p>
+        {ctx.stages.length === 0 ? (
+          <p className="text-[12px] text-txt-3">No stages defined.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {ctx.stages.map((s) => {
+              const on = toStages.includes(s.id);
+              return (
+                <button
+                  type="button"
+                  key={s.id}
+                  onClick={() => toggle('to_stage_in', toStages, s.id)}
+                  className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                    on
+                      ? 'border-teal/60 bg-teal/10 text-teal'
+                      : 'border-line bg-canvas text-txt-2 hover:border-teal/30'
+                  }`}
+                >
+                  {s.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div>
+        <Label>Moves from stage (optional)</Label>
+        {ctx.stages.length === 0 ? (
+          <p className="text-[12px] text-txt-3">No stages defined.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {ctx.stages.map((s) => {
+              const on = fromStages.includes(s.id);
+              return (
+                <button
+                  type="button"
+                  key={s.id}
+                  onClick={() => toggle('from_stage_in', fromStages, s.id)}
+                  className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                    on
+                      ? 'border-teal/60 bg-teal/10 text-teal'
+                      : 'border-line bg-canvas text-txt-2 hover:border-teal/30'
+                  }`}
+                >
+                  {s.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmailReceivedTriggerFields() {
+  return (
+    <div className="rounded-lg border border-line bg-canvas/50 p-3 text-[11.5px] text-txt-3">
+      Fires when an inbound email arrives that matches a lead by email address. The matched lead is exposed as <code className="text-txt-1">{'{{lead.*}}'}</code>; the message subject is <code className="text-txt-1">{'{{trigger.subject}}'}</code> and sender is <code className="text-txt-1">{'{{trigger.fromAddr}}'}</code>.
+    </div>
+  );
+}
+
+function AppointmentBookedTriggerFields() {
+  return (
+    <div className="rounded-lg border border-line bg-canvas/50 p-3 text-[11.5px] text-txt-3">
+      Fires when a new appointment is created for a lead. The matched lead is exposed as <code className="text-txt-1">{'{{lead.*}}'}</code>; appointment start time is <code className="text-txt-1">{'{{trigger.startsAt}}'}</code>.
     </div>
   );
 }

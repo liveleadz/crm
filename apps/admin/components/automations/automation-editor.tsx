@@ -16,11 +16,13 @@ import {
 } from '@/app/actions/automations';
 import { graphFromSimple, type Automation, type WorkflowGraph } from '@/lib/automation-types';
 import type { WorkflowRunRow } from '@/lib/workflow-runs';
+import type { ActionLogRow } from '@/lib/action-log';
 import { AutomationForm } from './automation-form';
 import type { StageRef, TagRef, DispositionRef } from './automations-manager';
 import { WorkflowCanvas } from './canvas/workflow-canvas';
 import { HeaderBar, type EditorView, type SaveState } from './canvas/header-bar';
 import { RunsView } from './runs-view';
+import { ActivityView } from './activity-view';
 
 type Props = {
   initial: Automation;
@@ -29,9 +31,10 @@ type Props = {
   dispositions: DispositionRef[];
   members?: { id: string; full_name: string | null; email: string }[];
   runs?: WorkflowRunRow[];
+  actionLog?: ActionLogRow[];
 };
 
-export function AutomationEditor({ initial, stages, tags, dispositions, members, runs }: Props) {
+export function AutomationEditor({ initial, stages, tags, dispositions, members, runs, actionLog }: Props) {
   const router = useRouter();
   const [view, setView] = useState<EditorView>(initial.mode === 'graph' ? 'visual' : 'standard');
   const [name, setName] = useState(initial.name);
@@ -85,9 +88,9 @@ export function AutomationEditor({ initial, stages, tags, dispositions, members,
 
   async function changeView(next: EditorView) {
     if (next === view) return;
-    if (next === 'runs') {
-      setView('runs');
-      // Refresh from the server so the runs list reflects what's happened
+    if (next === 'runs' || next === 'activity') {
+      setView(next);
+      // Refresh from the server so the list reflects what's happened
       // since the page was first loaded.
       router.refresh();
       return;
@@ -154,6 +157,8 @@ export function AutomationEditor({ initial, stages, tags, dispositions, members,
       <div className="relative flex-1 overflow-hidden">
         {view === 'runs' ? (
           <RunsView runs={runs ?? []} />
+        ) : view === 'activity' ? (
+          <ActivityView rows={actionLog ?? []} />
         ) : view === 'visual' ? (
           <WorkflowCanvas
             initial={initialGraph}

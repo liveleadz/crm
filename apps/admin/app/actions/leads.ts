@@ -9,6 +9,7 @@ import {
   type FieldMapping,
   type PhoneCountry,
 } from '@/lib/leads-import';
+import { runAutomations } from '@/lib/automation-engine';
 
 export async function createLead(input: {
   firstName?: string | null;
@@ -51,6 +52,15 @@ export async function createLead(input: {
     .select('id')
     .single();
   if (error || !data) return { ok: false as const, error: error?.message ?? 'Insert failed' };
+
+  // Fire lead_created automations. Fire-and-forget; never blocks the UI.
+  void runAutomations({
+    trigger: 'lead_created',
+    brandId: active.id,
+    leadId: data.id,
+    memberId: null,
+    source: 'manual',
+  });
 
   revalidatePath('/leads');
   revalidatePath('/dashboard');
@@ -105,6 +115,14 @@ export async function createLeadFromCall(input: { callId: string }): Promise<
     .or(`from_number.eq.${leadPhone},to_number.eq.${leadPhone}`)
     .is('lead_id', null);
 
+  void runAutomations({
+    trigger: 'lead_created',
+    brandId: active.id,
+    leadId: lead.id,
+    memberId: null,
+    source: 'manual',
+  });
+
   revalidatePath('/calls');
   revalidatePath('/leads');
   return { ok: true, leadId: lead.id };
@@ -112,12 +130,30 @@ export async function createLeadFromCall(input: { callId: string }): Promise<
 
 export async function moveLeadStage(leadId: string, stageId: string) {
   const supabase = await createServerClient();
-  // RLS scopes the update; if the user can't access the lead the row count is 0.
+  // Snapshot the prior stage so the trigger payload has both ends. RLS
+  // scopes both reads and the update.
+  const { data: prior } = await supabase
+    .from('leads')
+    .select('stage_id, brand_id')
+    .eq('id', leadId)
+    .maybeSingle();
   const { error } = await supabase
     .from('leads')
     .update({ stage_id: stageId, updated_at: new Date().toISOString() })
     .eq('id', leadId);
   if (error) return { ok: false as const, error: error.message };
+
+  if (prior?.brand_id && prior.stage_id !== stageId) {
+    void runAutomations({
+      trigger: 'stage_changed',
+      brandId: prior.brand_id,
+      leadId,
+      memberId: null,
+      fromStageId: prior.stage_id ?? null,
+      toStageId: stageId,
+    });
+  }
+
   revalidatePath('/leads');
   revalidatePath('/dashboard');
   return { ok: true as const };

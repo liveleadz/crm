@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
-export type EditorView = 'standard' | 'visual' | 'runs';
+export type EditorView = 'standard' | 'visual' | 'runs' | 'activity';
 
 type Props = {
   initialName: string;
@@ -68,7 +68,7 @@ export function HeaderBar({
         <SaveBadge state={saveState} />
 
         <div className="flex rounded-lg border border-line bg-canvas p-0.5">
-          {(['standard', 'visual', 'runs'] as const).map((k) => (
+          {(['standard', 'visual', 'runs', 'activity'] as const).map((k) => (
             <button
               key={k}
               type="button"

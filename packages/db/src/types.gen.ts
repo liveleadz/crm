@@ -14,6 +14,74 @@ export type Database = {
   }
   public: {
     Tables: {
+      action_log: {
+        Row: {
+          action_kind: string
+          automation_id: string
+          brand_id: string
+          created_at: string
+          detail: Json | null
+          id: string
+          lead_id: string | null
+          status: string
+          trigger_type: string
+          workflow_run_id: string | null
+        }
+        Insert: {
+          action_kind: string
+          automation_id: string
+          brand_id: string
+          created_at?: string
+          detail?: Json | null
+          id?: string
+          lead_id?: string | null
+          status: string
+          trigger_type: string
+          workflow_run_id?: string | null
+        }
+        Update: {
+          action_kind?: string
+          automation_id?: string
+          brand_id?: string
+          created_at?: string
+          detail?: Json | null
+          id?: string
+          lead_id?: string | null
+          status?: string
+          trigger_type?: string
+          workflow_run_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "action_log_automation_id_fkey"
+            columns: ["automation_id"]
+            isOneToOne: false
+            referencedRelation: "automations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "action_log_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "action_log_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "action_log_workflow_run_id_fkey"
+            columns: ["workflow_run_id"]
+            isOneToOne: false
+            referencedRelation: "workflow_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       appointments: {
         Row: {
           brand_id: string

@@ -19,9 +19,16 @@ export type {
 export { describeAction, describeBranch, graphFromSimple, linearizeGraph } from './automation-types';
 
 // Trigger types known to the engine. Add new entries here when wiring more
-// integration points (e.g. lead_created, task_completed). The DB column is
-// free-form text so unknown values silently no-op rather than blocking saves.
-export type AutomationTriggerType = 'disposition_set' | 'webhook_received';
+// integration points (e.g. task_completed). The DB column is free-form text
+// so unknown values silently no-op rather than blocking saves.
+export type AutomationTriggerType =
+  | 'disposition_set'
+  | 'webhook_received'
+  | 'call_received'
+  | 'lead_created'
+  | 'stage_changed'
+  | 'email_received'
+  | 'appointment_booked';
 
 export type DispositionTriggerConfig = {
   // Disposition codes that should fire this automation. Matched against

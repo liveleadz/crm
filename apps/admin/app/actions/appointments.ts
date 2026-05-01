@@ -6,6 +6,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { APPT_STATUSES, type AppointmentStatus } from '@/lib/appointments';
 import { memberCanBookCalendar } from '@/lib/calendars';
 import { pushAppointment, deleteExternalEvent } from '@/lib/calendar/sync';
+import { runAutomations } from '@/lib/automation-engine';
 
 function isStatus(value: string): value is AppointmentStatus {
   return (APPT_STATUSES as readonly string[]).includes(value);
@@ -76,6 +77,15 @@ export async function createAppointment(input: {
 
   // Best-effort external push; failures degrade to ext_status='failed'.
   if (input.calendarId) await pushAppointment(data.id);
+
+  void runAutomations({
+    trigger: 'appointment_booked',
+    brandId: active.id,
+    leadId: input.leadId,
+    memberId: user.id,
+    appointmentId: data.id,
+    startsAt: input.startsAt,
+  });
 
   revalidatePath('/calendar');
   revalidatePath('/dashboard');

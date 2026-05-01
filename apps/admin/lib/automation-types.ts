@@ -349,6 +349,22 @@ export function describeTrigger(
   if (triggerType === 'call_received') {
     return 'When inbound call is received';
   }
+  if (triggerType === 'lead_created') {
+    const sources = Array.isArray(config.source_in) ? (config.source_in as string[]) : [];
+    if (sources.length === 0) return 'When a lead is created';
+    return `When a lead is created from ${sources.join(', ')}`;
+  }
+  if (triggerType === 'stage_changed') {
+    const to = Array.isArray(config.to_stage_in) ? (config.to_stage_in as string[]) : [];
+    if (to.length === 0) return 'When a lead\u2019s stage changes';
+    return `When a lead moves into ${to.length} stage${to.length === 1 ? '' : 's'}`;
+  }
+  if (triggerType === 'email_received') {
+    return 'When an email is received from a lead';
+  }
+  if (triggerType === 'appointment_booked') {
+    return 'When an appointment is booked';
+  }
   return 'Click to choose a trigger';
 }
 

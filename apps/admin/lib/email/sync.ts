@@ -9,6 +9,7 @@ import {
   parseAddressList,
   type GmailMessage,
 } from './google';
+import { runAutomations } from '@/lib/automation-engine';
 
 // Pulls inbound Gmail history for one member and reconciles it into
 // email_threads + email_messages. Best-effort. On the first sync the
@@ -254,9 +255,20 @@ async function reconcileMessage(input: {
     })
     .eq('id', threadId);
 
-  // Suppress unused-var warning when imports are pruned later.
-  void brandId;
-  void leadId;
+  // Fire email_received automations only on inbound messages tied to a
+  // matched lead. Outbound (self-sent) doesn't trigger.
+  if (direction === 'inbound' && leadId) {
+    void runAutomations({
+      trigger: 'email_received',
+      brandId,
+      leadId,
+      memberId,
+      threadId,
+      messageId: msg.id,
+      fromAddr: fromSingle ?? null,
+      subject: subject ?? null,
+    });
+  }
 
   return 'inserted';
 }
