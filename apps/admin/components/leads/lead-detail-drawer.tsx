@@ -17,6 +17,7 @@ import type { LeadDetail, LeadStage, TimelineEntry } from '@/lib/leads';
 import { LeadTasksPanel } from '@/components/tasks/lead-tasks-panel';
 import { LeadTagsSection } from '@/components/tags/lead-tags-section';
 import { LeadScriptsSection } from '@/components/scripts/lead-scripts-section';
+import { LeadEmailSection } from '@/components/leads/lead-email-section';
 import { AppointmentDialog } from '@/components/calendar/appointment-dialog';
 import { RecordingButton } from '@/components/calls/recording-button';
 
@@ -465,6 +466,17 @@ export function LeadDetailDrawer({
                 rows={4}
                 placeholder="Add private notes about this lead…"
                 className="w-full resize-none rounded-lg border border-line bg-canvas p-3 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+              />
+            </section>
+
+            <section className="border-b border-line p-5">
+              <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-txt-3">
+                Email
+              </h4>
+              <LeadEmailSection
+                leadId={lead.id}
+                leadEmail={lead.email}
+                doNotEmail={lead.doNotEmail}
               />
             </section>
 

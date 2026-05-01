@@ -560,6 +560,171 @@ export type Database = {
           },
         ]
       }
+      email_messages: {
+        Row: {
+          body_html: string | null
+          body_text: string | null
+          cc_addrs: string[]
+          created_at: string
+          direction: string
+          ext_history_id: string | null
+          ext_message_id: string
+          from_addr: string | null
+          id: string
+          member_id: string | null
+          sent_at: string
+          snippet: string | null
+          subject: string | null
+          thread_id: string
+          to_addrs: string[]
+        }
+        Insert: {
+          body_html?: string | null
+          body_text?: string | null
+          cc_addrs?: string[]
+          created_at?: string
+          direction: string
+          ext_history_id?: string | null
+          ext_message_id: string
+          from_addr?: string | null
+          id?: string
+          member_id?: string | null
+          sent_at: string
+          snippet?: string | null
+          subject?: string | null
+          thread_id: string
+          to_addrs?: string[]
+        }
+        Update: {
+          body_html?: string | null
+          body_text?: string | null
+          cc_addrs?: string[]
+          created_at?: string
+          direction?: string
+          ext_history_id?: string | null
+          ext_message_id?: string
+          from_addr?: string | null
+          id?: string
+          member_id?: string | null
+          sent_at?: string
+          snippet?: string | null
+          subject?: string | null
+          thread_id?: string
+          to_addrs?: string[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_messages_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_messages_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "email_threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      email_sync_state: {
+        Row: {
+          last_error: string | null
+          last_history_id: string | null
+          last_synced_at: string | null
+          member_id: string
+          updated_at: string
+        }
+        Insert: {
+          last_error?: string | null
+          last_history_id?: string | null
+          last_synced_at?: string | null
+          member_id: string
+          updated_at?: string
+        }
+        Update: {
+          last_error?: string | null
+          last_history_id?: string | null
+          last_synced_at?: string | null
+          member_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_sync_state_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: true
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      email_threads: {
+        Row: {
+          brand_id: string
+          created_at: string
+          ext_provider: string
+          ext_thread_id: string
+          id: string
+          last_message_at: string | null
+          lead_id: string | null
+          member_id: string
+          snippet: string | null
+          subject: string | null
+          updated_at: string
+        }
+        Insert: {
+          brand_id: string
+          created_at?: string
+          ext_provider?: string
+          ext_thread_id: string
+          id?: string
+          last_message_at?: string | null
+          lead_id?: string | null
+          member_id: string
+          snippet?: string | null
+          subject?: string | null
+          updated_at?: string
+        }
+        Update: {
+          brand_id?: string
+          created_at?: string
+          ext_provider?: string
+          ext_thread_id?: string
+          id?: string
+          last_message_at?: string | null
+          lead_id?: string | null
+          member_id?: string
+          snippet?: string | null
+          subject?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_threads_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_threads_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_threads_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       import_presets: {
         Row: {
           brand_id: string
@@ -962,6 +1127,7 @@ export type Database = {
           email: string
           email_oauth: Json | null
           email_provider: string | null
+          email_signature: string | null
           full_name: string | null
           id: string
           mobile_phone: string | null
@@ -974,6 +1140,7 @@ export type Database = {
           email: string
           email_oauth?: Json | null
           email_provider?: string | null
+          email_signature?: string | null
           full_name?: string | null
           id: string
           mobile_phone?: string | null
@@ -986,6 +1153,7 @@ export type Database = {
           email?: string
           email_oauth?: Json | null
           email_provider?: string | null
+          email_signature?: string | null
           full_name?: string | null
           id?: string
           mobile_phone?: string | null
