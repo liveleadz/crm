@@ -226,6 +226,24 @@ export async function sendEmailToLead(input: {
   return { ok: true, threadId: dbThreadId, messageId: result.id };
 }
 
+export async function updateMyEmailSignature(input: {
+  signature: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: 'Not authenticated' };
+  const trimmed = input.signature.trim();
+  const admin = createAdminClient();
+  await admin
+    .from('members')
+    .update({ email_signature: trimmed || null })
+    .eq('id', user.id);
+  revalidatePath('/settings/connections');
+  return { ok: true };
+}
+
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }

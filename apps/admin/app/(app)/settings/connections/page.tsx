@@ -2,18 +2,20 @@ import { createServerClient } from '@leadpilot/db/server';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { PageHeader } from '@/components/page-header';
 import { ConnectionCard } from '@/components/settings/connection-card';
+import { SignatureEditor } from '@/components/settings/signature-editor';
 
 type ConnectedShape = {
   provider: 'google' | null;
   accountEmail: string | null;
   scopes: string[];
+  signature: string;
 };
 
 async function loadConnection(memberId: string): Promise<ConnectedShape> {
   const admin = createAdminClient();
   const { data } = await admin
     .from('members')
-    .select('email_provider, email_oauth, oauth_scopes')
+    .select('email_provider, email_oauth, oauth_scopes, email_signature')
     .eq('id', memberId)
     .maybeSingle();
   const provider = data?.email_provider === 'google' ? 'google' : null;
@@ -22,6 +24,7 @@ async function loadConnection(memberId: string): Promise<ConnectedShape> {
     provider,
     accountEmail: oauth?.account_email ?? null,
     scopes: data?.oauth_scopes ?? [],
+    signature: data?.email_signature ?? '',
   };
 }
 
@@ -66,6 +69,9 @@ export default async function ConnectionsPage({
             Connect grants calendar + email scopes. Email is used to send and
             read replies on behalf of you from the lead detail composer.
           </p>
+          {conn.scopes.includes('email') && (
+            <SignatureEditor initial={conn.signature} />
+          )}
         </div>
       </div>
     </>
