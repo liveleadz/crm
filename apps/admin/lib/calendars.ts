@@ -8,7 +8,7 @@ export type CalendarRow = {
   color: string | null;
   ownerMemberId: string | null;
   ownerName: string | null;
-  extProvider: 'google' | 'microsoft' | null;
+  extProvider: 'google' | null;
   extCalendarId: string | null;
   extLastSyncAt: string | null;
   defaultDurationMin: number;
@@ -85,7 +85,7 @@ function shapeCalendar(
     color: raw.color,
     ownerMemberId: raw.owner_member_id,
     ownerName,
-    extProvider: raw.ext_provider as 'google' | 'microsoft' | null,
+    extProvider: raw.ext_provider === 'google' ? 'google' : null,
     extCalendarId: raw.ext_calendar_id,
     extLastSyncAt: raw.ext_last_sync_at,
     defaultDurationMin: raw.default_duration_min,

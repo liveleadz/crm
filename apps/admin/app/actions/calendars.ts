@@ -6,7 +6,6 @@ import { createAdminClient } from '@leadpilot/db/admin';
 import { getActiveBrand } from '@/lib/active-brand';
 import { canManageTeam, getCurrentBrandRole } from '@/lib/team';
 import { listMyCalendars as listGoogleCalendars } from '@/lib/calendar/google';
-import { listMyCalendars as listMicrosoftCalendars } from '@/lib/calendar/microsoft';
 
 async function requireManager() {
   const active = await getActiveBrand();
@@ -191,24 +190,16 @@ export async function listOwnerExternalCalendars(input: { calendarId: string }) 
     return { ok: false as const, error: 'Owner has not connected a calendar provider' };
   }
 
-  try {
-    if (m.email_provider === 'google') {
-      const items = await listGoogleCalendars(cal.owner_member_id);
-      return {
-        ok: true as const,
-        provider: 'google' as const,
-        items: items.map((i) => ({ id: i.id, name: i.summary, primary: !!i.primary })),
-      };
-    }
-    if (m.email_provider === 'microsoft') {
-      const items = await listMicrosoftCalendars(cal.owner_member_id);
-      return {
-        ok: true as const,
-        provider: 'microsoft' as const,
-        items: items.map((i) => ({ id: i.id, name: i.name, primary: !!i.isDefaultCalendar })),
-      };
-    }
+  if (m.email_provider !== 'google') {
     return { ok: false as const, error: `Unsupported provider: ${m.email_provider}` };
+  }
+  try {
+    const items = await listGoogleCalendars(cal.owner_member_id);
+    return {
+      ok: true as const,
+      provider: 'google' as const,
+      items: items.map((i) => ({ id: i.id, name: i.summary, primary: !!i.primary })),
+    };
   } catch (e) {
     return { ok: false as const, error: (e as Error).message };
   }
@@ -216,7 +207,7 @@ export async function listOwnerExternalCalendars(input: { calendarId: string }) 
 
 export async function bindCalendarToProvider(input: {
   calendarId: string;
-  provider: 'google' | 'microsoft';
+  provider: 'google';
   extCalendarId: string;
 }) {
   const guard = await requireManager();

@@ -6,7 +6,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 // to the database. Bound to a single member id and a 10-minute window.
 
 export type OAuthIntent = 'calendar' | 'email';
-export type OAuthProvider = 'google' | 'microsoft';
+export type OAuthProvider = 'google';
 
 export type StatePayload = {
   memberId: string;

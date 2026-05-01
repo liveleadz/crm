@@ -1,9 +1,6 @@
 import 'server-only';
 import { createAdminClient } from '@leadpilot/db/admin';
 import * as google from './google';
-import * as microsoft from './microsoft';
-
-type Provider = 'google' | 'microsoft';
 
 type EventInput = {
   summary: string;
@@ -77,11 +74,15 @@ export async function pushAppointment(appointmentId: string): Promise<void> {
     return;
   }
 
+  if (cal.ext_provider !== 'google') {
+    await setExt(appointmentId, { ext_status: 'failed' });
+    return;
+  }
+
   try {
-    const provider = cal.ext_provider as Provider;
     const event = asEventInput(appt);
     if (appt.ext_event_id) {
-      const result = await (provider === 'google' ? google : microsoft).patchEvent({
+      const result = await google.patchEvent({
         memberId: cal.owner_member_id,
         extCalendarId: cal.ext_calendar_id,
         extEventId: appt.ext_event_id,
@@ -94,7 +95,7 @@ export async function pushAppointment(appointmentId: string): Promise<void> {
         ext_status: 'pushed',
       });
     } else {
-      const result = await (provider === 'google' ? google : microsoft).pushEvent({
+      const result = await google.pushEvent({
         memberId: cal.owner_member_id,
         extCalendarId: cal.ext_calendar_id,
         event,
@@ -118,10 +119,9 @@ export async function deleteExternalEvent(input: {
 }): Promise<void> {
   if (!input.extEventId) return;
   const cal = await loadCalendar(input.calendarId);
-  if (!cal || !cal.ext_provider || !cal.ext_calendar_id || !cal.owner_member_id) return;
+  if (!cal || cal.ext_provider !== 'google' || !cal.ext_calendar_id || !cal.owner_member_id) return;
   try {
-    const provider = cal.ext_provider as Provider;
-    await (provider === 'google' ? google : microsoft).deleteEvent({
+    await google.deleteEvent({
       memberId: cal.owner_member_id,
       extCalendarId: cal.ext_calendar_id,
       extEventId: input.extEventId,
@@ -139,7 +139,13 @@ export async function pullCalendar(calendarId: string): Promise<{
   removes: number;
 }> {
   const cal = await loadCalendar(calendarId);
-  if (!cal || !cal.is_active || !cal.ext_provider || !cal.ext_calendar_id || !cal.owner_member_id) {
+  if (
+    !cal ||
+    !cal.is_active ||
+    cal.ext_provider !== 'google' ||
+    !cal.ext_calendar_id ||
+    !cal.owner_member_id
+  ) {
     return { upserts: 0, removes: 0 };
   }
 
@@ -150,134 +156,67 @@ export async function pullCalendar(calendarId: string): Promise<{
     .eq('id', calendarId)
     .maybeSingle();
 
-  const provider = cal.ext_provider as Provider;
   const brandId = tokRow?.brand_id as string | undefined;
   if (!brandId) return { upserts: 0, removes: 0 };
 
   let upserts = 0;
   let removes = 0;
-  let nextSyncToken: string | null = null;
 
-  if (provider === 'google') {
-    const { events, nextSyncToken: tok } = await google.listDelta({
-      memberId: cal.owner_member_id,
-      extCalendarId: cal.ext_calendar_id,
-      syncToken: tokRow?.ext_sync_token ?? null,
-    });
-    nextSyncToken = tok;
-    for (const ev of events) {
-      const startIso = ev.start?.dateTime ?? (ev.start?.date ? `${ev.start.date}T00:00:00Z` : null);
-      const endIso = ev.end?.dateTime ?? (ev.end?.date ? `${ev.end.date}T00:00:00Z` : null);
-      if (ev.status === 'cancelled') {
-        const { count } = await admin
-          .from('appointments')
-          .delete({ count: 'exact' })
-          .eq('calendar_id', calendarId)
-          .eq('ext_event_id', ev.id);
-        removes += count ?? 0;
-        continue;
-      }
-      if (!startIso) continue;
-      const { data: existing } = await admin
+  const { events, nextSyncToken } = await google.listDelta({
+    memberId: cal.owner_member_id,
+    extCalendarId: cal.ext_calendar_id,
+    syncToken: tokRow?.ext_sync_token ?? null,
+  });
+  for (const ev of events) {
+    const startIso = ev.start?.dateTime ?? (ev.start?.date ? `${ev.start.date}T00:00:00Z` : null);
+    const endIso = ev.end?.dateTime ?? (ev.end?.date ? `${ev.end.date}T00:00:00Z` : null);
+    if (ev.status === 'cancelled') {
+      const { count } = await admin
         .from('appointments')
-        .select('id, lead_id')
+        .delete({ count: 'exact' })
         .eq('calendar_id', calendarId)
-        .eq('ext_event_id', ev.id)
-        .maybeSingle();
-      if (existing) {
-        await admin
-          .from('appointments')
-          .update({
-            title: ev.summary ?? '(no title)',
-            notes: ev.description ?? null,
-            location: ev.location ?? null,
-            starts_at: startIso,
-            ends_at: endIso,
-            ext_etag: ev.etag ?? null,
-            ext_status: existing.lead_id ? 'pushed' : 'ext_only',
-          })
-          .eq('id', existing.id);
-      } else {
-        await admin.from('appointments').insert({
-          brand_id: brandId,
-          calendar_id: calendarId,
-          lead_id: null,
-          member_id: cal.owner_member_id,
+        .eq('ext_event_id', ev.id);
+      removes += count ?? 0;
+      continue;
+    }
+    if (!startIso) continue;
+    const { data: existing } = await admin
+      .from('appointments')
+      .select('id, lead_id')
+      .eq('calendar_id', calendarId)
+      .eq('ext_event_id', ev.id)
+      .maybeSingle();
+    if (existing) {
+      await admin
+        .from('appointments')
+        .update({
           title: ev.summary ?? '(no title)',
           notes: ev.description ?? null,
           location: ev.location ?? null,
           starts_at: startIso,
           ends_at: endIso,
-          status: 'scheduled',
-          ext_event_id: ev.id,
           ext_etag: ev.etag ?? null,
-          ext_status: 'ext_only',
-        });
-      }
-      upserts += 1;
+          ext_status: existing.lead_id ? 'pushed' : 'ext_only',
+        })
+        .eq('id', existing.id);
+    } else {
+      await admin.from('appointments').insert({
+        brand_id: brandId,
+        calendar_id: calendarId,
+        lead_id: null,
+        member_id: cal.owner_member_id,
+        title: ev.summary ?? '(no title)',
+        notes: ev.description ?? null,
+        location: ev.location ?? null,
+        starts_at: startIso,
+        ends_at: endIso,
+        status: 'scheduled',
+        ext_event_id: ev.id,
+        ext_etag: ev.etag ?? null,
+        ext_status: 'ext_only',
+      });
     }
-  } else {
-    const { events, nextSyncToken: tok } = await microsoft.listDelta({
-      memberId: cal.owner_member_id,
-      extCalendarId: cal.ext_calendar_id,
-      syncToken: tokRow?.ext_sync_token ?? null,
-    });
-    nextSyncToken = tok;
-    for (const ev of events) {
-      if (ev['@removed'] || ev.isCancelled) {
-        const { count } = await admin
-          .from('appointments')
-          .delete({ count: 'exact' })
-          .eq('calendar_id', calendarId)
-          .eq('ext_event_id', ev.id);
-        removes += count ?? 0;
-        continue;
-      }
-      const startIso = ev.start?.dateTime
-        ? new Date(`${ev.start.dateTime}${ev.start.dateTime.endsWith('Z') ? '' : 'Z'}`).toISOString()
-        : null;
-      const endIso = ev.end?.dateTime
-        ? new Date(`${ev.end.dateTime}${ev.end.dateTime.endsWith('Z') ? '' : 'Z'}`).toISOString()
-        : null;
-      if (!startIso) continue;
-      const { data: existing } = await admin
-        .from('appointments')
-        .select('id, lead_id')
-        .eq('calendar_id', calendarId)
-        .eq('ext_event_id', ev.id)
-        .maybeSingle();
-      if (existing) {
-        await admin
-          .from('appointments')
-          .update({
-            title: ev.subject ?? '(no title)',
-            notes: ev.body?.content ?? ev.bodyPreview ?? null,
-            location: ev.location?.displayName ?? null,
-            starts_at: startIso,
-            ends_at: endIso,
-            ext_etag: ev['@odata.etag'] ?? null,
-            ext_status: existing.lead_id ? 'pushed' : 'ext_only',
-          })
-          .eq('id', existing.id);
-      } else {
-        await admin.from('appointments').insert({
-          brand_id: brandId,
-          calendar_id: calendarId,
-          lead_id: null,
-          member_id: cal.owner_member_id,
-          title: ev.subject ?? '(no title)',
-          notes: ev.body?.content ?? ev.bodyPreview ?? null,
-          location: ev.location?.displayName ?? null,
-          starts_at: startIso,
-          ends_at: endIso,
-          status: 'scheduled',
-          ext_event_id: ev.id,
-          ext_etag: ev['@odata.etag'] ?? null,
-          ext_status: 'ext_only',
-        });
-      }
-      upserts += 1;
-    }
+    upserts += 1;
   }
 
   await admin

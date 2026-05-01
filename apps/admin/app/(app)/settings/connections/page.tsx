@@ -4,7 +4,7 @@ import { PageHeader } from '@/components/page-header';
 import { ConnectionCard } from '@/components/settings/connection-card';
 
 type ConnectedShape = {
-  provider: 'google' | 'microsoft' | null;
+  provider: 'google' | null;
   accountEmail: string | null;
   scopes: string[];
 };
@@ -16,7 +16,7 @@ async function loadConnection(memberId: string): Promise<ConnectedShape> {
     .select('email_provider, email_oauth, oauth_scopes')
     .eq('id', memberId)
     .maybeSingle();
-  const provider = (data?.email_provider ?? null) as 'google' | 'microsoft' | null;
+  const provider = data?.email_provider === 'google' ? 'google' : null;
   const oauth = (data?.email_oauth ?? null) as { account_email?: string } | null;
   return {
     provider,
@@ -42,7 +42,7 @@ export default async function ConnectionsPage({
     <>
       <PageHeader
         title="Connections"
-        subtitle="Connect your Google or Microsoft account to sync calendars"
+        subtitle="Connect your Google account to sync calendars"
       />
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-2xl space-y-4">
@@ -61,12 +61,6 @@ export default async function ConnectionsPage({
             connected={conn.provider === 'google'}
             accountEmail={conn.provider === 'google' ? conn.accountEmail : null}
             scopes={conn.provider === 'google' ? conn.scopes : []}
-          />
-          <ConnectionCard
-            provider="microsoft"
-            connected={conn.provider === 'microsoft'}
-            accountEmail={conn.provider === 'microsoft' ? conn.accountEmail : null}
-            scopes={conn.provider === 'microsoft' ? conn.scopes : []}
           />
           <p className="text-[11.5px] text-txt-3">
             Phase 1 grants calendar scope only. Email send + read scopes will be

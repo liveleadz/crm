@@ -5,7 +5,6 @@ import { disconnectProvider } from '@/app/actions/integrations';
 
 const LABELS = {
   google: 'Google',
-  microsoft: 'Microsoft',
 } as const;
 
 type Provider = keyof typeof LABELS;

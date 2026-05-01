@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { createAdminClient } from '@leadpilot/db/admin';
 
-export async function disconnectProvider(input: { provider: 'google' | 'microsoft' }) {
+export async function disconnectProvider(input: { provider: 'google' }) {
   const supabase = await createServerClient();
   const {
     data: { user },

@@ -416,11 +416,11 @@ function BindPicker({
 }: {
   calendarId: string;
   onClose: () => void;
-  onBound: (provider: 'google' | 'microsoft', extCalendarId: string) => void;
+  onBound: (provider: 'google', extCalendarId: string) => void;
   onError: (msg: string) => void;
 }) {
   const [items, setItems] = useState<{ id: string; name: string; primary: boolean }[] | null>(null);
-  const [provider, setProvider] = useState<'google' | 'microsoft' | null>(null);
+  const [provider, setProvider] = useState<'google' | null>(null);
   const [loading, setLoading] = useState(true);
   const [, start] = useTransition();
 
