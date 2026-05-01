@@ -490,6 +490,70 @@ export type Database = {
           },
         ]
       }
+      import_presets: {
+        Row: {
+          brand_id: string
+          created_at: string
+          created_by: string | null
+          default_country: string
+          extra_tag_ids: string[]
+          id: string
+          mapping: Json
+          name: string
+          skip_dedup: boolean
+          stage_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          brand_id: string
+          created_at?: string
+          created_by?: string | null
+          default_country?: string
+          extra_tag_ids?: string[]
+          id?: string
+          mapping?: Json
+          name: string
+          skip_dedup?: boolean
+          stage_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          brand_id?: string
+          created_at?: string
+          created_by?: string | null
+          default_country?: string
+          extra_tag_ids?: string[]
+          id?: string
+          mapping?: Json
+          name?: string
+          skip_dedup?: boolean
+          stage_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "import_presets_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_presets_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_presets_stage_id_fkey"
+            columns: ["stage_id"]
+            isOneToOne: false
+            referencedRelation: "stages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_custom_fields: {
         Row: {
           brand_id: string

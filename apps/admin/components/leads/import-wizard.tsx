@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Papa from 'papaparse';
 import { importLeads } from '@/app/actions/leads';
 import { createCustomField } from '@/app/actions/lists';
+import { saveImportPreset, deleteImportPreset } from '@/app/actions/import-presets';
 import {
   applyMapping,
   autoMapHeaders,
@@ -18,6 +19,7 @@ import {
 import type { LeadStage } from '@/lib/leads';
 import type { CustomField } from '@/lib/lists';
 import type { Tag } from '@/lib/tags';
+import type { ImportPreset } from '@/lib/import-presets';
 
 type Step = 'upload' | 'map' | 'preview' | 'done';
 
@@ -37,10 +39,12 @@ export function ImportWizard({
   stages,
   initialCustomFields,
   tagLibrary,
+  initialPresets,
 }: {
   stages: LeadStage[];
   initialCustomFields: CustomField[];
   tagLibrary: Tag[];
+  initialPresets: ImportPreset[];
 }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>('upload');
@@ -61,6 +65,12 @@ export function ImportWizard({
   const [result, setResult] = useState<Result | null>(null);
   const [, startTransition] = useTransition();
   const [importing, setImporting] = useState(false);
+  // Saved presets — apply restores mapping + side-options in one click.
+  const [presets, setPresets] = useState<ImportPreset[]>(initialPresets);
+  const [appliedPresetId, setAppliedPresetId] = useState<string | null>(null);
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [showSavePreset, setShowSavePreset] = useState(false);
   // Header currently being renamed via the inline "+ New custom field" input.
   const [creatingFor, setCreatingFor] = useState<string | null>(null);
   const [newFieldLabel, setNewFieldLabel] = useState('');
@@ -88,7 +98,20 @@ export function ImportWizard({
         }
         setHeaders(cols);
         setRows(results.data);
-        setMapping(autoMapHeaders(cols));
+        // If exactly one saved preset matches every column in this CSV
+        // (every preset key exists as a header), auto-apply it. We also
+        // restore its options so reruns of a familiar CSV are one click.
+        const matched = presets.filter((p) => {
+          const keys = Object.keys(p.mapping);
+          if (keys.length === 0) return false;
+          return keys.every((k) => cols.includes(k));
+        });
+        if (matched.length === 1) {
+          applyPreset(matched[0]!, cols);
+        } else {
+          setMapping(autoMapHeaders(cols));
+          setAppliedPresetId(null);
+        }
         setStep('map');
       },
       error: (err) => setError(`Parse failed: ${err.message}`),
@@ -122,6 +145,74 @@ export function ImportWizard({
   function cancelCreate() {
     setCreatingFor(null);
     setNewFieldLabel('');
+  }
+
+  // Apply a preset's mapping + side-options to the current CSV. Headers
+  // present in the preset but missing from the new CSV are silently
+  // dropped; headers in the CSV but missing from the preset get their
+  // auto-mapped target so we never end up with an undefined slot.
+  function applyPreset(p: ImportPreset, cols: string[] = headers) {
+    const auto = autoMapHeaders(cols);
+    const next: FieldMapping = { ...auto };
+    for (const h of cols) {
+      const t = p.mapping[h];
+      if (t !== undefined) next[h] = t;
+    }
+    setMapping(next);
+    setDefaultCountry(p.defaultCountry);
+    setStageId(p.stageId ?? sortedStages[0]?.id ?? '');
+    setExtraTagIds(p.extraTagIds);
+    setSkipDedup(p.skipDedup);
+    setAppliedPresetId(p.id);
+  }
+
+  async function commitSavePreset() {
+    const name = presetName.trim();
+    if (!name) return;
+    setSavingPreset(true);
+    setError(null);
+    const res = await saveImportPreset({
+      name,
+      mapping,
+      defaultCountry,
+      stageId: stageId || null,
+      extraTagIds,
+      skipDedup,
+    });
+    setSavingPreset(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    // Optimistically add to local cache so the dropdown reflects the new
+    // preset without a router.refresh round-trip.
+    setPresets((prev) => [
+      {
+        id: res.id,
+        name,
+        mapping,
+        defaultCountry,
+        stageId: stageId || null,
+        extraTagIds,
+        skipDedup,
+        createdAt: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+    setAppliedPresetId(res.id);
+    setShowSavePreset(false);
+    setPresetName('');
+  }
+
+  async function removePreset(id: string) {
+    const prev = presets;
+    setPresets((cur) => cur.filter((p) => p.id !== id));
+    if (appliedPresetId === id) setAppliedPresetId(null);
+    const res = await deleteImportPreset({ id });
+    if (!res.ok) {
+      setError(res.error);
+      setPresets(prev);
+    }
   }
 
   async function commitCreate(header: string) {
@@ -299,6 +390,14 @@ export function ImportWizard({
 
       {step === 'map' && (
         <div className="space-y-4">
+          {presets.length > 0 && (
+            <PresetBar
+              presets={presets}
+              appliedId={appliedPresetId}
+              onApply={(p) => applyPreset(p)}
+              onDelete={removePreset}
+            />
+          )}
           <MapSummary
             mapping={mapping}
             headers={headers}
@@ -505,19 +604,70 @@ export function ImportWizard({
             </div>
           </div>
 
-          <div className="flex items-center justify-between rounded-2xl border border-line bg-surface px-5 py-3">
+          <div className="flex items-center justify-between gap-2 rounded-2xl border border-line bg-surface px-5 py-3">
             <span className="text-[12px] text-txt-3">
               {validCount.toLocaleString()} of {rows.length.toLocaleString()} rows valid in
               this mapping.
             </span>
-            <button
-              type="button"
-              onClick={() => setStep('preview')}
-              disabled={validCount === 0 || !listName.trim()}
-              className="rounded-lg bg-teal px-4 py-1.5 text-[12.5px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
-            >
-              Preview →
-            </button>
+            <div className="flex items-center gap-2">
+              {showSavePreset ? (
+                <>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={presetName}
+                    onChange={(e) => setPresetName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void commitSavePreset();
+                      } else if (e.key === 'Escape') {
+                        setShowSavePreset(false);
+                        setPresetName('');
+                      }
+                    }}
+                    placeholder="Preset name (e.g. FB Lead Form)"
+                    className="w-56 rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12px] outline-none focus:border-teal/60"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void commitSavePreset()}
+                    disabled={savingPreset || !presetName.trim()}
+                    className="rounded-lg border border-teal bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+                  >
+                    {savingPreset ? 'Saving…' : 'Save preset'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSavePreset(false);
+                      setPresetName('');
+                    }}
+                    disabled={savingPreset}
+                    className="rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12px] text-txt-3 hover:bg-canvas/50"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowSavePreset(true)}
+                  className="rounded-lg border border-line bg-canvas px-3 py-1.5 text-[12px] text-txt-2 hover:border-line-2"
+                  title="Save the current mapping + options as a reusable preset"
+                >
+                  Save as preset
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setStep('preview')}
+                disabled={validCount === 0 || !listName.trim()}
+                className="rounded-lg bg-teal px-4 py-1.5 text-[12.5px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+              >
+                Preview →
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -892,6 +1042,66 @@ function TagMultiselect({
             />
             {t.name}
           </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Saved-preset chooser. Click a chip to apply; the × to delete. The
+// auto-applied preset (whose keys exactly match this CSV's headers)
+// renders with a teal ring so the agent can see what's currently in
+// effect at a glance.
+function PresetBar({
+  presets,
+  appliedId,
+  onApply,
+  onDelete,
+}: {
+  presets: ImportPreset[];
+  appliedId: string | null;
+  onApply: (p: ImportPreset) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-surface px-5 py-3">
+      <span className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        Presets
+      </span>
+      {presets.map((p) => {
+        const on = p.id === appliedId;
+        return (
+          <span
+            key={p.id}
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11.5px] font-medium ring-1 ${
+              on
+                ? 'bg-teal/15 text-teal ring-teal/40'
+                : 'bg-canvas text-txt-2 ring-line hover:ring-line-2'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => onApply(p)}
+              className="cursor-pointer"
+              title="Apply this preset"
+            >
+              {p.name}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(`Delete preset "${p.name}"?`)) onDelete(p.id);
+              }}
+              className="grid h-3.5 w-3.5 place-items-center rounded-full text-txt-3 hover:bg-line/40 hover:text-hp"
+              aria-label={`Delete preset ${p.name}`}
+              title="Delete preset"
+            >
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M6 6l12 12" />
+                <path d="M18 6l-12 12" />
+              </svg>
+            </button>
+          </span>
         );
       })}
     </div>

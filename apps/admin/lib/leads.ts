@@ -63,6 +63,8 @@ export type TimelineEntry =
       direction: 'inbound' | 'outbound';
       disposition: string | null;
       durationSec: number | null;
+      hasRecording: boolean;
+      recordingDurationSec: number | null;
     }
   | {
       kind: 'appointment';
@@ -93,7 +95,9 @@ export async function loadLeadDetail(leadId: string, brandId: string) {
       .maybeSingle(),
     supabase
       .from('calls')
-      .select('id, started_at, direction, disposition, duration_sec')
+      .select(
+        'id, started_at, direction, disposition, duration_sec, recording_url, recording_duration_sec',
+      )
       .eq('lead_id', leadId)
       .order('started_at', { ascending: false })
       .limit(50),
@@ -140,6 +144,8 @@ export async function loadLeadDetail(leadId: string, brandId: string) {
       direction: c.direction as 'inbound' | 'outbound',
       disposition: c.disposition,
       durationSec: c.duration_sec,
+      hasRecording: Boolean(c.recording_url),
+      recordingDurationSec: c.recording_duration_sec ?? null,
     })),
     ...(apptsRes.data ?? []).map<TimelineEntry>((a) => ({
       kind: 'appointment',

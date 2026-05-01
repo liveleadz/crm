@@ -3,6 +3,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadStages } from '@/lib/leads';
 import { loadCustomFields } from '@/lib/lists';
 import { loadBrandTags } from '@/lib/tags';
+import { loadImportPresets } from '@/lib/import-presets';
 import { PageHeader } from '@/components/page-header';
 import { ImportWizard } from '@/components/leads/import-wizard';
 
@@ -20,7 +21,7 @@ import { ImportWizard } from '@/components/leads/import-wizard';
 export default async function ImportLeadsPage() {
   const active = await getActiveBrand();
   if (!active) redirect('/');
-  const [stages, customFields, tagLibrary] = await Promise.all([
+  const [stages, customFields, tagLibrary, presets] = await Promise.all([
     loadStages(active.id).catch((err) => {
       console.error('[pipelines/import] loadStages failed', err);
       return [];
@@ -31,6 +32,10 @@ export default async function ImportLeadsPage() {
     }),
     loadBrandTags(active.id).catch((err) => {
       console.error('[pipelines/import] loadBrandTags failed', err);
+      return [];
+    }),
+    loadImportPresets(active.id).catch((err) => {
+      console.error('[pipelines/import] loadImportPresets failed', err);
       return [];
     }),
   ]);
@@ -46,6 +51,7 @@ export default async function ImportLeadsPage() {
           stages={stages}
           initialCustomFields={customFields}
           tagLibrary={tagLibrary}
+          initialPresets={presets}
         />
       </div>
     </>

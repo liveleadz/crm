@@ -20,6 +20,7 @@ import {
   DispositionPicker,
   type DispositionChoice,
 } from '@/components/dialer/disposition-picker';
+import { RecordingButton } from '@/components/calls/recording-button';
 import type { QueuedLead } from '@/lib/dial-queue';
 
 type Status =
@@ -33,6 +34,10 @@ type Status =
 
 type Outcome = {
   leadId: string;
+  // Set when prepareCall succeeded — used to fetch the recording from the
+  // Done sidebar once SignalWire finalizes the upload (a few seconds
+  // after hangup). Null on error/skip-before-prepare paths.
+  callId: string | null;
   disposition: string | null; // null = skipped
 };
 
@@ -56,6 +61,10 @@ export function PowerDialer({
   const clientRef = useRef<SignalWireClient | null>(null);
   const sessionRef = useRef<FabricRoomSession | null>(null);
   const callIdRef = useRef<string | null>(null);
+  // Latch of the last call id so advance() can stamp it onto the
+  // Outcome once we leave wrap_up (callIdRef itself gets cleared in
+  // finishCall before the disposition picker fires).
+  const lastCallIdRef = useRef<string | null>(null);
   const startedAtRef = useRef<number | null>(null);
   // After we save a disposition we want the next dial to happen without
   // an extra click. Tracked here so the disposition-picker callback can
@@ -148,6 +157,7 @@ export function PowerDialer({
     const startedAt = startedAtRef.current;
     sessionRef.current = null;
     callIdRef.current = null;
+    lastCallIdRef.current = cid;
     startedAtRef.current = null;
     setMuted(false);
     if (cid) {
@@ -167,7 +177,9 @@ export function PowerDialer({
 
   function advance(disposition: string | null) {
     if (current) {
-      setOutcomes((cur) => [...cur, { leadId: current.id, disposition }]);
+      const callId = lastCallIdRef.current;
+      lastCallIdRef.current = null;
+      setOutcomes((cur) => [...cur, { leadId: current.id, callId, disposition }]);
     }
     const nextIndex = index + 1;
     setIndex(nextIndex);
@@ -436,6 +448,7 @@ export function PowerDialer({
                       <span className="truncate">
                         {lead ? leadDisplay(lead) : '—'}
                       </span>
+                      {o.callId && <RecordingButton callId={o.callId} size="xs" />}
                       <span className="ml-auto text-[10.5px]">
                         {o.disposition ? meta?.label ?? o.disposition : 'skipped'}
                       </span>

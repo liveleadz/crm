@@ -18,6 +18,7 @@ import { LeadTasksPanel } from '@/components/tasks/lead-tasks-panel';
 import { LeadTagsSection } from '@/components/tags/lead-tags-section';
 import { LeadScriptsSection } from '@/components/scripts/lead-scripts-section';
 import { AppointmentDialog } from '@/components/calendar/appointment-dialog';
+import { RecordingButton } from '@/components/calls/recording-button';
 
 const DISPOSITION_LABEL: Record<string, string> = {
   connected: 'Connected',
@@ -567,6 +568,15 @@ function TimelineRow({ entry }: { entry: TimelineEntry }) {
             <span>{label}</span>
             <span>·</span>
             <span className="font-mono">{formatDuration(entry.durationSec)}</span>
+            {entry.hasRecording && (
+              <span className="ml-auto">
+                <RecordingButton
+                  callId={entry.id}
+                  durationSec={entry.recordingDurationSec}
+                  size="xs"
+                />
+              </span>
+            )}
           </div>
         </div>
       </li>

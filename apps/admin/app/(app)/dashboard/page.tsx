@@ -5,12 +5,23 @@ import { KpiCards } from '@/components/dashboard/kpi-cards';
 import { PipelineByStage } from '@/components/dashboard/pipeline-by-stage';
 import { RecentCalls } from '@/components/dashboard/recent-calls';
 import { TodaysAppointments } from '@/components/dashboard/todays-appointments';
+import { TodayOutcomes } from '@/components/dashboard/today-outcomes';
+import { RecentImports } from '@/components/dashboard/recent-imports';
+import { TopTags } from '@/components/dashboard/top-tags';
 import { RealtimeRefresher } from '@/components/realtime-refresher';
 
 export default async function DashboardPage() {
   const active = await getActiveBrand();
   if (!active) return null;
-  const { kpis, pipeline, recentCalls, todayAppointments } = await loadDashboard(active.id);
+  const {
+    kpis,
+    pipeline,
+    recentCalls,
+    todayAppointments,
+    todayOutcomes,
+    recentImports,
+    topTags,
+  } = await loadDashboard(active.id);
 
   return (
     <>
@@ -24,6 +35,12 @@ export default async function DashboardPage() {
             <PipelineByStage pipeline={pipeline} />
           </div>
           <RecentCalls calls={recentCalls} />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <TodayOutcomes outcomes={todayOutcomes} />
+          <RecentImports imports={recentImports} />
+          <TopTags tags={topTags} />
         </div>
 
         <TodaysAppointments appointments={todayAppointments} />
