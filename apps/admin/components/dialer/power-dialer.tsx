@@ -30,6 +30,7 @@ import {
   nextSectionForDisposition,
   type ScriptSection,
 } from '@/lib/scripts';
+import { dialWindowCheck, type TcpaPolicy } from '@/lib/tcpa';
 
 type Status =
   | { kind: 'idle' } // queue not started yet
@@ -56,6 +57,8 @@ export function PowerDialer({
   queue,
   campaignId = null,
   script = null,
+  tcpaPolicy = null,
+  brandTimezone = 'UTC',
 }: {
   brandName: string | null;
   fromE164: string | null;
@@ -65,6 +68,12 @@ export function PowerDialer({
   // panel renders on the right.
   campaignId?: string | null;
   script?: ScriptRow | null;
+  // When the campaign opted into TCPA, render a small badge on the
+  // Ready card showing the lead-local time and whether we're inside
+  // the dial window. Queue is pre-filtered server-side, but a lead can
+  // tip past the boundary while sitting in the queue.
+  tcpaPolicy?: TcpaPolicy | null;
+  brandTimezone?: string;
 }) {
   const [index, setIndex] = useState(0);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
@@ -335,6 +344,19 @@ export function PowerDialer({
     return m;
   }, [dispositions]);
 
+  // Re-evaluate the dial window every time the lead changes. Cheap (no
+  // I/O) so we can also retick on the elapsed counter to refresh the
+  // displayed local clock minute-by-minute during a long wrap-up.
+  const tcpaCheck = useMemo(() => {
+    if (!tcpaPolicy?.enabled || !current) return null;
+    return dialWindowCheck({
+      leadState: current.state ?? null,
+      brandTimezone,
+      policy: tcpaPolicy,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tcpaPolicy, current?.id, current?.state, brandTimezone, status.kind]);
+
   const headline = useMemo(() => {
     if (queue.length === 0) return 'No leads queued';
     if (status.kind === 'done') return 'Queue complete';
@@ -404,6 +426,19 @@ export function PowerDialer({
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" />
                     {formatDur(elapsed)}
                   </div>
+                )}
+                {tcpaCheck && (
+                  tcpaCheck.ok ? (
+                    <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-teal/30 bg-teal/10 px-2 py-0.5 text-[10.5px] font-medium text-teal">
+                      <span className="h-1 w-1 rounded-full bg-teal" />
+                      Within window · {tcpaCheck.localHHMM} {tcpaCheck.leadTz}
+                    </div>
+                  ) : (
+                    <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-hp/30 bg-hp/10 px-2 py-0.5 text-[10.5px] font-medium text-hp">
+                      <span className="h-1 w-1 rounded-full bg-hp" />
+                      {tcpaCheck.reason}
+                    </div>
+                  )
                 )}
                 {status.kind === 'error' && (
                   <div className="mt-3 rounded-lg border border-hp/40 bg-hp/10 px-3 py-2 text-[11.5px] text-hp">

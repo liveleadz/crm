@@ -97,6 +97,17 @@ export default async function DialerPage({
             queue={queue}
             campaignId={campaign?.id ?? null}
             script={script}
+            tcpaPolicy={
+              campaign
+                ? {
+                    enabled: campaign.tcpaEnabled,
+                    startMin: campaign.dialWindowStartMin,
+                    endMin: campaign.dialWindowEndMin,
+                    skipWeekends: campaign.skipWeekends,
+                  }
+                : null
+            }
+            brandTimezone={active?.timezone ?? 'UTC'}
           />
         ) : (
           <WebRTCDialPad
