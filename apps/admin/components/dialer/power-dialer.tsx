@@ -25,6 +25,11 @@ import { RecordingButton } from '@/components/calls/recording-button';
 import { LeadContextPanel } from '@/components/dialer/lead-context-panel';
 import type { QueuedLead } from '@/lib/dial-queue';
 import type { ScriptRow } from '@/lib/campaigns';
+import {
+  entrySectionId,
+  nextSectionForDisposition,
+  type ScriptSection,
+} from '@/lib/scripts';
 
 type Status =
   | { kind: 'idle' } // queue not started yet
@@ -63,6 +68,12 @@ export function PowerDialer({
 }) {
   const [index, setIndex] = useState(0);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  // Active script section. Null when the script is plain text or no
+  // script attached. Reset to entry on each new call; advanced by the
+  // disposition save callback for the *next* call.
+  const [currentSectionId, setCurrentSectionId] = useState<string | null>(
+    () => entrySectionId(script?.sections ?? null),
+  );
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const [muted, setMuted] = useState(false);
   const [, startTransition] = useTransition();
@@ -227,6 +238,11 @@ export function PowerDialer({
   function onDispositionSaved(code: string) {
     // Picker hands us the saved code so the "Done" sidebar can show the
     // actual outcome (e.g. "no_answer") instead of a generic "saved".
+    // Branching scripts: advance the section pointer for the *next* call.
+    if (script?.sections) {
+      const next = nextSectionForDisposition(script.sections, currentSectionId, code);
+      if (next) setCurrentSectionId(next);
+    }
     advance(code);
   }
 
@@ -335,7 +351,13 @@ export function PowerDialer({
             : 'lg:grid-cols-[1fr_280px]'
         }`}
       >
-        {script && <ScriptPanel script={script} />}
+        {script && (
+          <ScriptPanel
+            script={script}
+            currentSectionId={currentSectionId}
+            onSelectSection={setCurrentSectionId}
+          />
+        )}
         <div className="rounded-2xl border border-line bg-surface p-5">
           <div className="mb-3 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
             <span>
@@ -534,9 +556,23 @@ export function PowerDialer({
 
 // Lightweight panel pinned to the left of the dialer in campaign mode.
 // Long scripts get a search box so reps can jump to the right beat.
-function ScriptPanel({ script }: { script: ScriptRow }) {
+// When the script defines sections, the panel becomes a tabbed view and
+// shows a small "On <disposition> → <section>" hint below the body.
+function ScriptPanel({
+  script,
+  currentSectionId,
+  onSelectSection,
+}: {
+  script: ScriptRow;
+  currentSectionId: string | null;
+  onSelectSection: (id: string) => void;
+}) {
   const [query, setQuery] = useState('');
-  const body = script.body ?? '';
+  const sections = script.sections;
+  const activeSection: ScriptSection | null = sections
+    ? sections.find((s) => s.id === currentSectionId) ?? sections[0] ?? null
+    : null;
+  const body = activeSection ? activeSection.body : script.body ?? '';
   // Highlight matches inline by wrapping each occurrence in <mark>. We
   // build a regex from the trimmed query; empty query renders as-is.
   const rendered = useMemo(() => {
@@ -545,6 +581,12 @@ function ScriptPanel({ script }: { script: ScriptRow }) {
     const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return body.replace(new RegExp(safe, 'gi'), (m) => `\u0001${m}\u0002`);
   }, [body, query]);
+
+  const sectionTitleById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of sections ?? []) map.set(s.id, s.title);
+    return map;
+  }, [sections]);
 
   return (
     <aside className="rounded-2xl border border-line bg-surface p-3 lg:max-h-[680px] lg:overflow-auto">
@@ -556,6 +598,29 @@ function ScriptPanel({ script }: { script: ScriptRow }) {
           <div className="truncate text-[10.5px] text-txt-3">{script.name}</div>
         )}
       </div>
+
+      {sections && sections.length > 1 && (
+        <div className="mb-2 flex flex-wrap gap-1">
+          {sections.map((s) => {
+            const isActive = s.id === activeSection?.id;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => onSelectSection(s.id)}
+                className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                  isActive
+                    ? 'bg-teal/15 text-teal'
+                    : 'border border-line bg-canvas text-txt-2 hover:border-teal/40 hover:text-teal'
+                }`}
+              >
+                {s.title}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <input
         type="text"
         value={query}
@@ -575,6 +640,22 @@ function ScriptPanel({ script }: { script: ScriptRow }) {
           );
         })}
       </pre>
+
+      {activeSection && (activeSection.jumps?.length ?? 0) > 0 && (
+        <div className="mt-3 space-y-1 border-t border-line pt-2">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-txt-3">
+            Next section
+          </div>
+          {activeSection.jumps?.map((j) => (
+            <div key={`${j.disposition_code}-${j.target_section_id}`} className="text-[11px] text-txt-3">
+              On <span className="text-txt-2">{j.disposition_code}</span> →{' '}
+              <span className="text-txt-2">
+                {sectionTitleById.get(j.target_section_id) ?? '—'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </aside>
   );
 }

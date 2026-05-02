@@ -1803,6 +1803,7 @@ export type Database = {
           id: string
           kind: string
           name: string
+          sections: Json | null
           subject: string | null
           updated_at: string
         }
@@ -1815,6 +1816,7 @@ export type Database = {
           id?: string
           kind?: string
           name: string
+          sections?: Json | null
           subject?: string | null
           updated_at?: string
         }
@@ -1827,6 +1829,7 @@ export type Database = {
           id?: string
           kind?: string
           name?: string
+          sections?: Json | null
           subject?: string | null
           updated_at?: string
         }

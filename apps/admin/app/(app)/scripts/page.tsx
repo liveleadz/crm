@@ -1,4 +1,5 @@
 import { getActiveBrand } from '@/lib/active-brand';
+import { loadDispositions } from '@/lib/dispositions';
 import { loadScripts } from '@/lib/scripts-server';
 import type { ScriptKind } from '@/lib/scripts';
 import { PageHeader } from '@/components/page-header';
@@ -20,7 +21,10 @@ export default async function ScriptsPage({
   if (!active) return null;
   const sp = await searchParams;
   const kind = parseKind(sp.kind);
-  const scripts = await loadScripts(active.id, { kind });
+  const [scripts, dispositions] = await Promise.all([
+    loadScripts(active.id, { kind }),
+    loadDispositions(active.id),
+  ]);
   return (
     <>
       <PageHeader
@@ -29,7 +33,11 @@ export default async function ScriptsPage({
       />
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-5xl">
-          <ScriptsManager activeKind={kind} scripts={scripts} />
+          <ScriptsManager
+            activeKind={kind}
+            scripts={scripts}
+            dispositions={dispositions.map((d) => ({ code: d.code, label: d.label }))}
+          />
         </div>
       </div>
     </>

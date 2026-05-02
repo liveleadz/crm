@@ -1,5 +1,6 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
+import type { ScriptSection } from './scripts';
 
 export type CampaignStatus = 'active' | 'paused' | 'archived';
 
@@ -123,6 +124,7 @@ export type ScriptRow = {
   name: string;
   body: string;
   subject: string | null;
+  sections: ScriptSection[] | null;
 };
 
 // Load a campaign's script (kind='call'). Returns null if no script attached.
@@ -131,10 +133,50 @@ export async function loadCampaignScript(scriptId: string | null): Promise<Scrip
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('scripts')
-    .select('id, name, body, subject')
+    .select('id, name, body, subject, sections')
     .eq('id', scriptId)
     .maybeSingle();
-  return data;
+  if (!data) return null;
+  return {
+    id: data.id,
+    name: data.name,
+    body: data.body,
+    subject: data.subject,
+    sections: parseSectionsFromJson(data.sections),
+  };
+}
+
+// Inline parser duplicated from scripts-server.ts so this server-only
+// helper can stay focused on the dialer slice without a cross-import.
+function parseSectionsFromJson(raw: unknown): ScriptSection[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: ScriptSection[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    if (typeof r.id !== 'string' || !r.id) continue;
+    if (typeof r.title !== 'string') continue;
+    if (typeof r.body !== 'string') continue;
+    const jumps = Array.isArray(r.jumps)
+      ? r.jumps.flatMap((j) => {
+          if (!j || typeof j !== 'object') return [];
+          const jr = j as Record<string, unknown>;
+          if (
+            typeof jr.disposition_code !== 'string' ||
+            typeof jr.target_section_id !== 'string'
+          )
+            return [];
+          return [
+            {
+              disposition_code: jr.disposition_code,
+              target_section_id: jr.target_section_id,
+            },
+          ];
+        })
+      : [];
+    out.push({ id: r.id, title: r.title, body: r.body, jumps });
+  }
+  return out.length > 0 ? out : null;
 }
 
 export type AgentCampaignSummary = {

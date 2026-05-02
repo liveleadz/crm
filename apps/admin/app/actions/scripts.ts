@@ -4,7 +4,39 @@ import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadScripts } from '@/lib/scripts-server';
-import type { ScriptKind, ScriptRow } from '@/lib/scripts';
+import type { ScriptKind, ScriptRow, ScriptSection } from '@/lib/scripts';
+
+// Defensive narrow before persisting sections JSONB. Drops anything that
+// doesn't match the expected shape so a malformed client payload can't
+// poison the row (the dialer reader trusts the shape).
+function sanitizeSections(input: unknown): ScriptSection[] | null {
+  if (input === null) return null;
+  if (!Array.isArray(input)) return null;
+  const out: ScriptSection[] = [];
+  const seenIds = new Set<string>();
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    const id = typeof r.id === 'string' ? r.id.trim() : '';
+    const title = typeof r.title === 'string' ? r.title.trim() : '';
+    const body = typeof r.body === 'string' ? r.body : '';
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    const jumpsRaw = Array.isArray(r.jumps) ? r.jumps : [];
+    const jumps = jumpsRaw
+      .map((j) => {
+        if (!j || typeof j !== 'object') return null;
+        const jj = j as Record<string, unknown>;
+        const dc = typeof jj.disposition_code === 'string' ? jj.disposition_code.trim() : '';
+        const tg = typeof jj.target_section_id === 'string' ? jj.target_section_id.trim() : '';
+        if (!dc || !tg) return null;
+        return { disposition_code: dc, target_section_id: tg };
+      })
+      .filter((x): x is { disposition_code: string; target_section_id: string } => !!x);
+    out.push({ id, title: title || 'Untitled', body, jumps });
+  }
+  return out.length === 0 ? null : out;
+}
 
 function bump() {
   revalidatePath('/scripts');
@@ -67,6 +99,7 @@ export async function updateScript(
     description?: string | null;
     subject?: string | null;
     body?: string;
+    sections?: ScriptSection[] | null;
   },
 ) {
   const supabase = await createServerClient();
@@ -75,6 +108,7 @@ export async function updateScript(
     description?: string | null;
     subject?: string | null;
     body?: string;
+    sections?: ScriptSection[] | null;
   } = {};
   if (patch.name !== undefined) {
     const n = patch.name.trim();
@@ -88,6 +122,7 @@ export async function updateScript(
     update.subject = patch.subject?.trim() || null;
   }
   if (patch.body !== undefined) update.body = patch.body;
+  if (patch.sections !== undefined) update.sections = sanitizeSections(patch.sections);
 
   const { error } = await supabase.from('scripts').update(update).eq('id', scriptId);
   if (error) return { ok: false as const, error: error.message };

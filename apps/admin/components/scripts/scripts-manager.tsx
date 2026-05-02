@@ -13,6 +13,8 @@ import {
   renderScript,
   type ScriptKind,
   type ScriptRow,
+  type ScriptSection,
+  type ScriptSectionJump,
 } from '@/lib/scripts';
 
 const KIND_LABEL: Record<ScriptKind, string> = {
@@ -31,12 +33,29 @@ const SAMPLE_VARS = {
   brand_name: 'Your Brand',
 };
 
+type DispositionOption = { code: string; label: string };
+
+type EditorPatch = {
+  name?: string;
+  description?: string | null;
+  subject?: string | null;
+  body?: string;
+  sections?: ScriptSection[] | null;
+};
+
+// Random-ish id for new sections — short + URL-safe so jumps stay readable.
+function newSectionId() {
+  return Math.random().toString(36).slice(2, 9);
+}
+
 export function ScriptsManager({
   activeKind,
   scripts,
+  dispositions,
 }: {
   activeKind: ScriptKind;
   scripts: ScriptRow[];
+  dispositions: DispositionOption[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -87,6 +106,7 @@ export function ScriptsManager({
         description: null,
         subject: null,
         body: '',
+        sections: null,
         updatedAt: new Date().toISOString(),
       };
       setList((prev) => [placeholder, ...prev]);
@@ -94,10 +114,7 @@ export function ScriptsManager({
     });
   }
 
-  function persist(
-    id: string,
-    patch: { name?: string; description?: string | null; subject?: string | null; body?: string },
-  ) {
+  function persist(id: string, patch: EditorPatch) {
     setError(null);
     startTransition(async () => {
       const res = await updateScript(id, patch);
@@ -190,6 +207,7 @@ export function ScriptsManager({
             <ScriptEditor
               key={selected.id}
               script={selected}
+              dispositions={dispositions}
               onPatch={(p) => {
                 patchLocal(selected.id, p);
                 persist(selected.id, p);
@@ -209,11 +227,13 @@ export function ScriptsManager({
 
 function ScriptEditor({
   script,
+  dispositions,
   onPatch,
   onDelete,
 }: {
   script: ScriptRow;
-  onPatch: (p: { name?: string; description?: string | null; subject?: string | null; body?: string }) => void;
+  dispositions: DispositionOption[];
+  onPatch: (p: EditorPatch) => void;
   onDelete: () => void;
 }) {
   const [name, setName] = useState(script.name);
@@ -221,10 +241,126 @@ function ScriptEditor({
   const [subject, setSubject] = useState(script.subject ?? '');
   const [body, setBody] = useState(script.body);
   const [showPreview, setShowPreview] = useState(false);
+  const [sections, setSections] = useState<ScriptSection[] | null>(script.sections);
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(
+    script.sections?.[0]?.id ?? null,
+  );
 
+  const sectionsOn = sections !== null;
+  const supportsSections = script.kind === 'call';
+  const activeSection = sections?.find((s) => s.id === activeSectionId) ?? sections?.[0] ?? null;
+
+  function commitSections(next: ScriptSection[] | null) {
+    setSections(next);
+    if (next && next.length > 0) {
+      if (!next.some((s) => s.id === activeSectionId)) {
+        setActiveSectionId(next[0]?.id ?? null);
+      }
+    } else {
+      setActiveSectionId(null);
+    }
+    onPatch({ sections: next });
+  }
+
+  function enableSections() {
+    const seed: ScriptSection = {
+      id: newSectionId(),
+      title: 'Intro',
+      body: body || '',
+      jumps: [],
+    };
+    commitSections([seed]);
+    setActiveSectionId(seed.id);
+  }
+
+  function disableSections() {
+    if (
+      !window.confirm(
+        'Disable sections? The flat body below remains as the canonical script.',
+      )
+    ) {
+      return;
+    }
+    commitSections(null);
+  }
+
+  function addSection() {
+    if (!sections) return;
+    const s: ScriptSection = {
+      id: newSectionId(),
+      title: `Section ${sections.length + 1}`,
+      body: '',
+      jumps: [],
+    };
+    const next = [...sections, s];
+    commitSections(next);
+    setActiveSectionId(s.id);
+  }
+
+  function deleteSection(id: string) {
+    if (!sections) return;
+    if (sections.length <= 1) {
+      window.alert('Keep at least one section, or disable sections entirely.');
+      return;
+    }
+    if (!window.confirm('Delete this section? Any jumps targeting it will be cleared.')) return;
+    const next = sections
+      .filter((s) => s.id !== id)
+      .map((s) => ({
+        ...s,
+        jumps: (s.jumps ?? []).filter((j) => j.target_section_id !== id),
+      }));
+    commitSections(next);
+  }
+
+  function moveSection(id: string, dir: -1 | 1) {
+    if (!sections) return;
+    const i = sections.findIndex((s) => s.id === id);
+    if (i < 0) return;
+    const j = i + dir;
+    if (j < 0 || j >= sections.length) return;
+    const next = sections.slice();
+    const a = next[i]!;
+    const b = next[j]!;
+    next[i] = b;
+    next[j] = a;
+    commitSections(next);
+  }
+
+  function patchSection(id: string, patch: Partial<ScriptSection>) {
+    if (!sections) return;
+    const next = sections.map((s) => (s.id === id ? { ...s, ...patch } : s));
+    commitSections(next);
+  }
+
+  function setSectionJumps(id: string, jumps: ScriptSectionJump[]) {
+    patchSection(id, { jumps });
+  }
+
+  // Body insertion target. When sections are on, insert into the active
+  // section body; otherwise into the flat body textarea.
   function insertToken(token: string) {
-    const ta = document.getElementById(`script-body-${script.id}`) as HTMLTextAreaElement | null;
     const insert = `{{${token}}}`;
+    if (sectionsOn && activeSection) {
+      const taId = `script-section-body-${activeSection.id}`;
+      const ta = document.getElementById(taId) as HTMLTextAreaElement | null;
+      const current = activeSection.body;
+      if (!ta) {
+        patchSection(activeSection.id, { body: current + insert });
+        return;
+      }
+      const start = ta.selectionStart ?? current.length;
+      const end = ta.selectionEnd ?? current.length;
+      const next = current.slice(0, start) + insert + current.slice(end);
+      patchSection(activeSection.id, { body: next });
+      requestAnimationFrame(() => {
+        ta.focus();
+        const pos = start + insert.length;
+        ta.setSelectionRange(pos, pos);
+      });
+      return;
+    }
+    const ta = document.getElementById(`script-body-${script.id}`) as HTMLTextAreaElement | null;
     if (!ta) {
       const next = body + insert;
       setBody(next);
@@ -243,7 +379,8 @@ function ScriptEditor({
     });
   }
 
-  const rendered = renderScript(body, SAMPLE_VARS);
+  const previewBody = sectionsOn && activeSection ? activeSection.body : body;
+  const rendered = renderScript(previewBody, SAMPLE_VARS);
   const renderedSubject =
     script.kind === 'email' ? renderScript(subject, SAMPLE_VARS) : '';
 
@@ -261,6 +398,20 @@ function ScriptEditor({
           }}
           className="flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-[13px] font-semibold hover:border-line focus:border-teal/60 focus:bg-surface focus:outline-none focus:ring-2 focus:ring-teal/20"
         />
+        {supportsSections && (
+          <button
+            type="button"
+            onClick={() => (sectionsOn ? disableSections() : enableSections())}
+            className={`rounded-md border px-2 py-1 text-[11.5px] ${
+              sectionsOn
+                ? 'border-teal/40 bg-teal/10 text-teal'
+                : 'border-line text-txt-2 hover:bg-canvas'
+            }`}
+            title="Enable disposition-driven branching"
+          >
+            {sectionsOn ? 'Sections on' : 'Use sections'}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setShowPreview((v) => !v)}
@@ -316,10 +467,21 @@ function ScriptEditor({
           </div>
         )}
 
+        {sectionsOn && sections && (
+          <SectionTabs
+            sections={sections}
+            activeId={activeSectionId}
+            onSelect={(id) => setActiveSectionId(id)}
+            onAdd={addSection}
+            onMove={moveSection}
+            onDelete={deleteSection}
+          />
+        )}
+
         <div>
           <div className="mb-1 flex items-center justify-between">
             <label className="block text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
-              Body
+              {sectionsOn && activeSection ? `Section · ${activeSection.title}` : 'Body'}
             </label>
             <div className="flex flex-wrap gap-1">
               {SCRIPT_TOKENS.map((t) => (
@@ -334,7 +496,20 @@ function ScriptEditor({
               ))}
             </div>
           </div>
-          {showPreview ? (
+
+          {sectionsOn && activeSection ? (
+            <SectionEditor
+              key={activeSection.id}
+              section={activeSection}
+              sections={sections ?? []}
+              dispositions={dispositions}
+              showPreview={showPreview}
+              rendered={rendered}
+              onTitleChange={(t) => patchSection(activeSection.id, { title: t })}
+              onBodyChange={(b) => patchSection(activeSection.id, { body: b })}
+              onJumpsChange={(j) => setSectionJumps(activeSection.id, j)}
+            />
+          ) : showPreview ? (
             <div className="min-h-[260px] whitespace-pre-wrap rounded-md border border-line bg-canvas px-3 py-2 text-[12.5px] text-txt">
               {rendered || <span className="text-txt-3">Empty</span>}
             </div>
@@ -354,12 +529,234 @@ function ScriptEditor({
               className="min-h-[260px] w-full rounded-md border border-line bg-canvas px-3 py-2 font-mono text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
             />
           )}
-          {script.kind === 'sms' && (
+          {script.kind === 'sms' && !sectionsOn && (
             <p className="mt-1 text-[11px] text-txt-3">
               {body.length} characters · {Math.max(1, Math.ceil(body.length / 160))} segment(s)
             </p>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function SectionTabs({
+  sections,
+  activeId,
+  onSelect,
+  onAdd,
+  onMove,
+  onDelete,
+}: {
+  sections: ScriptSection[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  onAdd: () => void;
+  onMove: (id: string, dir: -1 | 1) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-lg border border-line bg-canvas/40 p-1">
+      {sections.map((s, i) => {
+        const on = s.id === activeId || (!activeId && i === 0);
+        return (
+          <div
+            key={s.id}
+            className={`flex items-center gap-0.5 rounded-md px-1 ${
+              on ? 'bg-canvas' : ''
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => onSelect(s.id)}
+              className={`rounded px-2 py-1 text-[12px] font-medium ${
+                on ? 'text-txt' : 'text-txt-3 hover:text-txt'
+              }`}
+              title={i === 0 ? 'Entry section' : undefined}
+            >
+              {i === 0 ? `▸ ${s.title}` : s.title}
+            </button>
+            {on && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onMove(s.id, -1)}
+                  disabled={i === 0}
+                  className="grid h-5 w-5 place-items-center rounded text-[10px] text-txt-3 hover:bg-surface disabled:opacity-30"
+                  aria-label="Move up"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onMove(s.id, 1)}
+                  disabled={i === sections.length - 1}
+                  className="grid h-5 w-5 place-items-center rounded text-[10px] text-txt-3 hover:bg-surface disabled:opacity-30"
+                  aria-label="Move down"
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(s.id)}
+                  className="grid h-5 w-5 place-items-center rounded text-[10px] text-txt-3 hover:bg-hp/10 hover:text-hp"
+                  aria-label="Delete section"
+                >
+                  ×
+                </button>
+              </>
+            )}
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        onClick={onAdd}
+        className="ml-1 rounded-md border border-dashed border-line px-2 py-1 text-[11.5px] text-txt-3 hover:border-teal/40 hover:text-teal"
+      >
+        + section
+      </button>
+    </div>
+  );
+}
+
+function SectionEditor({
+  section,
+  sections,
+  dispositions,
+  showPreview,
+  rendered,
+  onTitleChange,
+  onBodyChange,
+  onJumpsChange,
+}: {
+  section: ScriptSection;
+  sections: ScriptSection[];
+  dispositions: DispositionOption[];
+  showPreview: boolean;
+  rendered: string;
+  onTitleChange: (t: string) => void;
+  onBodyChange: (b: string) => void;
+  onJumpsChange: (j: ScriptSectionJump[]) => void;
+}) {
+  const [title, setTitle] = useState(section.title);
+  const [body, setBody] = useState(section.body);
+  useEffect(() => {
+    setTitle(section.title);
+    setBody(section.body);
+  }, [section.id, section.title, section.body]);
+
+  const jumps = section.jumps ?? [];
+
+  function updateJump(idx: number, patch: Partial<ScriptSectionJump>) {
+    const next = jumps.map((j, i) => (i === idx ? { ...j, ...patch } : j));
+    onJumpsChange(next);
+  }
+  function addJump() {
+    const usedCodes = new Set(jumps.map((j) => j.disposition_code));
+    const firstUnused = dispositions.find((d) => !usedCodes.has(d.code));
+    const code = firstUnused?.code ?? dispositions[0]?.code ?? '';
+    const target = sections.find((s) => s.id !== section.id)?.id ?? '';
+    if (!code || !target) return;
+    onJumpsChange([...jumps, { disposition_code: code, target_section_id: target }]);
+  }
+  function removeJump(idx: number) {
+    onJumpsChange(jumps.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div className="space-y-2">
+      <input
+        type="text"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onBlur={() => {
+          const t = title.trim() || 'Untitled';
+          if (t !== section.title) onTitleChange(t);
+        }}
+        className="w-full rounded-md border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] font-medium outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+      />
+
+      {showPreview ? (
+        <div className="min-h-[220px] whitespace-pre-wrap rounded-md border border-line bg-canvas px-3 py-2 text-[12.5px] text-txt">
+          {rendered || <span className="text-txt-3">Empty</span>}
+        </div>
+      ) : (
+        <textarea
+          id={`script-section-body-${section.id}`}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onBlur={() => {
+            if (body !== section.body) onBodyChange(body);
+          }}
+          placeholder="Section content…"
+          className="min-h-[220px] w-full rounded-md border border-line bg-canvas px-3 py-2 font-mono text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+        />
+      )}
+
+      <div className="rounded-md border border-line bg-canvas/40 p-2">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+            Jumps from this section
+          </span>
+          <button
+            type="button"
+            onClick={addJump}
+            disabled={dispositions.length === 0 || sections.length < 2}
+            className="rounded border border-line px-2 py-0.5 text-[11px] text-txt-2 hover:bg-surface disabled:opacity-40"
+          >
+            + jump
+          </button>
+        </div>
+        {jumps.length === 0 ? (
+          <p className="text-[11.5px] text-txt-3">
+            No jumps. After a call here, the next dial stays on this section.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {jumps.map((j, idx) => (
+              <li key={idx} className="flex items-center gap-1.5">
+                <span className="text-[11px] text-txt-3">On</span>
+                <select
+                  value={j.disposition_code}
+                  onChange={(e) => updateJump(idx, { disposition_code: e.target.value })}
+                  className="rounded-md border border-line bg-surface px-2 py-0.5 text-[11.5px] outline-none focus:border-teal/60"
+                >
+                  {dispositions.map((d) => (
+                    <option key={d.code} value={d.code}>
+                      {d.label}
+                    </option>
+                  ))}
+                  {dispositions.every((d) => d.code !== j.disposition_code) && (
+                    <option value={j.disposition_code}>{j.disposition_code} (missing)</option>
+                  )}
+                </select>
+                <span className="text-[11px] text-txt-3">→</span>
+                <select
+                  value={j.target_section_id}
+                  onChange={(e) => updateJump(idx, { target_section_id: e.target.value })}
+                  className="rounded-md border border-line bg-surface px-2 py-0.5 text-[11.5px] outline-none focus:border-teal/60"
+                >
+                  {sections
+                    .filter((s) => s.id !== section.id)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.title}
+                      </option>
+                    ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => removeJump(idx)}
+                  aria-label="Remove jump"
+                  className="ml-auto grid h-5 w-5 place-items-center rounded text-[10px] text-txt-3 hover:bg-hp/10 hover:text-hp"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
