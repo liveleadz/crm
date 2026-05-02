@@ -360,13 +360,19 @@ export function PowerDialer({
                 <div className="mt-1 truncate text-[16px] font-semibold text-txt-1">
                   {headline}
                 </div>
+                {current && leadSubline(current) && (
+                  <div className="mt-0.5 truncate text-[12.5px] text-txt-2">
+                    {leadSubline(current)}
+                  </div>
+                )}
                 {current && (
-                  <div className="mt-0.5 truncate font-mono text-[12px] text-txt-3">
-                    {current.phone}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-txt-3">
+                    <span className="font-mono text-[12px] text-txt-2">{current.phone}</span>
                     {current.email && (
-                      <span className="ml-2 font-sans normal-case text-txt-3">
-                        · {current.email}
-                      </span>
+                      <span className="truncate">{current.email}</span>
+                    )}
+                    {leadLocation(current) && (
+                      <span>{leadLocation(current)}</span>
                     )}
                   </div>
                 )}
@@ -427,26 +433,40 @@ export function PowerDialer({
           <div className="mb-2 px-1 text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
             Up next
           </div>
-          {queue.slice(index, index + 30).map((l, i) => (
-            <div
-              key={l.id}
-              className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] ${
-                i === 0
-                  ? 'bg-teal/10 text-teal ring-1 ring-teal/40'
-                  : 'text-txt-2 hover:bg-canvas'
-              }`}
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  i === 0 ? 'bg-teal' : 'bg-line-2'
+          {queue.slice(index, index + 30).map((l, i) => {
+            const sub = leadSubline(l);
+            return (
+              <div
+                key={l.id}
+                className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-[12px] ${
+                  i === 0
+                    ? 'bg-teal/10 text-teal ring-1 ring-teal/40'
+                    : 'text-txt-2 hover:bg-canvas'
                 }`}
-              />
-              <span className="truncate">{leadDisplay(l)}</span>
-              <span className="ml-auto truncate font-mono text-[10.5px] text-txt-3">
-                {l.phone}
-              </span>
-            </div>
-          ))}
+              >
+                <span
+                  className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                    i === 0 ? 'bg-teal' : 'bg-line-2'
+                  }`}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{leadDisplay(l)}</div>
+                  {sub && (
+                    <div
+                      className={`truncate text-[10.5px] ${
+                        i === 0 ? 'text-teal/80' : 'text-txt-3'
+                      }`}
+                    >
+                      {sub}
+                    </div>
+                  )}
+                </div>
+                <span className="ml-2 shrink-0 truncate font-mono text-[10.5px] text-txt-3">
+                  {l.phone}
+                </span>
+              </div>
+            );
+          })}
           {queue.length > index + 30 && (
             <div className="mt-2 px-1 text-[10.5px] text-txt-3">
               +{queue.length - index - 30} more
@@ -826,9 +846,27 @@ function Controls({
   return null;
 }
 
+// Primary headline for a lead. Prefer a real person name; if neither
+// first nor last is present, fall back to the company name; if neither,
+// fall back to the phone number so something is always visible.
 function leadDisplay(l: QueuedLead): string {
   const n = [l.firstName, l.lastName].filter(Boolean).join(' ').trim();
-  return n || l.phone;
+  if (n) return n;
+  if (l.companyName) return l.companyName;
+  return l.phone;
+}
+
+// Secondary line. If we showed a person name above, show the company
+// here; if we showed the company above, suppress (avoid duplicate).
+function leadSubline(l: QueuedLead): string | null {
+  const hasName = !!(l.firstName || l.lastName);
+  if (hasName && l.companyName) return l.companyName;
+  return null;
+}
+
+function leadLocation(l: QueuedLead): string | null {
+  const parts = [l.city, l.state].filter(Boolean) as string[];
+  return parts.length > 0 ? parts.join(', ') : null;
 }
 
 function currentLabel(s: Status): string {

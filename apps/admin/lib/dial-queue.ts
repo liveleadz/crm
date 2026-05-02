@@ -16,7 +16,36 @@ export type QueuedLead = {
   phone: string;
   email: string | null;
   stageId: string | null;
+  // Pulled from leads.custom JSONB. We try a few common keys so imports
+  // that used "Company" / "company_name" / etc. all surface in the dialer.
+  companyName: string | null;
+  city: string | null;
+  state: string | null;
 };
+
+// Common keys we accept for "company name" in the leads.custom JSONB,
+// since there's no first-class column. Order matters — first hit wins.
+const COMPANY_KEYS = [
+  'company',
+  'company_name',
+  'companyName',
+  'Company',
+  'Company Name',
+  'business',
+  'business_name',
+  'organization',
+  'org',
+];
+
+function pickCompany(custom: unknown): string | null {
+  if (!custom || typeof custom !== 'object') return null;
+  const obj = custom as Record<string, unknown>;
+  for (const k of COMPANY_KEYS) {
+    const v = obj[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return null;
+}
 
 export type QueueFilter = {
   listId?: string | null;
@@ -75,7 +104,7 @@ export async function loadDialQueue(
   // Base lead query — phone present, not DNC, not DNE-only mismatched.
   let query = supabase
     .from('leads')
-    .select('id, first_name, last_name, phone, email, stage_id, source, do_not_call')
+    .select('id, first_name, last_name, phone, email, stage_id, source, do_not_call, custom, city, state')
     .eq('brand_id', brandId)
     .eq('do_not_call', false)
     .not('phone', 'is', null);
@@ -151,5 +180,8 @@ export async function loadDialQueue(
       phone: l.phone as string,
       email: l.email,
       stageId: l.stage_id,
+      companyName: pickCompany(l.custom),
+      city: l.city,
+      state: l.state,
     }));
 }
