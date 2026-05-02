@@ -22,6 +22,7 @@ import {
   type DispositionChoice,
 } from '@/components/dialer/disposition-picker';
 import { RecordingButton } from '@/components/calls/recording-button';
+import { LeadContextPanel } from '@/components/dialer/lead-context-panel';
 import type { QueuedLead } from '@/lib/dial-queue';
 import type { ScriptRow } from '@/lib/campaigns';
 
@@ -403,6 +404,13 @@ export function PowerDialer({
                     </button>
                   )}
               </div>
+
+              {current &&
+                (status.kind === 'in_call' ||
+                  status.kind === 'wrap_up' ||
+                  status.kind === 'connecting') && (
+                  <LeadContextPanel leadId={current.id} />
+                )}
 
               {status.kind === 'wrap_up' ? (
                 <DispositionPicker

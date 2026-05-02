@@ -13,6 +13,7 @@ import {
   DispositionPicker,
   type DispositionChoice,
 } from '@/components/dialer/disposition-picker';
+import { LeadContextPanel } from '@/components/dialer/lead-context-panel';
 
 const KEYS: { value: string; sub?: string }[] = [
   { value: '1' },
@@ -229,6 +230,7 @@ export function WebRTCDialPad({
         <div className="mb-3 flex items-center justify-between rounded-lg border border-teal/40 bg-teal/10 px-3 py-2 text-[11.5px] text-teal">
           <span>Call ended — set disposition to continue.</span>
         </div>
+        {leadIdRef.current && <LeadContextPanel leadId={leadIdRef.current} />}
         <DispositionPicker
           callId={status.callId}
           choices={dispositions}
@@ -348,6 +350,11 @@ export function WebRTCDialPad({
       {status.kind === 'in_call' && (
         <div className="mt-3 rounded-lg border border-teal/40 bg-teal/10 px-3 py-2 text-[11.5px] leading-snug text-teal">
           Connected — talking through your laptop mic.
+        </div>
+      )}
+      {status.kind === 'in_call' && leadIdRef.current && (
+        <div className="mt-3">
+          <LeadContextPanel leadId={leadIdRef.current} />
         </div>
       )}
       {status.kind === 'error' && (
