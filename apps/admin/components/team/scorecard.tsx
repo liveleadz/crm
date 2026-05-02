@@ -1,9 +1,8 @@
-// Per-rep scorecard: KPI tiles for today/week/month, a 14-day dial
-// sparkline, and a per-campaign breakdown table. Pure presentational —
-// the data layer in `lib/scorecard.ts` does all aggregation.
+// Per-rep scorecard: KPI tiles, daily sparkline, per-campaign rollup.
+// Pure presentational — `lib/scorecard.ts` does the aggregation.
 
 import Link from 'next/link';
-import type { Scorecard as ScorecardData, ScorecardWindow } from '@/lib/scorecard';
+import type { Scorecard as ScorecardData } from '@/lib/scorecard';
 
 const PCT = (v: number) => `${(v * 100).toFixed(1)}%`;
 
@@ -16,7 +15,6 @@ function formatTalk(sec: number): string {
 }
 
 function shortDate(key: string): string {
-  // YYYY-MM-DD → Mon DD
   const [y, m, d] = key.split('-').map(Number);
   if (!y || !m || !d) return key;
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
@@ -26,6 +24,12 @@ function shortDate(key: string): string {
   });
 }
 
+function formatRange(fromIso: string, toIso: string): string {
+  const f = new Date(fromIso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const t = new Date(toIso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `${f} – ${t}`;
+}
+
 export function Scorecard({
   data,
   brandTimezone,
@@ -33,35 +37,32 @@ export function Scorecard({
   data: ScorecardData;
   brandTimezone: string;
 }) {
+  const w = data.window;
   return (
     <div className="space-y-5">
-      <WindowGrid title="Today" w={data.today} />
-      <WindowGrid title="Last 7 days" w={data.week} />
-      <WindowGrid title="Last 30 days" w={data.month} />
-      <Sparkline points={data.sparkline} />
-      <CampaignTable rows={data.byCampaign} />
-      <div className="text-[10.5px] text-txt-3">
-        Windows are anchored to {brandTimezone}.
-      </div>
-    </div>
-  );
-}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
+            Performance
+          </div>
+          <div className="text-[10.5px] text-txt-3">
+            {formatRange(data.fromIso, data.toIso)} · {brandTimezone}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          <Tile label="Dials" value={w.calls.toLocaleString()} />
+          <Tile label="Connects" value={w.connects.toLocaleString()} />
+          <Tile label="Connect rate" value={PCT(w.connectRate)} />
+          <Tile label="Talk time" value={formatTalk(w.talkSec)} />
+          <Tile label="Appointments" value={w.appointments.toLocaleString()} />
+          <Tile label="Conversion" value={PCT(w.conversionRate)} />
+        </div>
+      </section>
 
-function WindowGrid({ title, w }: { title: string; w: ScorecardWindow }) {
-  return (
-    <section className="space-y-2">
-      <div className="text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
-        {title}
-      </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Tile label="Dials" value={w.calls.toLocaleString()} />
-        <Tile label="Connects" value={w.connects.toLocaleString()} />
-        <Tile label="Connect rate" value={PCT(w.connectRate)} />
-        <Tile label="Talk time" value={formatTalk(w.talkSec)} />
-        <Tile label="Appointments" value={w.appointments.toLocaleString()} />
-        <Tile label="Conversion" value={PCT(w.conversionRate)} />
-      </div>
-    </section>
+      {data.sparkline.length > 0 && <Sparkline points={data.sparkline} />}
+
+      <CampaignTable rows={data.byCampaign} />
+    </div>
   );
 }
 
@@ -80,34 +81,37 @@ function Tile({ label, value }: { label: string; value: string }) {
 
 function Sparkline({ points }: { points: ScorecardData['sparkline'] }) {
   const max = Math.max(1, ...points.map((p) => p.calls));
+  // Show every label when ≤14 bars; thin out for longer ranges so the
+  // axis doesn't collapse into illegible noise.
+  const labelEvery = points.length <= 14 ? 1 : points.length <= 35 ? 5 : 10;
   return (
     <section className="space-y-2">
       <div className="text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
-        Last 14 days · dials
+        Daily dials
       </div>
       <div className="rounded-2xl border border-line bg-surface p-4">
-        <div className="flex items-end gap-1.5">
-          {points.map((p) => {
+        <div className="flex items-end gap-1">
+          {points.map((p, i) => {
             const h = Math.round((p.calls / max) * 64);
             const ch = Math.round((p.connects / max) * 64);
+            const showLabel = i % labelEvery === 0 || i === points.length - 1;
             return (
               <div key={p.date} className="flex flex-1 flex-col items-center gap-1">
                 <div className="relative flex h-[68px] w-full items-end justify-center">
                   <div
                     className="w-full rounded-sm bg-line-2"
                     style={{ height: `${Math.max(2, h)}px` }}
-                    title={`${p.calls} dial${p.calls === 1 ? '' : 's'}`}
+                    title={`${p.date} · ${p.calls} dials, ${p.connects} connects`}
                   />
                   {p.connects > 0 && (
                     <div
                       className="absolute bottom-0 w-full rounded-sm bg-teal/70"
                       style={{ height: `${Math.max(2, ch)}px` }}
-                      title={`${p.connects} connect${p.connects === 1 ? '' : 's'}`}
                     />
                   )}
                 </div>
-                <div className="text-[9.5px] tabular-nums text-txt-3">
-                  {shortDate(p.date)}
+                <div className="h-3 text-[9.5px] tabular-nums text-txt-3">
+                  {showLabel ? shortDate(p.date) : ''}
                 </div>
               </div>
             );
@@ -132,11 +136,11 @@ function CampaignTable({ rows }: { rows: ScorecardData['byCampaign'] }) {
   return (
     <section className="space-y-2">
       <div className="text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
-        Per campaign · last 30 days
+        Per campaign
       </div>
       {rows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-line bg-surface p-6 text-center text-[12px] text-txt-3">
-          No campaign activity in the last 30 days.
+          No campaign activity in this window.
         </div>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-line bg-surface">

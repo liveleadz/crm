@@ -141,6 +141,28 @@ export function addLocalDaysIso(iso: string, days: number, tz: string): string {
   );
 }
 
+// Rolling time-window resolver shared by the per-rep scorecard and the
+// team leaderboard. Anchored to brand-local "today" so windows like
+// "last 7 days" cover today + 6 prior calendar days, not 7×24h back
+// from now (which would chop today in half).
+export type RollingRange = '1d' | '7d' | '30d' | '90d' | 'custom';
+
+export function rollingRangeBounds(
+  range: RollingRange,
+  tz: string,
+  custom?: { fromIso?: string | null; toIso?: string | null },
+  now: Date = new Date(),
+): { fromIso: string; toIso: string } {
+  if (range === 'custom' && custom?.fromIso && custom?.toIso) {
+    return { fromIso: custom.fromIso, toIso: custom.toIso };
+  }
+  const p = getLocalParts(now, tz);
+  const todayStart = zonedToUtcIso(p.year, p.month, p.day, 0, 0, 0, tz);
+  const days = range === '1d' ? 1 : range === '7d' ? 7 : range === '90d' ? 90 : 30;
+  const fromIso = days === 1 ? todayStart : addLocalDaysIso(todayStart, -(days - 1), tz);
+  return { fromIso, toIso: now.toISOString() };
+}
+
 // Step a "YYYY-MM-DD" string forward by N days, interpreted as a
 // calendar date with no timezone. Used for trend axis enumeration.
 export function addDaysToDateKey(key: string, days: number): string {

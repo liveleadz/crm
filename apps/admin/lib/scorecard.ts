@@ -1,22 +1,30 @@
 // Per-rep performance scorecard. Aggregates the member's own calls +
-// appointments inside the brand into today/week/month windows plus a
-// 14-day sparkline and a per-campaign breakdown for the 30-day window.
+// appointments inside a rolling window into a single set of KPIs plus a
+// daily sparkline and a per-campaign breakdown. Filter is set by the
+// caller (page reads it from search params) so the UI can swap windows
+// without re-mounting.
 //
-// "Connected" tone is brand-config driven (matches `loadAgentCampaignSummary`
-// and `loadCampaignReport`). Conversion = appointments booked / calls
-// in the same window — the most direct dial→meeting ratio for a 1:1.
-//
-// Time windows are anchored to the brand's IANA timezone so a 9pm dial
-// counts in tonight's bucket rather than tomorrow UTC.
+// "Connected" tone is brand-config driven. Conversion = appointments
+// booked / calls in the window — most direct dial→meeting ratio for a
+// 1:1.
+
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
 import {
-  addLocalDaysIso,
-  getLocalParts,
+  addDaysToDateKey,
   localDayKey,
-  zonedToUtcIso,
+  rollingRangeBounds,
+  type RollingRange,
 } from './datetime';
 import type { MemberRole } from './team';
+
+export type ScorecardRange = RollingRange;
+
+export type ScorecardFilter = {
+  range: ScorecardRange;
+  fromIso?: string | null;
+  toIso?: string | null;
+};
 
 export type ScorecardWindow = {
   calls: number;
@@ -49,30 +57,23 @@ export type Scorecard = {
     email: string;
     role: MemberRole;
   };
-  today: ScorecardWindow;
-  week: ScorecardWindow;
-  month: ScorecardWindow;
-  // Last 14 days, oldest first. Always 14 entries even when sparse.
+  fromIso: string;
+  toIso: string;
+  window: ScorecardWindow;
+  // One bar per brand-local day across the filter window. Empty for the
+  // 1-day range (a single bar is uninformative).
   sparkline: ScorecardSparkPoint[];
-  // 30-day rollup. Campaigns the rep didn't touch in the window are
-  // omitted to keep the table focused on real activity.
   byCampaign: ScorecardCampaign[];
 };
-
-function startOfLocalDay(now: Date, tz: string): string {
-  const p = getLocalParts(now, tz);
-  return zonedToUtcIso(p.year, p.month, p.day, 0, 0, 0, tz);
-}
 
 export async function loadScorecard(
   brandId: string,
   memberId: string,
   brandTimezone: string,
+  filter: ScorecardFilter,
 ): Promise<Scorecard | null> {
   const supabase = await createServerClient();
 
-  // Membership lookup also enforces brand scope — RLS will return null
-  // for a member who doesn't belong to this brand.
   const { data: bm } = await supabase
     .from('brand_members')
     .select('role, members!inner(id, email, full_name)')
@@ -81,14 +82,10 @@ export async function loadScorecard(
     .maybeSingle();
   if (!bm) return null;
 
-  const now = new Date();
-  const todayStart = startOfLocalDay(now, brandTimezone);
-  // Rolling, *inclusive of today*: 7-day window covers today + 6 prior;
-  // 30-day covers today + 29 prior. Matches how managers eyeball the
-  // last week / last month on a 1:1.
-  const weekStart = addLocalDaysIso(todayStart, -6, brandTimezone);
-  const monthStart = addLocalDaysIso(todayStart, -29, brandTimezone);
-  const sparkStart = addLocalDaysIso(todayStart, -13, brandTimezone);
+  const { fromIso, toIso } = rollingRangeBounds(filter.range, brandTimezone, {
+    fromIso: filter.fromIso ?? null,
+    toIso: filter.toIso ?? null,
+  });
 
   const [callsRes, apptsRes, goodDispRes, campsRes] = await Promise.all([
     supabase
@@ -96,14 +93,16 @@ export async function loadScorecard(
       .select('campaign_id, disposition, duration_sec, started_at')
       .eq('brand_id', brandId)
       .eq('member_id', memberId)
-      .gte('started_at', monthStart)
+      .gte('started_at', fromIso)
+      .lte('started_at', toIso)
       .limit(50_000),
     supabase
       .from('appointments')
       .select('campaign_id, created_at')
       .eq('brand_id', brandId)
       .eq('member_id', memberId)
-      .gte('created_at', monthStart)
+      .gte('created_at', fromIso)
+      .lte('created_at', toIso)
       .limit(10_000),
     supabase
       .from('dispositions')
@@ -118,66 +117,51 @@ export async function loadScorecard(
     (campsRes.data ?? []).map((c) => [c.id, { name: c.name, status: c.status }]),
   );
 
-  type Agg = { calls: number; connects: number; talkSec: number; appointments: number };
-  const empty = (): Agg => ({ calls: 0, connects: 0, talkSec: 0, appointments: 0 });
-  const today = empty();
-  const week = empty();
-  const month = empty();
-
+  let calls = 0;
+  let connects = 0;
+  let talkSec = 0;
   for (const r of callsRes.data ?? []) {
-    const dur = r.duration_sec ?? 0;
-    const isConnect = r.disposition && goodCodes.has(r.disposition) ? 1 : 0;
-    month.calls += 1;
-    month.connects += isConnect;
-    month.talkSec += dur;
-    if (r.started_at >= weekStart) {
-      week.calls += 1;
-      week.connects += isConnect;
-      week.talkSec += dur;
+    calls += 1;
+    if (r.disposition && goodCodes.has(r.disposition)) connects += 1;
+    talkSec += r.duration_sec ?? 0;
+  }
+  const appointments = apptsRes.data?.length ?? 0;
+  const window: ScorecardWindow = {
+    calls,
+    connects,
+    connectRate: calls > 0 ? connects / calls : 0,
+    talkSec,
+    appointments,
+    conversionRate: calls > 0 ? appointments / calls : 0,
+  };
+
+  // Sparkline: enumerate every brand-local day from fromIso..toIso so
+  // gaps render as zero-bars instead of missing ticks. Skipped for the
+  // 1-day filter where a single bar is noise.
+  let sparkline: ScorecardSparkPoint[] = [];
+  if (filter.range !== '1d') {
+    const sparkMap = new Map<string, { calls: number; connects: number }>();
+    const startKey = localDayKey(fromIso, brandTimezone);
+    const endKey = localDayKey(toIso, brandTimezone);
+    let cursor = startKey;
+    // Bounded loop: 366 days for safety on custom ranges.
+    for (let guard = 0; guard < 366 && cursor <= endKey; guard += 1) {
+      sparkMap.set(cursor, { calls: 0, connects: 0 });
+      cursor = addDaysToDateKey(cursor, 1);
     }
-    if (r.started_at >= todayStart) {
-      today.calls += 1;
-      today.connects += isConnect;
-      today.talkSec += dur;
+    for (const r of callsRes.data ?? []) {
+      const key = localDayKey(r.started_at, brandTimezone);
+      const cell = sparkMap.get(key);
+      if (!cell) continue;
+      cell.calls += 1;
+      if (r.disposition && goodCodes.has(r.disposition)) cell.connects += 1;
     }
-  }
-  for (const a of apptsRes.data ?? []) {
-    month.appointments += 1;
-    if (a.created_at >= weekStart) week.appointments += 1;
-    if (a.created_at >= todayStart) today.appointments += 1;
+    sparkline = Array.from(sparkMap.entries())
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([date, v]) => ({ date, calls: v.calls, connects: v.connects }));
   }
 
-  const shape = (a: Agg): ScorecardWindow => ({
-    calls: a.calls,
-    connects: a.connects,
-    connectRate: a.calls > 0 ? a.connects / a.calls : 0,
-    talkSec: a.talkSec,
-    appointments: a.appointments,
-    conversionRate: a.calls > 0 ? a.appointments / a.calls : 0,
-  });
-
-  // Sparkline: enumerate 14 brand-local days so the chart has a stable
-  // x-axis even when the rep had zero dials some days.
-  const sparkMap = new Map<string, { calls: number; connects: number }>();
-  for (let i = -13; i <= 0; i += 1) {
-    const dayIso = addLocalDaysIso(todayStart, i, brandTimezone);
-    sparkMap.set(localDayKey(dayIso, brandTimezone), { calls: 0, connects: 0 });
-  }
-  for (const r of callsRes.data ?? []) {
-    if (r.started_at < sparkStart) continue;
-    const key = localDayKey(r.started_at, brandTimezone);
-    const cell = sparkMap.get(key);
-    if (!cell) continue;
-    cell.calls += 1;
-    if (r.disposition && goodCodes.has(r.disposition)) cell.connects += 1;
-  }
-  const sparkline: ScorecardSparkPoint[] = Array.from(sparkMap.entries())
-    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-    .map(([date, v]) => ({ date, calls: v.calls, connects: v.connects }));
-
-  // Per-campaign rollup over the 30-day window. Combines call counts
-  // with appointments so a manager can spot which campaign a rep is
-  // converting (or stalling) inside.
+  // Per-campaign rollup over the same window.
   type CampAgg = { calls: number; connects: number; appointments: number };
   const byCampMap = new Map<string, CampAgg>();
   for (const r of callsRes.data ?? []) {
@@ -214,10 +198,11 @@ export async function loadScorecard(
       email: bm.members.email,
       role: bm.role,
     },
-    today: shape(today),
-    week: shape(week),
-    month: shape(month),
+    fromIso,
+    toIso,
+    window,
     sparkline,
     byCampaign,
   };
 }
+
