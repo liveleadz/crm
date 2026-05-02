@@ -61,6 +61,7 @@ export function CampaignEditor({
   recentCalls,
   recentAppointments,
   canManage,
+  brandTimezone,
 }: {
   campaign: Campaign;
   scripts: Script[];
@@ -73,6 +74,7 @@ export function CampaignEditor({
   recentCalls: CallRow[];
   recentAppointments: AppointmentRow[];
   canManage: boolean;
+  brandTimezone: string;
 }) {
   const [tab, setTab] = useState<TabKey>('overview');
   const [c, setC] = useState(campaign);
@@ -99,6 +101,10 @@ export function CampaignEditor({
         defaultOwnerId: 'defaultOwnerId',
         phonePoolId: 'phonePoolId',
         recentlyCalledMinutes: 'recentlyCalledMinutes',
+        tcpaEnabled: 'tcpaEnabled',
+        dialWindowStartMin: 'dialWindowStartMin',
+        dialWindowEndMin: 'dialWindowEndMin',
+        skipWeekends: 'skipWeekends',
       };
       const key = map[field as string];
       if (!key) {
@@ -181,6 +187,7 @@ export function CampaignEditor({
           calendars={calendars}
           members={members}
           pools={pools}
+          brandTimezone={brandTimezone}
           canManage={canManage}
           onChange={save}
         />
@@ -233,6 +240,7 @@ function OverviewTab({
   calendars,
   members,
   pools,
+  brandTimezone,
   canManage,
   onChange,
 }: {
@@ -241,6 +249,7 @@ function OverviewTab({
   calendars: Calendar[];
   members: Member[];
   pools: Pool[];
+  brandTimezone: string;
   canManage: boolean;
   onChange: <K extends keyof Campaign>(field: K, value: Campaign[K]) => void;
 }) {
@@ -342,8 +351,109 @@ function OverviewTab({
           className={fieldCls}
         />
       </Field>
+      <ComplianceCard
+        c={c}
+        brandTimezone={brandTimezone}
+        canManage={canManage}
+        onChange={onChange}
+      />
     </div>
   );
+}
+
+function ComplianceCard({
+  c,
+  brandTimezone,
+  canManage,
+  onChange,
+}: {
+  c: Campaign;
+  brandTimezone: string;
+  canManage: boolean;
+  onChange: <K extends keyof Campaign>(field: K, value: Campaign[K]) => void;
+}) {
+  const fieldCls =
+    'rounded-md border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20 disabled:cursor-default disabled:opacity-70';
+  return (
+    <div className="rounded-lg border border-line bg-canvas/40 p-3">
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[12.5px] font-semibold text-txt-1">Compliance · TCPA window</div>
+          <p className="mt-0.5 text-[11px] text-txt-3">
+            Soft block: leads outside the lead-local dial window are skipped from the queue and
+            manual dials are refused with a clear reason. Lead state drives the timezone, falling
+            back to the brand timezone (<span className="font-mono">{brandTimezone}</span>).
+          </p>
+        </div>
+        <label className="flex shrink-0 items-center gap-1.5 text-[11.5px] text-txt-2">
+          <input
+            type="checkbox"
+            checked={c.tcpaEnabled}
+            disabled={!canManage}
+            onChange={(e) => onChange('tcpaEnabled', e.target.checked)}
+          />
+          Enable
+        </label>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+            Window start
+          </span>
+          <input
+            type="time"
+            value={minToHHMM(c.dialWindowStartMin)}
+            disabled={!canManage || !c.tcpaEnabled}
+            onChange={(e) => {
+              const m = hhmmToMin(e.target.value);
+              if (m !== null && m !== c.dialWindowStartMin) onChange('dialWindowStartMin', m);
+            }}
+            className={fieldCls}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+            Window end
+          </span>
+          <input
+            type="time"
+            value={minToHHMM(c.dialWindowEndMin)}
+            disabled={!canManage || !c.tcpaEnabled}
+            onChange={(e) => {
+              const m = hhmmToMin(e.target.value);
+              if (m !== null && m !== c.dialWindowEndMin) onChange('dialWindowEndMin', m);
+            }}
+            className={fieldCls}
+          />
+        </label>
+      </div>
+      <label className="mt-2 flex items-center gap-1.5 text-[11.5px] text-txt-2">
+        <input
+          type="checkbox"
+          checked={c.skipWeekends}
+          disabled={!canManage || !c.tcpaEnabled}
+          onChange={(e) => onChange('skipWeekends', e.target.checked)}
+        />
+        Skip weekends (Sat/Sun)
+      </label>
+    </div>
+  );
+}
+
+function minToHHMM(min: number): string {
+  const m = Math.max(0, Math.min(1440, min));
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function hhmmToMin(hhmm: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  if (h < 0 || h > 24 || mm < 0 || mm > 59) return null;
+  return h * 60 + mm;
 }
 
 function Field({

@@ -78,6 +78,10 @@ export async function updateCampaign(input: {
   defaultOwnerId?: string | null;
   phonePoolId?: string | null;
   recentlyCalledMinutes?: number;
+  tcpaEnabled?: boolean;
+  dialWindowStartMin?: number;
+  dialWindowEndMin?: number;
+  skipWeekends?: boolean;
 }): Promise<ActionResult> {
   const guard = await requireManager();
   if (!guard.ok) return guard;
@@ -97,11 +101,33 @@ export async function updateCampaign(input: {
   if (typeof input.recentlyCalledMinutes === 'number') {
     patch.recently_called_minutes = Math.max(0, Math.floor(input.recentlyCalledMinutes));
   }
+  if (input.tcpaEnabled !== undefined) patch.tcpa_enabled = input.tcpaEnabled;
+  if (typeof input.dialWindowStartMin === 'number') {
+    patch.dial_window_start_min = clampMinute(input.dialWindowStartMin);
+  }
+  if (typeof input.dialWindowEndMin === 'number') {
+    patch.dial_window_end_min = clampMinute(input.dialWindowEndMin);
+  }
+  if (input.skipWeekends !== undefined) patch.skip_weekends = input.skipWeekends;
+  // If both ends were touched, ensure end > start (otherwise the window
+  // is empty and every dial would be blocked — the editor should already
+  // prevent this but the server is the last line of defense).
+  if (
+    typeof patch.dial_window_start_min === 'number' &&
+    typeof patch.dial_window_end_min === 'number' &&
+    patch.dial_window_end_min <= patch.dial_window_start_min
+  ) {
+    return { ok: false, error: 'Dial window end must be after start.' };
+  }
   if (Object.keys(patch).length === 0) return { ok: true };
   const { error } = await supabase.from('campaigns').update(patch).eq('id', input.id);
   if (error) return { ok: false, error: error.message };
   bump(input.id);
   return { ok: true };
+}
+
+function clampMinute(v: number): number {
+  return Math.max(0, Math.min(1440, Math.floor(v)));
 }
 
 export async function archiveCampaign(input: { id: string }): Promise<ActionResult> {

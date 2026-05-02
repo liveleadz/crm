@@ -689,12 +689,16 @@ export type Database = {
           created_by: string | null
           default_owner_id: string | null
           description: string | null
+          dial_window_end_min: number
+          dial_window_start_min: number
           id: string
           name: string
           phone_pool_id: string | null
           recently_called_minutes: number
           script_id: string | null
+          skip_weekends: boolean
           status: string
+          tcpa_enabled: boolean
           updated_at: string
         }
         Insert: {
@@ -704,12 +708,16 @@ export type Database = {
           created_by?: string | null
           default_owner_id?: string | null
           description?: string | null
+          dial_window_end_min?: number
+          dial_window_start_min?: number
           id?: string
           name: string
           phone_pool_id?: string | null
           recently_called_minutes?: number
           script_id?: string | null
+          skip_weekends?: boolean
           status?: string
+          tcpa_enabled?: boolean
           updated_at?: string
         }
         Update: {
@@ -719,12 +727,16 @@ export type Database = {
           created_by?: string | null
           default_owner_id?: string | null
           description?: string | null
+          dial_window_end_min?: number
+          dial_window_start_min?: number
           id?: string
           name?: string
           phone_pool_id?: string | null
           recently_called_minutes?: number
           script_id?: string | null
+          skip_weekends?: boolean
           status?: string
+          tcpa_enabled?: boolean
           updated_at?: string
         }
         Relationships: [

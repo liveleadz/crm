@@ -157,6 +157,7 @@ export default async function CampaignDetailPage({
             recentCalls={calls}
             recentAppointments={appointments}
             canManage={canManage}
+            brandTimezone={active.timezone}
           />
         </div>
       </div>

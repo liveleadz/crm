@@ -21,6 +21,7 @@ import {
   type FollowupOverrides,
 } from '@/lib/disposition-followups';
 import { loadCampaign } from '@/lib/campaigns';
+import { dialWindowCheck } from '@/lib/tcpa';
 import { memberCanBookCalendar } from '@/lib/calendars';
 import { pushAppointment } from '@/lib/calendar/sync';
 import { createServerClient } from '@leadpilot/db/server';
@@ -56,6 +57,44 @@ export async function prepareCall(input: {
 
   const to = toE164(input.toNumber);
   if (!to) return { ok: false, error: 'Enter a valid phone number.' };
+
+  // TCPA soft block: if a campaign is supplied and opted-in, refuse the
+  // dial when the lead's local clock is outside the configured window.
+  // The toast text includes when the next window opens so the rep knows
+  // to come back later instead of guessing.
+  if (input.campaignId) {
+    const campaign = await loadCampaign(input.campaignId);
+    if (campaign && campaign.tcpaEnabled) {
+      let leadState: string | null = null;
+      if (input.leadId) {
+        const sb = await createServerClient();
+        const { data: lead } = await sb
+          .from('leads')
+          .select('state')
+          .eq('id', input.leadId)
+          .maybeSingle();
+        leadState = lead?.state ?? null;
+      }
+      const check = dialWindowCheck({
+        leadState,
+        brandTimezone: active.timezone,
+        policy: {
+          enabled: campaign.tcpaEnabled,
+          startMin: campaign.dialWindowStartMin,
+          endMin: campaign.dialWindowEndMin,
+          skipWeekends: campaign.skipWeekends,
+        },
+      });
+      if (!check.ok) {
+        const opens = new Date(check.nextOpenIso).toLocaleString();
+        return {
+          ok: false,
+          code: 'tcpa_window',
+          error: `${check.reason}. Next dial window opens ${opens}.`,
+        };
+      }
+    }
+  }
 
   const fromNumber = await pickOutboundNumber({
     brandId: active.id,

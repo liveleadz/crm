@@ -8,6 +8,7 @@ import 'server-only';
 //     pause + resume doesn't immediately redial)
 
 import { createServerClient } from '@leadpilot/db/server';
+import { dialWindowCheck } from './tcpa';
 
 export type QueuedLead = {
   id: string;
@@ -76,11 +77,20 @@ export async function loadDialQueue(
   // entire brand by accident.
   let campaignListIds: string[] | null = null;
   let effectiveRecentMin = filter.recentlyCalledMinutes ?? 0;
+  let tcpaPolicy: {
+    enabled: boolean;
+    startMin: number;
+    endMin: number;
+    skipWeekends: boolean;
+  } | null = null;
+  let brandTimezone = 'UTC';
   if (filter.campaignId) {
     const [{ data: campaign }, { data: listLinks }] = await Promise.all([
       supabase
         .from('campaigns')
-        .select('recently_called_minutes')
+        .select(
+          'recently_called_minutes, tcpa_enabled, dial_window_start_min, dial_window_end_min, skip_weekends, brand_id, brands!inner(timezone)',
+        )
         .eq('id', filter.campaignId)
         .maybeSingle(),
       supabase
@@ -90,6 +100,18 @@ export async function loadDialQueue(
     ]);
     if (filter.recentlyCalledMinutes === undefined && campaign) {
       effectiveRecentMin = campaign.recently_called_minutes ?? 240;
+    }
+    if (campaign) {
+      const brandJoin = (
+        Array.isArray(campaign.brands) ? campaign.brands[0] : campaign.brands
+      ) as { timezone: string } | null;
+      brandTimezone = brandJoin?.timezone ?? 'UTC';
+      tcpaPolicy = {
+        enabled: campaign.tcpa_enabled,
+        startMin: campaign.dial_window_start_min,
+        endMin: campaign.dial_window_end_min,
+        skipWeekends: campaign.skip_weekends,
+      };
     }
     type LinkRow = { list_id: string; lead_lists: { source: string } | { source: string }[] | null };
     campaignListIds = ((listLinks as LinkRow[] | null) ?? [])
@@ -171,8 +193,19 @@ export async function loadDialQueue(
     recentLeadIds = new Set((recent ?? []).map((r) => r.lead_id as string));
   }
 
+  // TCPA soft block. Only filters when the campaign opted in; otherwise
+  // pass-through. Lead state drives timezone with brand-tz fallback.
+  const tcpaFilter = (state: string | null) => {
+    if (!tcpaPolicy || !tcpaPolicy.enabled) return true;
+    return dialWindowCheck({
+      leadState: state,
+      brandTimezone,
+      policy: tcpaPolicy,
+    }).ok;
+  };
+
   return leads
-    .filter((l) => l.phone && !recentLeadIds.has(l.id))
+    .filter((l) => l.phone && !recentLeadIds.has(l.id) && tcpaFilter(l.state))
     .map<QueuedLead>((l) => ({
       id: l.id,
       firstName: l.first_name,
