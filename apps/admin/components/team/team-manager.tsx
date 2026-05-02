@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
 import {
   inviteMember,
@@ -145,12 +146,15 @@ export function TeamManager({
                   className="border-b border-line last:border-b-0 hover:bg-canvas/40"
                 >
                   <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-2.5">
+                    <Link
+                      href={`/team/${m.memberId}`}
+                      className="flex items-center gap-2.5 hover:opacity-90"
+                    >
                       <div className="grid h-8 w-8 place-items-center rounded-full bg-teal/15 text-[11px] font-semibold text-teal">
                         {initials(m.fullName, m.email)}
                       </div>
                       <div>
-                        <div className="font-medium">
+                        <div className="font-medium hover:text-teal">
                           {m.fullName ?? m.email.split('@')[0]}
                           {isSelf && (
                             <span className="ml-2 text-[10.5px] text-txt-3">(you)</span>
@@ -158,7 +162,7 @@ export function TeamManager({
                         </div>
                         <div className="text-[11.5px] text-txt-3">{m.email}</div>
                       </div>
-                    </div>
+                    </Link>
                   </td>
                   <td className="px-4 py-2.5">
                     {isOwner ? (
