@@ -51,7 +51,7 @@ async function loadRecentCalls(campaignId: string) {
   const { data } = await supabase
     .from('calls')
     .select(
-      'id, started_at, disposition, duration_sec, leads(first_name, last_name), members(full_name, email)',
+      'id, started_at, disposition, duration_sec, leads(first_name, last_name), members!calls_member_id_fkey(full_name, email)',
     )
     .eq('campaign_id', campaignId)
     .order('started_at', { ascending: false })

@@ -599,6 +599,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "calls_handled_by_fkey"
+            columns: ["handled_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "calls_lead_id_fkey"
             columns: ["lead_id"]
             isOneToOne: false
