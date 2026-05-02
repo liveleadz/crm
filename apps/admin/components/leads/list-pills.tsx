@@ -2,14 +2,23 @@
 
 import Link from 'next/link';
 import type { Route } from 'next';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { bulkDeleteLists, deleteList, renameList } from '@/app/actions/lists';
 import type { LeadList, SmartListCriteria } from '@/lib/lists';
 
-// Build a /leads URL that re-applies a saved smart-list's stored criteria
-// via search params. Includes `list=<id>` so the pill can render as active.
-function smartListHref(list: LeadList): Route {
+// Pills live on both /leads (table) and /pipelines (kanban). Route within
+// the same page the user is on so clicking a smart list never silently
+// switches views.
+type ListBasePath = '/leads' | '/pipelines';
+
+function basePathFor(pathname: string | null): ListBasePath {
+  return pathname?.startsWith('/leads') ? '/leads' : '/pipelines';
+}
+
+// Build a URL that re-applies a saved smart-list's stored criteria via
+// search params. Includes `list=<id>` so the pill can render as active.
+function smartListHref(list: LeadList, basePath: ListBasePath): Route {
   const c: SmartListCriteria = list.criteria ?? {};
   const sp = new URLSearchParams();
   sp.set('list', list.id);
@@ -18,7 +27,7 @@ function smartListHref(list: LeadList): Route {
   if (c.tagIds && c.tagIds.length > 0) sp.set('tags', c.tagIds.join(','));
   if (c.excludeDnc) sp.set('dnc', '1');
   if (c.excludeDne) sp.set('dne', '1');
-  return `/leads?${sp.toString()}` as Route;
+  return `${basePath}?${sp.toString()}` as Route;
 }
 
 export function ListPills({
@@ -29,6 +38,8 @@ export function ListPills({
   activeListId: string | null;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const basePath = basePathFor(pathname);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [, startTransition] = useTransition();
@@ -60,7 +71,7 @@ export function ListPills({
       const res = await bulkDeleteLists({ ids });
       setBusy(false);
       if (res.ok) {
-        if (activeListId && selected.has(activeListId)) router.push('/leads');
+        if (activeListId && selected.has(activeListId)) router.push(basePath);
         else router.refresh();
         exitManage();
       }
@@ -108,7 +119,7 @@ export function ListPills({
       setBusy(false);
       if (res.ok) {
         if (activeListId === list.id) {
-          router.push('/leads');
+          router.push(basePath);
         } else {
           router.refresh();
         }
@@ -122,7 +133,7 @@ export function ListPills({
         Smart lists
       </span>
       <Link
-        href="/pipelines"
+        href={basePath as Route}
         className={`rounded-full px-3 py-1 text-[11.5px] font-medium ${
           activeListId === null
             ? 'bg-teal/15 text-teal'
@@ -182,8 +193,8 @@ export function ListPills({
                 <Link
                   href={
                     l.source === 'filter'
-                      ? smartListHref(l)
-                      : (`/pipelines?list=${l.id}` as Route)
+                      ? smartListHref(l, basePath)
+                      : (`${basePath}?list=${l.id}` as Route)
                   }
                   onDoubleClick={(e) => {
                     e.preventDefault();
