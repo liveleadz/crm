@@ -19,6 +19,9 @@ import {
   type DispositionFollowup,
   type FollowupOverrides,
 } from '@/lib/disposition-followups';
+import { loadCampaign } from '@/lib/campaigns';
+import { memberCanBookCalendar } from '@/lib/calendars';
+import { pushAppointment } from '@/lib/calendar/sync';
 import { createServerClient } from '@leadpilot/db/server';
 
 type PrepareCallResult =
@@ -41,6 +44,7 @@ const FABRIC_ADDRESS = '/public/leadpilot-dialer';
 export async function prepareCall(input: {
   toNumber: string;
   leadId?: string | null;
+  campaignId?: string | null;
 }): Promise<PrepareCallResult> {
   if (!process.env.LAML_WEBHOOK_SECRET) {
     return { ok: false, code: 'secret_missing', error: 'LAML_WEBHOOK_SECRET not configured.' };
@@ -75,6 +79,7 @@ export async function prepareCall(input: {
       direction: 'outbound',
       from_number: fromNumber.e164,
       to_number: to,
+      campaign_id: input.campaignId ?? null,
     })
     .select('id')
     .single();
@@ -369,4 +374,93 @@ export async function bulkSetDispositions(input: {
   revalidatePath('/leads');
   revalidatePath('/tasks');
   return { ok: true, updated };
+}
+
+// Book an appointment straight from the dialer. The campaign supplies the
+// calendar + default owner, so the rep just picks date/time/title.
+export async function bookAppointmentFromCall(input: {
+  callId: string;
+  leadId: string;
+  campaignId: string;
+  startsAt: string; // ISO
+  endsAt?: string | null;
+  title: string;
+  notes?: string | null;
+}): Promise<{ ok: true; appointmentId: string } | { ok: false; error: string }> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const profile = await getMyProfile();
+  if (!profile) return { ok: false, error: 'Not authenticated.' };
+  const title = input.title.trim();
+  if (!title) return { ok: false, error: 'Title is required.' };
+  if (!input.startsAt) return { ok: false, error: 'Start time is required.' };
+
+  const campaign = await loadCampaign(input.campaignId);
+  if (!campaign || campaign.brandId !== active.id) {
+    return { ok: false, error: 'Campaign not found.' };
+  }
+  if (!campaign.calendarId) {
+    return { ok: false, error: 'Campaign has no calendar configured.' };
+  }
+  const ownerId = campaign.defaultOwnerId ?? profile.id;
+  const allowed = await memberCanBookCalendar(active.id, campaign.calendarId, ownerId);
+  if (!allowed) return { ok: false, error: 'Owner cannot book this calendar.' };
+
+  const supabase = await createServerClient();
+  const { data: lead } = await supabase
+    .from('leads')
+    .select('id')
+    .eq('id', input.leadId)
+    .eq('brand_id', active.id)
+    .maybeSingle();
+  if (!lead) return { ok: false, error: 'Lead not found.' };
+
+  const { data, error } = await supabase
+    .from('appointments')
+    .insert({
+      brand_id: active.id,
+      lead_id: input.leadId,
+      member_id: ownerId,
+      calendar_id: campaign.calendarId,
+      campaign_id: campaign.id,
+      title,
+      starts_at: input.startsAt,
+      ends_at: input.endsAt ?? null,
+      notes: input.notes?.trim() || null,
+      status: 'scheduled',
+    })
+    .select('id')
+    .single();
+  if (error || !data) return { ok: false, error: error?.message ?? 'Insert failed.' };
+
+  await supabase.from('lead_events').insert({
+    brand_id: active.id,
+    lead_id: input.leadId,
+    member_id: profile.id,
+    type: 'appointment_scheduled',
+    payload: {
+      appointment_id: data.id,
+      starts_at: input.startsAt,
+      title,
+      campaign_id: campaign.id,
+      call_id: input.callId,
+    },
+  });
+
+  // Best-effort external push.
+  void pushAppointment(data.id);
+
+  void runAutomations({
+    trigger: 'appointment_booked',
+    brandId: active.id,
+    leadId: input.leadId,
+    memberId: profile.id,
+    appointmentId: data.id,
+    startsAt: input.startsAt,
+  });
+
+  revalidatePath('/calendar');
+  revalidatePath('/dashboard');
+  revalidatePath(`/leads/${input.leadId}`);
+  return { ok: true, appointmentId: data.id };
 }

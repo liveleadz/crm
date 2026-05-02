@@ -1,10 +1,16 @@
+import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
 import { WebRTCDialPad } from '@/components/dialer/webrtc-dial-pad';
 import { PowerDialer } from '@/components/dialer/power-dialer';
 import { getActiveBrand } from '@/lib/active-brand';
-import { getOutboundFromNumber } from '@/lib/dialer';
+import { getMyProfile, getOutboundFromNumber } from '@/lib/dialer';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadDialQueue } from '@/lib/dial-queue';
+import {
+  assertAgentCanRunCampaign,
+  loadCampaignScript,
+  type Campaign,
+} from '@/lib/campaigns';
 
 type SearchParams = Promise<{
   to?: string;
@@ -14,6 +20,8 @@ type SearchParams = Promise<{
   q?: string;
   source?: string;
   tags?: string;
+  // Campaign mode: bundles script + calendar + lists + agents.
+  campaign?: string;
 }>;
 
 export default async function DialerPage({
@@ -23,11 +31,28 @@ export default async function DialerPage({
 }) {
   const active = await getActiveBrand();
   const sp = await searchParams;
-  const queueMode = !!(sp.list || sp.q || sp.source || sp.tags);
+  const campaignParam = sp.campaign ?? null;
+  const adHocQueueMode = !!(sp.list || sp.q || sp.source || sp.tags);
 
-  const [fromNumber, dispositions] = active
-    ? await Promise.all([getOutboundFromNumber(active.id), loadDispositions(active.id)])
-    : [null, []];
+  // Campaign mode hard-locks: only assigned agents (or manager+) can run.
+  let campaign: Campaign | null = null;
+  if (active && campaignParam) {
+    const profile = await getMyProfile();
+    if (!profile) notFound();
+    const guard = await assertAgentCanRunCampaign(campaignParam, profile.id);
+    if (!guard.ok) notFound();
+    campaign = guard.campaign;
+  }
+
+  const queueMode = adHocQueueMode || !!campaign;
+
+  const [fromNumber, dispositions, script] = active
+    ? await Promise.all([
+        getOutboundFromNumber(active.id),
+        loadDispositions(active.id),
+        campaign ? loadCampaignScript(campaign.scriptId) : Promise.resolve(null),
+      ])
+    : [null, [], null];
 
   const queue =
     active && queueMode
@@ -38,21 +63,27 @@ export default async function DialerPage({
           tagIds: sp.tags
             ? sp.tags.split(',').map((s) => s.trim()).filter(Boolean)
             : null,
-          // Don't redial leads we just rang in the last 4h.
-          recentlyCalledMinutes: 240,
+          campaignId: campaign?.id ?? null,
+          // Don't redial leads we just rang in the last 4h. Campaign mode
+          // overrides this from the campaign's recently_called_minutes.
+          recentlyCalledMinutes: campaign ? undefined : 240,
           limit: 500,
         })
       : [];
 
   const subtitle = !active
     ? 'No active brand'
-    : queueMode
-      ? `Power dialer · ${queue.length} lead${queue.length === 1 ? '' : 's'} queued${
+    : campaign
+      ? `${campaign.name} · ${queue.length} lead${queue.length === 1 ? '' : 's'} queued${
           fromNumber ? ` · from ${fromNumber.e164}` : ''
         }`
-      : fromNumber
-        ? `Outbound from ${fromNumber.e164}${fromNumber.label ? ` (${fromNumber.label})` : ''} · ${active.name}`
-        : `No outbound number assigned to ${active.name}`;
+      : queueMode
+        ? `Power dialer · ${queue.length} lead${queue.length === 1 ? '' : 's'} queued${
+            fromNumber ? ` · from ${fromNumber.e164}` : ''
+          }`
+        : fromNumber
+          ? `Outbound from ${fromNumber.e164}${fromNumber.label ? ` (${fromNumber.label})` : ''} · ${active.name}`
+          : `No outbound number assigned to ${active.name}`;
 
   return (
     <>
@@ -64,6 +95,8 @@ export default async function DialerPage({
             fromE164={fromNumber?.e164 ?? null}
             dispositions={dispositions}
             queue={queue}
+            campaignId={campaign?.id ?? null}
+            script={script}
           />
         ) : (
           <WebRTCDialPad

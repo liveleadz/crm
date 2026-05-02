@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { SignalWire, type SignalWireClient, type FabricRoomSession } from '@signalwire/js';
 import {
   attachSignalwireCallId,
+  bookAppointmentFromCall,
   markCallEnded,
   prepareCall,
 } from '@/app/actions/dialer';
@@ -22,6 +23,7 @@ import {
 } from '@/components/dialer/disposition-picker';
 import { RecordingButton } from '@/components/calls/recording-button';
 import type { QueuedLead } from '@/lib/dial-queue';
+import type { ScriptRow } from '@/lib/campaigns';
 
 type Status =
   | { kind: 'idle' } // queue not started yet
@@ -46,11 +48,17 @@ export function PowerDialer({
   fromE164,
   dispositions,
   queue,
+  campaignId = null,
+  script = null,
 }: {
   brandName: string | null;
   fromE164: string | null;
   dispositions: DispositionChoice[];
   queue: QueuedLead[];
+  // When set, every call is attributed to this campaign and the script
+  // panel renders on the right.
+  campaignId?: string | null;
+  script?: ScriptRow | null;
 }) {
   const [index, setIndex] = useState(0);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
@@ -58,6 +66,7 @@ export function PowerDialer({
   const [muted, setMuted] = useState(false);
   const [, startTransition] = useTransition();
   const [elapsed, setElapsed] = useState(0);
+  const [bookingOpen, setBookingOpen] = useState(false);
   const clientRef = useRef<SignalWireClient | null>(null);
   const sessionRef = useRef<FabricRoomSession | null>(null);
   const callIdRef = useRef<string | null>(null);
@@ -119,7 +128,7 @@ export function PowerDialer({
     }
     setStatus({ kind: 'connecting' });
     try {
-      const prep = await prepareCall({ toNumber: lead.phone, leadId: lead.id });
+      const prep = await prepareCall({ toNumber: lead.phone, leadId: lead.id, campaignId });
       if (!prep.ok) {
         setStatus({ kind: 'error', message: prep.error });
         return;
@@ -317,8 +326,15 @@ export function PowerDialer({
   }, [queue.length, status.kind, current]);
 
   return (
-    <div className="mx-auto w-full max-w-3xl">
-      <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+    <div className={`mx-auto w-full ${script ? 'max-w-6xl' : 'max-w-3xl'}`}>
+      <div
+        className={`grid gap-4 ${
+          script
+            ? 'lg:grid-cols-[260px_1fr_320px]'
+            : 'lg:grid-cols-[1fr_280px]'
+        }`}
+      >
+        {script && <ScriptPanel script={script} />}
         <div className="rounded-2xl border border-line bg-surface p-5">
           <div className="mb-3 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
             <span>
@@ -365,12 +381,28 @@ export function PowerDialer({
                     {status.message}
                   </div>
                 )}
+                {campaignId &&
+                  current &&
+                  (status.kind === 'in_call' || status.kind === 'wrap_up') && (
+                    <button
+                      type="button"
+                      onClick={() => setBookingOpen(true)}
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[11.5px] font-medium text-txt-2 hover:border-teal/40 hover:text-teal"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" />
+                        <path d="M16 2v4M8 2v4M3 10h18" />
+                      </svg>
+                      Book appointment
+                    </button>
+                  )}
               </div>
 
               {status.kind === 'wrap_up' ? (
                 <DispositionPicker
                   callId={status.callId}
                   choices={dispositions}
+                  campaignId={campaignId}
                   onSaved={onDispositionSaved}
                 />
               ) : (
@@ -459,8 +491,213 @@ export function PowerDialer({
           )}
         </div>
       </div>
+      {bookingOpen && campaignId && current && (
+        <BookAppointmentModal
+          campaignId={campaignId}
+          callId={callIdRef.current ?? lastCallIdRef.current ?? ''}
+          leadId={current.id}
+          leadName={leadDisplay(current)}
+          onClose={() => setBookingOpen(false)}
+        />
+      )}
     </div>
   );
+}
+
+// Lightweight panel pinned to the left of the dialer in campaign mode.
+// Long scripts get a search box so reps can jump to the right beat.
+function ScriptPanel({ script }: { script: ScriptRow }) {
+  const [query, setQuery] = useState('');
+  const body = script.body ?? '';
+  // Highlight matches inline by wrapping each occurrence in <mark>. We
+  // build a regex from the trimmed query; empty query renders as-is.
+  const rendered = useMemo(() => {
+    const q = query.trim();
+    if (!q) return body;
+    const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return body.replace(new RegExp(safe, 'gi'), (m) => `\u0001${m}\u0002`);
+  }, [body, query]);
+
+  return (
+    <aside className="rounded-2xl border border-line bg-surface p-3 lg:max-h-[680px] lg:overflow-auto">
+      <div className="mb-2 flex items-center justify-between px-1">
+        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
+          Script
+        </div>
+        {script.name && (
+          <div className="truncate text-[10.5px] text-txt-3">{script.name}</div>
+        )}
+      </div>
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Find in script…"
+        className="mb-2 w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-[12px] outline-none focus:border-teal/60"
+      />
+      <pre className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-relaxed text-txt-1">
+        {rendered.split('\u0001').map((chunk, i) => {
+          if (i === 0) return <span key={i}>{chunk}</span>;
+          const [hit, rest = ''] = chunk.split('\u0002');
+          return (
+            <span key={i}>
+              <mark className="rounded bg-teal/20 px-0.5 text-teal">{hit}</mark>
+              {rest}
+            </span>
+          );
+        })}
+      </pre>
+    </aside>
+  );
+}
+
+// Booking dialog: campaign supplies calendar + default owner, so the rep
+// just picks date/time/title. Server validates the rep can book that
+// calendar; external push happens best-effort.
+function BookAppointmentModal({
+  campaignId,
+  callId,
+  leadId,
+  leadName,
+  onClose,
+}: {
+  campaignId: string;
+  callId: string;
+  leadId: string;
+  leadName: string;
+  onClose: () => void;
+}) {
+  const defaultStart = useMemo(() => {
+    // Tomorrow 10:00 local — sensible default for "follow-up next day".
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(10, 0, 0, 0);
+    return toLocalDatetime(d);
+  }, []);
+  const [startsAt, setStartsAt] = useState(defaultStart);
+  const [duration, setDuration] = useState(30);
+  const [title, setTitle] = useState(`Follow-up with ${leadName}`);
+  const [notes, setNotes] = useState('');
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  function submit() {
+    if (!startsAt) {
+      setError('Pick a start time.');
+      return;
+    }
+    setError(null);
+    const start = new Date(startsAt);
+    const end = new Date(start.getTime() + duration * 60_000);
+    startTransition(async () => {
+      const res = await bookAppointmentFromCall({
+        callId,
+        leadId,
+        campaignId,
+        startsAt: start.toISOString(),
+        endsAt: end.toISOString(),
+        title,
+        notes: notes || null,
+      });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setSaved(true);
+      window.setTimeout(onClose, 900);
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md space-y-3 rounded-2xl border border-line bg-surface p-5">
+        <div className="text-[14px] font-semibold text-txt-1">Book appointment</div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-txt-3">
+            Title
+          </label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[14px] outline-none focus:border-teal/60"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-txt-3">
+              Start
+            </label>
+            <input
+              type="datetime-local"
+              value={startsAt}
+              onChange={(e) => setStartsAt(e.target.value)}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[14px] outline-none focus:border-teal/60"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-txt-3">
+              Duration (min)
+            </label>
+            <input
+              type="number"
+              min={5}
+              step={5}
+              value={duration}
+              onChange={(e) => setDuration(Math.max(5, Number(e.target.value) || 30))}
+              className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[14px] outline-none focus:border-teal/60"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-txt-3">
+            Notes
+          </label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            className="w-full resize-none rounded-md border border-line bg-canvas px-3 py-2 text-[14px] outline-none focus:border-teal/60"
+          />
+        </div>
+        {error && (
+          <div className="rounded-md border border-hp/40 bg-hp/10 px-3 py-2 text-[12.5px] text-hp">
+            {error}
+          </div>
+        )}
+        {saved && (
+          <div className="rounded-md border border-teal/40 bg-teal/10 px-3 py-2 text-[12.5px] text-teal">
+            Appointment booked.
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={submit}
+            disabled={pending || saved}
+            className="flex-1 rounded-lg bg-teal py-2 text-[13.5px] font-semibold text-white hover:bg-teal/90 disabled:opacity-50"
+          >
+            {pending ? 'Booking…' : 'Book'}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            className="rounded-lg border border-line px-3 py-2 text-[13.5px] text-txt-2 hover:bg-canvas"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Format a Date as YYYY-MM-DDTHH:mm in local time for <input type="datetime-local">.
+function toLocalDatetime(d: Date): string {
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function Controls({
