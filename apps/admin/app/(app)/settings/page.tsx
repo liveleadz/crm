@@ -2,18 +2,21 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadKanban } from '@/lib/leads';
 import { loadBrandTagsWithCounts } from '@/lib/tags';
 import { loadDispositions } from '@/lib/dispositions';
+import { loadFollowupsForBrand } from '@/lib/disposition-followups';
 import { PageHeader } from '@/components/page-header';
 import { StagesManager } from '@/components/settings/stages-manager';
 import { TagsManager } from '@/components/settings/tags-manager';
 import { DispositionsManager } from '@/components/settings/dispositions-manager';
+import { BrandFollowupsManager } from '@/components/settings/brand-followups-manager';
 
 export default async function SettingsPage() {
   const active = await getActiveBrand();
   if (!active) return null;
-  const [{ stages }, tags, dispositions] = await Promise.all([
+  const [{ stages }, tags, dispositions, brandFollowups] = await Promise.all([
     loadKanban(active.id),
     loadBrandTagsWithCounts(active.id),
     loadDispositions(active.id),
+    loadFollowupsForBrand(active.id, null),
   ]);
   return (
     <>
@@ -46,6 +49,23 @@ export default async function SettingsPage() {
               archive — archived ones still resolve on historical calls.
             </p>
             <DispositionsManager initial={dispositions} />
+          </section>
+          <section>
+            <h2 className="mb-1 text-[13px] font-semibold">Default disposition follow-ups</h2>
+            <p className="mb-4 text-[12px] text-txt-3">
+              When an agent saves a disposition, fire an email, SMS, or task
+              automatically. Configured here brand-wide. Campaigns can override
+              individual rows from their own Follow-ups tab.
+            </p>
+            <BrandFollowupsManager
+              dispositions={dispositions.map((d) => ({
+                id: d.id,
+                code: d.code,
+                label: d.label,
+                tone: d.tone,
+              }))}
+              followups={brandFollowups}
+            />
           </section>
         </div>
       </div>

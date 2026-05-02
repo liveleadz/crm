@@ -72,6 +72,15 @@ const WORKSPACE: NavItem[] = [
     ),
   },
   {
+    href: '/campaigns',
+    label: 'Campaigns',
+    icon: ICON(
+      <>
+        <path d="M3 11l18-8-4 18-5-7-5-3z" />
+      </>,
+    ),
+  },
+  {
     href: '/tasks',
     label: 'Tasks',
     icon: ICON(
