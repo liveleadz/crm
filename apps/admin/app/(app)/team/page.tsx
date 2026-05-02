@@ -4,10 +4,12 @@ import { PageHeader } from '@/components/page-header';
 import { RangeFilter } from '@/components/team/range-filter';
 import { TeamLeaderboard } from '@/components/team/team-leaderboard';
 import { TeamManager } from '@/components/team/team-manager';
+import { TeamAlertsCard } from '@/components/team/team-alerts-card';
 import { getActiveBrand } from '@/lib/active-brand';
 import type { RollingRange } from '@/lib/datetime';
 import { canSeeManagement, getCurrentBrandRole, loadTeam } from '@/lib/team';
 import { loadTeamLeaderboard } from '@/lib/team-leaderboard';
+import { loadTeamAlerts } from '@/lib/team-alerts';
 
 type SearchParams = Promise<{
   range?: string;
@@ -37,9 +39,10 @@ export default async function TeamPage({ searchParams }: { searchParams: SearchP
   const fromIso = parseDateInput(sp.from, 'start');
   const toIso = parseDateInput(sp.to, 'end');
 
-  const [team, leaderboard] = await Promise.all([
+  const [team, leaderboard, alerts] = await Promise.all([
     loadTeam(active.id),
     loadTeamLeaderboard(active.id, active.timezone, { range, fromIso, toIso }),
+    loadTeamAlerts(active.id, active.timezone, { range, fromIso, toIso }),
   ]);
 
   return (
@@ -54,6 +57,7 @@ export default async function TeamPage({ searchParams }: { searchParams: SearchP
           fromIso={leaderboard.fromIso}
           toIso={leaderboard.toIso}
         />
+        <TeamAlertsCard data={alerts} />
         <TeamLeaderboard data={leaderboard} />
         <TeamManager initialTeam={team} currentMemberId={user.id} />
       </div>
