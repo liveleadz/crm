@@ -7,6 +7,7 @@ import { loadFollowupsForBrand } from '@/lib/disposition-followups';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadLists } from '@/lib/lists';
 import { getCurrentBrandRole } from '@/lib/team';
+import { getMyProfile } from '@/lib/dialer';
 import { createServerClient } from '@leadpilot/db/server';
 
 async function loadMembers(brandId: string) {
@@ -105,6 +106,12 @@ export default async function CampaignDetailPage({
 
   const role = await getCurrentBrandRole(active.id);
   const canManage = role === 'owner' || role === 'admin' || role === 'manager';
+
+  // Hard-lock: agents/viewers can only open campaigns they're assigned to.
+  if (!canManage) {
+    const profile = await getMyProfile();
+    if (!profile || !campaign.agentIds.includes(profile.id)) notFound();
+  }
 
   const [scripts, calendars, members, lists, dispositions, followups, calls, appointments] =
     await Promise.all([

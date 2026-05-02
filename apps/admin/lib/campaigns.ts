@@ -133,3 +133,81 @@ export async function loadCampaignScript(scriptId: string | null): Promise<Scrip
     .maybeSingle();
   return data;
 }
+
+export type AgentCampaignSummary = {
+  id: string;
+  name: string;
+  status: CampaignStatus;
+  callsToday: number;
+  connectsToday: number;
+  apptsToday: number;
+};
+
+// Stats for the dashboard "My Campaigns" card. Counts only the current
+// member's calls + appointments scoped to today (UTC date for now).
+export async function loadAgentCampaignSummary(
+  brandId: string,
+  memberId: string,
+): Promise<AgentCampaignSummary[]> {
+  const supabase = await createServerClient();
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const since = startOfDay.toISOString();
+
+  // Pull active campaigns the agent is on.
+  const campaigns = await loadCampaigns(brandId, { forMemberId: memberId });
+  if (campaigns.length === 0) return [];
+
+  const ids = campaigns.map((c) => c.id);
+
+  const [callsRes, apptsRes] = await Promise.all([
+    supabase
+      .from('calls')
+      .select('campaign_id, disposition')
+      .in('campaign_id', ids)
+      .eq('member_id', memberId)
+      .gte('started_at', since),
+    supabase
+      .from('appointments')
+      .select('campaign_id')
+      .in('campaign_id', ids)
+      .eq('member_id', memberId)
+      .gte('created_at', since),
+  ]);
+
+  // "Connected" tone is config-driven; we approximate by counting any
+  // disposition the brand marks 'good'. Cheap join: pull good codes once.
+  const { data: goodDispRows } = await supabase
+    .from('dispositions')
+    .select('code')
+    .eq('brand_id', brandId)
+    .eq('tone', 'good');
+  const goodCodes = new Set((goodDispRows ?? []).map((r) => r.code));
+
+  const callsByCamp = new Map<string, { total: number; connects: number }>();
+  for (const r of callsRes.data ?? []) {
+    if (!r.campaign_id) continue;
+    const cur = callsByCamp.get(r.campaign_id) ?? { total: 0, connects: 0 };
+    cur.total += 1;
+    if (r.disposition && goodCodes.has(r.disposition)) cur.connects += 1;
+    callsByCamp.set(r.campaign_id, cur);
+  }
+
+  const apptsByCamp = new Map<string, number>();
+  for (const r of apptsRes.data ?? []) {
+    if (!r.campaign_id) continue;
+    apptsByCamp.set(r.campaign_id, (apptsByCamp.get(r.campaign_id) ?? 0) + 1);
+  }
+
+  return campaigns.map((c) => {
+    const calls = callsByCamp.get(c.id) ?? { total: 0, connects: 0 };
+    return {
+      id: c.id,
+      name: c.name,
+      status: c.status,
+      callsToday: calls.total,
+      connectsToday: calls.connects,
+      apptsToday: apptsByCamp.get(c.id) ?? 0,
+    };
+  });
+}
