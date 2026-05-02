@@ -82,6 +82,27 @@ export async function updateDisposition(input: {
   return { ok: true };
 }
 
+// Cooldown is independent from rename/tone so the row UI can patch it
+// inline without sending the whole record.
+export async function setDispositionCooldown(input: {
+  id: string;
+  minutes: number | null;
+}): Promise<Result> {
+  if (input.minutes !== null) {
+    if (!Number.isInteger(input.minutes) || input.minutes < 0 || input.minutes > 60 * 24 * 7) {
+      return { ok: false, error: 'Cooldown must be 0–10080 minutes (7 days).' };
+    }
+  }
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('dispositions')
+    .update({ cooldown_minutes: input.minutes && input.minutes > 0 ? input.minutes : null })
+    .eq('id', input.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/(app)/settings', 'page');
+  return { ok: true };
+}
+
 // Soft-delete: archive instead of removing so historical calls keep
 // their disposition label resolvable.
 export async function archiveDisposition(input: { id: string }): Promise<Result> {

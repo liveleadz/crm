@@ -9,6 +9,7 @@ import {
   archiveDisposition,
   createDisposition,
   reorderDispositions,
+  setDispositionCooldown,
   updateDisposition,
 } from '@/app/actions/dispositions';
 import type { Disposition, DispositionTone } from '@/lib/dispositions';
@@ -58,6 +59,21 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
     });
   }
 
+  function changeCooldown(id: string, raw: string) {
+    setError(null);
+    const trimmed = raw.trim();
+    const minutes = trimmed === '' ? null : Number(trimmed);
+    if (minutes !== null && (!Number.isFinite(minutes) || minutes < 0)) {
+      setError('Cooldown must be a positive number of minutes.');
+      return;
+    }
+    patch(id, { cooldownMinutes: minutes });
+    startTransition(async () => {
+      const res = await setDispositionCooldown({ id, minutes });
+      if (!res.ok) setError(res.error);
+    });
+  }
+
   function move(id: string, dir: -1 | 1) {
     const idx = items.findIndex((d) => d.id === id);
     const next = idx + dir;
@@ -101,11 +117,12 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
         </div>
       )}
       <div className="overflow-hidden rounded-xl border border-line bg-surface">
-        <div className="grid grid-cols-[60px_1fr_140px_110px_36px] items-center gap-3 border-b border-line bg-canvas px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        <div className="grid grid-cols-[60px_1fr_140px_110px_110px_36px] items-center gap-3 border-b border-line bg-canvas px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
           <span>Order</span>
           <span>Label</span>
           <span>Code</span>
           <span>Tone</span>
+          <span title="Suppress redial of this lead for N minutes after a call resolves with this disposition.">Cooldown</span>
           <span></span>
         </div>
         {items.length === 0 ? (
@@ -116,7 +133,7 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
           items.map((d, i) => (
             <div
               key={d.id}
-              className="grid grid-cols-[60px_1fr_140px_110px_36px] items-center gap-3 border-b border-line/60 px-3 py-2.5 last:border-b-0"
+              className="grid grid-cols-[60px_1fr_140px_110px_110px_36px] items-center gap-3 border-b border-line/60 px-3 py-2.5 last:border-b-0"
             >
               <div className="flex items-center gap-1">
                 <button
@@ -167,6 +184,23 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
                   </option>
                 ))}
               </select>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  defaultValue={d.cooldownMinutes ?? ''}
+                  placeholder="—"
+                  onBlur={(e) => {
+                    const v = e.currentTarget.value;
+                    const next = v.trim() === '' ? null : Number(v);
+                    if (next === d.cooldownMinutes) return;
+                    changeCooldown(d.id, v);
+                  }}
+                  className="w-14 rounded-md border border-line bg-canvas px-2 py-1 text-right text-[11.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+                />
+                <span className="text-[10.5px] text-txt-3">min</span>
+              </div>
               <button
                 type="button"
                 onClick={() => remove(d)}
@@ -236,6 +270,7 @@ function AddDisposition({
         label: trimmed,
         tone,
         sortOrder: (existing.at(-1)?.sortOrder ?? 0) + 1,
+        cooldownMinutes: null,
       });
       setLabel('');
       setCode('');

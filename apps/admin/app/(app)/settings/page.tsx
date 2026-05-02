@@ -3,21 +3,30 @@ import { loadKanban } from '@/lib/leads';
 import { loadBrandTagsWithCounts } from '@/lib/tags';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadFollowupsForBrand } from '@/lib/disposition-followups';
+import { createServerClient } from '@leadpilot/db/server';
 import { PageHeader } from '@/components/page-header';
 import { StagesManager } from '@/components/settings/stages-manager';
 import { TagsManager } from '@/components/settings/tags-manager';
 import { DispositionsManager } from '@/components/settings/dispositions-manager';
 import { BrandFollowupsManager } from '@/components/settings/brand-followups-manager';
+import { BrandDialPolicy } from '@/components/settings/brand-dial-policy';
 
 export default async function SettingsPage() {
   const active = await getActiveBrand();
   if (!active) return null;
-  const [{ stages }, tags, dispositions, brandFollowups] = await Promise.all([
+  const supabase = await createServerClient();
+  const [{ stages }, tags, dispositions, brandFollowups, { data: brandRow }] = await Promise.all([
     loadKanban(active.id),
     loadBrandTagsWithCounts(active.id),
     loadDispositions(active.id),
     loadFollowupsForBrand(active.id, null),
+    supabase
+      .from('brands')
+      .select('max_dials_per_lead_per_day')
+      .eq('id', active.id)
+      .maybeSingle(),
   ]);
+  const dialCap = brandRow?.max_dials_per_lead_per_day ?? null;
   return (
     <>
       <PageHeader
@@ -43,10 +52,22 @@ export default async function SettingsPage() {
             <TagsManager initialTags={tags} />
           </section>
           <section>
+            <h2 className="mb-1 text-[13px] font-semibold">Dial policy</h2>
+            <p className="mb-4 text-[12px] text-txt-3">
+              Brand-wide guardrails that apply on top of campaign-specific
+              recently-called dedupe. Caps the number of times we hit the
+              same lead in a 24h window. Pair with per-disposition cooldowns
+              below to throttle voicemails and no-answers.
+            </p>
+            <BrandDialPolicy initialCap={dialCap} />
+          </section>
+          <section>
             <h2 className="mb-1 text-[13px] font-semibold">Call dispositions</h2>
             <p className="mb-4 text-[12px] text-txt-3">
               Outcomes agents pick after every call. Reorder, retone, rename, or
               archive — archived ones still resolve on historical calls.
+              Cooldown suppresses redial of the lead for N minutes after a
+              call resolves with that disposition.
             </p>
             <DispositionsManager initial={dispositions} />
           </section>

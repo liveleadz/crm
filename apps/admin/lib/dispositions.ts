@@ -9,6 +9,9 @@ export type Disposition = {
   label: string;
   tone: DispositionTone;
   sortOrder: number;
+  // After a call resolves with this disposition, suppress this lead from
+  // queue / manual dial for N minutes. NULL/0 = no cooldown.
+  cooldownMinutes: number | null;
 };
 
 // Active (non-archived) dispositions for a brand, in display order.
@@ -16,7 +19,7 @@ export async function loadDispositions(brandId: string): Promise<Disposition[]> 
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('dispositions')
-    .select('id, code, label, tone, sort_order')
+    .select('id, code, label, tone, sort_order, cooldown_minutes')
     .eq('brand_id', brandId)
     .eq('is_archived', false)
     .order('sort_order', { ascending: true });
@@ -27,5 +30,6 @@ export async function loadDispositions(brandId: string): Promise<Disposition[]> 
     label: d.label,
     tone: (d.tone as DispositionTone) ?? 'neutral',
     sortOrder: d.sort_order,
+    cooldownMinutes: d.cooldown_minutes ?? null,
   }));
 }

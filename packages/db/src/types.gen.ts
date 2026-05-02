@@ -349,6 +349,7 @@ export type Database = {
           default_pool_id: string | null
           ein: string | null
           id: string
+          max_dials_per_lead_per_day: number | null
           name: string
           slug: string
           timezone: string
@@ -361,6 +362,7 @@ export type Database = {
           default_pool_id?: string | null
           ein?: string | null
           id: string
+          max_dials_per_lead_per_day?: number | null
           name: string
           slug: string
           timezone?: string
@@ -373,6 +375,7 @@ export type Database = {
           default_pool_id?: string | null
           ein?: string | null
           id?: string
+          max_dials_per_lead_per_day?: number | null
           name?: string
           slug?: string
           timezone?: string
@@ -884,6 +887,7 @@ export type Database = {
         Row: {
           brand_id: string
           code: string
+          cooldown_minutes: number | null
           created_at: string
           id: string
           is_archived: boolean
@@ -895,6 +899,7 @@ export type Database = {
         Insert: {
           brand_id: string
           code: string
+          cooldown_minutes?: number | null
           created_at?: string
           id?: string
           is_archived?: boolean
@@ -906,6 +911,7 @@ export type Database = {
         Update: {
           brand_id?: string
           code?: string
+          cooldown_minutes?: number | null
           created_at?: string
           id?: string
           is_archived?: boolean

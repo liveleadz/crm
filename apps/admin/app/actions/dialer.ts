@@ -96,6 +96,57 @@ export async function prepareCall(input: {
     }
   }
 
+  // Per-lead attempt cap + per-disposition cooldown. These are brand-wide
+  // guardrails — they apply to every manual / campaign dial, regardless of
+  // whether the caller passed a campaign. Only checked when leadId is
+  // known; ad-hoc number-only dials skip the lookup.
+  if (input.leadId) {
+    const sb = await createServerClient();
+    const [{ data: brandCfg }, { data: dispRows }] = await Promise.all([
+      sb.from('brands').select('max_dials_per_lead_per_day').eq('id', active.id).maybeSingle(),
+      sb.from('dispositions').select('code, cooldown_minutes').eq('brand_id', active.id),
+    ]);
+    const dailyCap = brandCfg?.max_dials_per_lead_per_day ?? null;
+    const cooldownByCode = new Map<string, number>();
+    for (const d of dispRows ?? []) {
+      if (d.cooldown_minutes && d.cooldown_minutes > 0) {
+        cooldownByCode.set(d.code, d.cooldown_minutes);
+      }
+    }
+    if (dailyCap || cooldownByCode.size > 0) {
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+      const { data: dayCalls } = await sb
+        .from('calls')
+        .select('started_at, disposition')
+        .eq('brand_id', active.id)
+        .eq('lead_id', input.leadId)
+        .gte('started_at', dayAgo);
+      const calls = dayCalls ?? [];
+      if (dailyCap && calls.length >= dailyCap) {
+        return {
+          ok: false,
+          code: 'attempt_cap',
+          error: `Daily attempt cap reached (${dailyCap}). Try again tomorrow.`,
+        };
+      }
+      const now = Date.now();
+      for (const c of calls) {
+        const cdMin = c.disposition ? cooldownByCode.get(c.disposition) : undefined;
+        if (!cdMin) continue;
+        const startedMs = new Date(c.started_at).getTime();
+        const remainingMs = cdMin * 60_000 - (now - startedMs);
+        if (remainingMs > 0) {
+          const mins = Math.ceil(remainingMs / 60_000);
+          return {
+            ok: false,
+            code: 'cooldown',
+            error: `Lead is in cooldown — wait ${mins} more minute${mins === 1 ? '' : 's'}.`,
+          };
+        }
+      }
+    }
+  }
+
   const fromNumber = await pickOutboundNumber({
     brandId: active.id,
     campaignId: input.campaignId ?? null,

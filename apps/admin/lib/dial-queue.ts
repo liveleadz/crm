@@ -193,6 +193,58 @@ export async function loadDialQueue(
     recentLeadIds = new Set((recent ?? []).map((r) => r.lead_id as string));
   }
 
+  // Brand-wide attempt cap + per-disposition cooldown. Both filters look
+  // back 24h of calls (the max useful window for either guardrail) in a
+  // single query, then bucket lead_ids in JS. NULL/0 cap = disabled.
+  const cappedLeadIds = new Set<string>();
+  const cooldownLeadIds = new Set<string>();
+  const { data: brandCfg } = await supabase
+    .from('brands')
+    .select('max_dials_per_lead_per_day')
+    .eq('id', brandId)
+    .maybeSingle();
+  const dailyCap = brandCfg?.max_dials_per_lead_per_day ?? null;
+
+  // calls.disposition stores the code (text), not the FK id, so we map
+  // cooldowns by code here.
+  const { data: dispRows } = await supabase
+    .from('dispositions')
+    .select('code, cooldown_minutes')
+    .eq('brand_id', brandId);
+  const cooldownByCode = new Map<string, number>();
+  for (const d of dispRows ?? []) {
+    if (d.cooldown_minutes && d.cooldown_minutes > 0) {
+      cooldownByCode.set(d.code, d.cooldown_minutes);
+    }
+  }
+
+  if (dailyCap || cooldownByCode.size > 0) {
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    const { data: dayCalls } = await supabase
+      .from('calls')
+      .select('lead_id, started_at, disposition')
+      .eq('brand_id', brandId)
+      .gte('started_at', dayAgo)
+      .not('lead_id', 'is', null);
+
+    const counts = new Map<string, number>();
+    const now = Date.now();
+    for (const c of dayCalls ?? []) {
+      const lid = c.lead_id as string;
+      if (dailyCap) counts.set(lid, (counts.get(lid) ?? 0) + 1);
+      const cdMin = c.disposition ? cooldownByCode.get(c.disposition) : undefined;
+      if (cdMin) {
+        const startedMs = new Date(c.started_at).getTime();
+        if (now - startedMs < cdMin * 60_000) cooldownLeadIds.add(lid);
+      }
+    }
+    if (dailyCap) {
+      for (const [lid, n] of counts) {
+        if (n >= dailyCap) cappedLeadIds.add(lid);
+      }
+    }
+  }
+
   // TCPA soft block. Only filters when the campaign opted in; otherwise
   // pass-through. Lead state drives timezone with brand-tz fallback.
   const tcpaFilter = (state: string | null) => {
@@ -205,7 +257,14 @@ export async function loadDialQueue(
   };
 
   return leads
-    .filter((l) => l.phone && !recentLeadIds.has(l.id) && tcpaFilter(l.state))
+    .filter(
+      (l) =>
+        l.phone &&
+        !recentLeadIds.has(l.id) &&
+        !cappedLeadIds.has(l.id) &&
+        !cooldownLeadIds.has(l.id) &&
+        tcpaFilter(l.state),
+    )
     .map<QueuedLead>((l) => ({
       id: l.id,
       firstName: l.first_name,
