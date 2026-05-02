@@ -12,6 +12,7 @@ import {
   loadPipelineReport,
   loadAppointmentsReport,
   loadSmsReport,
+  loadCampaignReport,
   type DirectionFilter,
   type ReportFilter,
   type ReportRange,
@@ -32,6 +33,7 @@ import { EmailReportView } from '@/components/reports/email-report';
 import { PipelineReportView } from '@/components/reports/pipeline-report';
 import { AppointmentsReportView } from '@/components/reports/appointments-report';
 import { SmsReportView } from '@/components/reports/sms-report';
+import { CampaignReportView } from '@/components/reports/campaign-report';
 import { ExportButton } from '@/components/reports/export-button';
 
 type SearchParams = {
@@ -58,7 +60,8 @@ function parseTab(value: string | undefined): ReportTab {
     value === 'email' ||
     value === 'pipeline' ||
     value === 'appointments' ||
-    value === 'sms'
+    value === 'sms' ||
+    value === 'campaigns'
   )
     return value;
   return 'calls';
@@ -142,6 +145,10 @@ export default async function ReportsPage({
     const report = await loadSmsReport(active.id, filter);
     subtitle = `${rangeLabel} · ${report.kpis.sent.toLocaleString()} sent`;
     body = <SmsReportView report={report} />;
+  } else if (tab === 'campaigns') {
+    const report = await loadCampaignReport(active.id, filter);
+    subtitle = `${rangeLabel} · ${report.totals.calls.toLocaleString()} call${report.totals.calls === 1 ? '' : 's'} across ${report.rows.length} campaign${report.rows.length === 1 ? '' : 's'}`;
+    body = <CampaignReportView report={report} />;
   } else {
     const report = await loadCallReport(active.id, filter);
     subtitle = `${rangeLabel} · ${report.kpis.totalCalls.toLocaleString()} call${report.kpis.totalCalls === 1 ? '' : 's'}`;

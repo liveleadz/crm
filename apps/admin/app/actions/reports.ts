@@ -12,6 +12,7 @@ import {
   loadPipelineReport,
   loadAppointmentsReport,
   loadSmsReport,
+  loadCampaignReport,
   type ReportFilter,
   type ReportRange,
   type DirectionFilter,
@@ -19,7 +20,13 @@ import {
   formatPct,
 } from '@/lib/reports';
 
-export type ReportTabKind = 'calls' | 'email' | 'pipeline' | 'appointments' | 'sms';
+export type ReportTabKind =
+  | 'calls'
+  | 'email'
+  | 'pipeline'
+  | 'appointments'
+  | 'sms'
+  | 'campaigns';
 
 function csvEscape(value: string | number): string {
   const s = String(value);
@@ -121,6 +128,33 @@ export async function exportAgentReportCsv(input: {
       rows.push(['Total', report.kpis.sent, report.kpis.delivered]);
       csv = joinCsv(rows);
       filename = `sms-report_${active.id}_${input.range}_${stamp}.csv`;
+    } else if (tab === 'campaigns') {
+      const report = await loadCampaignReport(active.id, filter);
+      const rows: (string | number)[][] = [
+        ['Campaign', 'Status', 'Calls', 'Connects', 'Connect %', 'Appointments', 'Show %'],
+      ];
+      for (const r of report.rows) {
+        rows.push([
+          r.name,
+          r.status,
+          r.calls,
+          r.connects,
+          formatPct(r.connectRate),
+          r.appointmentsBooked,
+          formatPct(r.showRate),
+        ]);
+      }
+      rows.push([
+        'Total',
+        '',
+        report.totals.calls,
+        report.totals.connects,
+        formatPct(report.totals.connectRate),
+        report.totals.appointmentsBooked,
+        formatPct(report.totals.showRate),
+      ]);
+      csv = joinCsv(rows);
+      filename = `campaign-report_${active.id}_${input.range}_${stamp}.csv`;
     } else {
       const report = await loadCallReport(active.id, filter);
       const rows: (string | number)[][] = [

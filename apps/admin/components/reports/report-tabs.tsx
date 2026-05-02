@@ -8,7 +8,13 @@ import { useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { Route } from 'next';
 
-export type ReportTab = 'calls' | 'email' | 'pipeline' | 'appointments' | 'sms';
+export type ReportTab =
+  | 'calls'
+  | 'email'
+  | 'pipeline'
+  | 'appointments'
+  | 'sms'
+  | 'campaigns';
 
 const TABS: { value: ReportTab; label: string }[] = [
   { value: 'calls', label: 'Calls' },
@@ -16,6 +22,7 @@ const TABS: { value: ReportTab; label: string }[] = [
   { value: 'pipeline', label: 'Pipeline' },
   { value: 'appointments', label: 'Appointments' },
   { value: 'sms', label: 'SMS' },
+  { value: 'campaigns', label: 'Campaigns' },
 ];
 
 export function ReportTabs({ current }: { current: ReportTab }) {

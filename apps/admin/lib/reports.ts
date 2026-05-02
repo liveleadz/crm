@@ -975,3 +975,144 @@ export async function loadSmsReport(brandId: string, filter: ReportFilter): Prom
     trend,
   };
 }
+
+// Per-campaign breakdown: call volume, connect rate, appointments
+// booked, show rate. Joined to campaigns so we can label rows even
+// after a campaign is archived.
+export type CampaignReportRow = {
+  campaignId: string;
+  name: string;
+  status: string;
+  calls: number;
+  connects: number;
+  connectRate: number;     // 0..1
+  appointmentsBooked: number;
+  showRate: number;        // 0..1, completed / (completed+no_show)
+};
+
+export type CampaignReport = {
+  fromIso: string;
+  toIso: string;
+  rows: CampaignReportRow[];
+  totals: {
+    calls: number;
+    connects: number;
+    connectRate: number;
+    appointmentsBooked: number;
+    showRate: number;
+  };
+};
+
+export async function loadCampaignReport(
+  brandId: string,
+  filter: ReportFilter,
+): Promise<CampaignReport> {
+  const supabase = await createServerClient();
+  const { fromIso, toIso } = rangeBounds(filter);
+
+  // Pull active + archived campaigns so historical reports keep labels.
+  const { data: camps } = await supabase
+    .from('campaigns')
+    .select('id, name, status')
+    .eq('brand_id', brandId);
+  const campaigns = camps ?? [];
+  if (campaigns.length === 0) {
+    return {
+      fromIso,
+      toIso,
+      rows: [],
+      totals: { calls: 0, connects: 0, connectRate: 0, appointmentsBooked: 0, showRate: 0 },
+    };
+  }
+
+  const ids = campaigns.map((c) => c.id);
+
+  const [callsRes, apptsRes, goodDispRes] = await Promise.all([
+    supabase
+      .from('calls')
+      .select('campaign_id, disposition')
+      .eq('brand_id', brandId)
+      .in('campaign_id', ids)
+      .gte('started_at', fromIso)
+      .lte('started_at', toIso)
+      .limit(100_000),
+    supabase
+      .from('appointments')
+      .select('campaign_id, status')
+      .eq('brand_id', brandId)
+      .in('campaign_id', ids)
+      .gte('created_at', fromIso)
+      .lte('created_at', toIso)
+      .limit(100_000),
+    supabase.from('dispositions').select('code').eq('brand_id', brandId).eq('tone', 'good'),
+  ]);
+  const goodCodes = new Set((goodDispRes.data ?? []).map((r) => r.code));
+
+  const callTotals = new Map<string, { calls: number; connects: number }>();
+  for (const r of callsRes.data ?? []) {
+    if (!r.campaign_id) continue;
+    const cur = callTotals.get(r.campaign_id) ?? { calls: 0, connects: 0 };
+    cur.calls += 1;
+    if (r.disposition && goodCodes.has(r.disposition)) cur.connects += 1;
+    callTotals.set(r.campaign_id, cur);
+  }
+
+  const apptTotals = new Map<string, { booked: number; completed: number; noShow: number }>();
+  for (const r of apptsRes.data ?? []) {
+    if (!r.campaign_id) continue;
+    const cur = apptTotals.get(r.campaign_id) ?? { booked: 0, completed: 0, noShow: 0 };
+    cur.booked += 1;
+    if (r.status === 'completed') cur.completed += 1;
+    if (r.status === 'no_show') cur.noShow += 1;
+    apptTotals.set(r.campaign_id, cur);
+  }
+
+  const rows: CampaignReportRow[] = campaigns
+    .map((c) => {
+      const calls = callTotals.get(c.id) ?? { calls: 0, connects: 0 };
+      const appts = apptTotals.get(c.id) ?? { booked: 0, completed: 0, noShow: 0 };
+      const denom = appts.completed + appts.noShow;
+      return {
+        campaignId: c.id,
+        name: c.name,
+        status: c.status,
+        calls: calls.calls,
+        connects: calls.connects,
+        connectRate: calls.calls > 0 ? calls.connects / calls.calls : 0,
+        appointmentsBooked: appts.booked,
+        showRate: denom > 0 ? appts.completed / denom : 0,
+      };
+    })
+    .sort((a, b) => b.calls - a.calls);
+
+  let tCalls = 0;
+  let tConnects = 0;
+  let tAppts = 0;
+  let tCompleted = 0;
+  let tNoShow = 0;
+  for (const r of callsRes.data ?? []) {
+    if (!r.campaign_id) continue;
+    tCalls += 1;
+    if (r.disposition && goodCodes.has(r.disposition)) tConnects += 1;
+  }
+  for (const r of apptsRes.data ?? []) {
+    if (!r.campaign_id) continue;
+    tAppts += 1;
+    if (r.status === 'completed') tCompleted += 1;
+    if (r.status === 'no_show') tNoShow += 1;
+  }
+  const showDenom = tCompleted + tNoShow;
+
+  return {
+    fromIso,
+    toIso,
+    rows,
+    totals: {
+      calls: tCalls,
+      connects: tConnects,
+      connectRate: tCalls > 0 ? tConnects / tCalls : 0,
+      appointmentsBooked: tAppts,
+      showRate: showDenom > 0 ? tCompleted / showDenom : 0,
+    },
+  };
+}
