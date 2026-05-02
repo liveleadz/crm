@@ -51,14 +51,19 @@ type Props = {
 
 // Local edit state for each follow-up channel. Pre-filled from the
 // resolved template; the agent can toggle off or tweak the body before
-// hitting Save.
+// hitting Save. Lead transitions (stage move / tag add) aren't editable
+// in the dialer — they fire automatically server-side when configured.
 type FollowupEdit = {
   email: { send: boolean; subject: string; body: string; available: boolean };
   sms: { send: boolean; body: string; available: boolean };
   task: { create: boolean; title: string; dueMinutes: number | null; available: boolean };
+  transitions: { stageName: string | null; tagNames: string[] };
 };
 
-function toEdit(tpl: DispositionFollowup | null): FollowupEdit {
+function toEdit(
+  tpl: DispositionFollowup | null,
+  resolved: { stageName: string | null; tagNames: string[] } = { stageName: null, tagNames: [] },
+): FollowupEdit {
   return {
     email: {
       send: !!tpl?.sendEmail,
@@ -76,6 +81,10 @@ function toEdit(tpl: DispositionFollowup | null): FollowupEdit {
       title: tpl?.taskTitle ?? '',
       dueMinutes: tpl?.taskDueMinutes ?? null,
       available: !!tpl?.createTask,
+    },
+    transitions: {
+      stageName: tpl?.moveStageId ? resolved.stageName : null,
+      tagNames: tpl && tpl.addTagIds.length > 0 ? resolved.tagNames : [],
     },
   };
 }
@@ -108,12 +117,16 @@ export function DispositionPicker({
     let cancelled = false;
     setFollowupLoading(true);
     getFollowupForDisposition({ campaignId, dispositionId })
-      .then((tpl) => {
+      .then((res) => {
         if (cancelled) return;
-        const edit = toEdit(tpl);
-        // Only render the section if at least one channel is enabled.
+        const edit = toEdit(res?.followup ?? null, {
+          stageName: res?.stageName ?? null,
+          tagNames: res?.tagNames ?? [],
+        });
+        // Render the section if any channel OR transition is configured.
         const anyChannel = edit.email.available || edit.sms.available || edit.task.available;
-        setFollowup(anyChannel ? edit : null);
+        const anyTransition = !!edit.transitions.stageName || edit.transitions.tagNames.length > 0;
+        setFollowup(anyChannel || anyTransition ? edit : null);
       })
       .catch(() => {
         if (!cancelled) setFollowup(null);
@@ -395,6 +408,30 @@ function FollowupSection({
               className="w-full rounded-md border border-line bg-canvas px-2 py-1.5 text-[13.5px] outline-none focus:border-teal/60"
             />
           )}
+        </div>
+      )}
+
+      {(edit.transitions.stageName || edit.transitions.tagNames.length > 0) && (
+        <div className="rounded-md border border-line bg-canvas p-2.5 text-[12.5px] text-txt-2">
+          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
+            Will also
+          </div>
+          <ul className="space-y-0.5">
+            {edit.transitions.stageName && (
+              <li>
+                <span className="text-txt-3">→ stage:</span>{' '}
+                <span className="font-medium text-txt-1">{edit.transitions.stageName}</span>
+              </li>
+            )}
+            {edit.transitions.tagNames.length > 0 && (
+              <li>
+                <span className="text-txt-3">+ tags:</span>{' '}
+                <span className="font-medium text-txt-1">
+                  {edit.transitions.tagNames.join(', ')}
+                </span>
+              </li>
+            )}
+          </ul>
         </div>
       )}
     </div>

@@ -194,6 +194,10 @@ export type FollowupInput = {
   createTask: boolean;
   taskTitle?: string | null;
   taskDueMinutes?: number | null;
+  // Lead-state transitions. moveStageId=null leaves the stage alone;
+  // addTagIds=[] attaches no tags.
+  moveStageId?: string | null;
+  addTagIds?: string[];
 };
 
 export async function upsertFollowup(input: FollowupInput): Promise<ActionResult> {
@@ -235,6 +239,8 @@ export async function upsertFollowup(input: FollowupInput): Promise<ActionResult
     create_task: input.createTask,
     task_title: input.taskTitle ?? null,
     task_due_minutes: input.taskDueMinutes ?? null,
+    move_stage_id: input.moveStageId ?? null,
+    add_tag_ids: input.addTagIds ?? [],
   };
   if (existingId) {
     const { error } = await supabase.from('disposition_followups').update(row).eq('id', existingId);

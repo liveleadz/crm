@@ -793,6 +793,7 @@ export type Database = {
       }
       disposition_followups: {
         Row: {
+          add_tag_ids: string[]
           brand_id: string
           campaign_id: string | null
           create_task: boolean
@@ -802,6 +803,7 @@ export type Database = {
           email_subject: string | null
           enabled: boolean
           id: string
+          move_stage_id: string | null
           send_email: boolean
           send_sms: boolean
           sms_body: string | null
@@ -810,6 +812,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          add_tag_ids?: string[]
           brand_id: string
           campaign_id?: string | null
           create_task?: boolean
@@ -819,6 +822,7 @@ export type Database = {
           email_subject?: string | null
           enabled?: boolean
           id?: string
+          move_stage_id?: string | null
           send_email?: boolean
           send_sms?: boolean
           sms_body?: string | null
@@ -827,6 +831,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          add_tag_ids?: string[]
           brand_id?: string
           campaign_id?: string | null
           create_task?: boolean
@@ -836,6 +841,7 @@ export type Database = {
           email_subject?: string | null
           enabled?: boolean
           id?: string
+          move_stage_id?: string | null
           send_email?: boolean
           send_sms?: boolean
           sms_body?: string | null
@@ -863,6 +869,13 @@ export type Database = {
             columns: ["disposition_id"]
             isOneToOne: false
             referencedRelation: "dispositions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "disposition_followups_move_stage_id_fkey"
+            columns: ["move_stage_id"]
+            isOneToOne: false
+            referencedRelation: "stages"
             referencedColumns: ["id"]
           },
         ]

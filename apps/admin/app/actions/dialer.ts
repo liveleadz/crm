@@ -314,13 +314,42 @@ export async function setDisposition(input: {
 
 // Fetch the resolved follow-up template for the disposition picker.
 // Returns null if neither a campaign override nor a brand default exists.
+// stageName/tagNames are resolved here so the picker can show a readable
+// "Will also: → Closed Won + tag(VIP)" preview without a second round-trip.
+export type ResolvedDispositionFollowup = {
+  followup: DispositionFollowup;
+  stageName: string | null;
+  tagNames: string[];
+};
+
 export async function getFollowupForDisposition(input: {
   campaignId: string | null;
   dispositionId: string;
-}): Promise<DispositionFollowup | null> {
+}): Promise<ResolvedDispositionFollowup | null> {
   const active = await getActiveBrand();
   if (!active) return null;
-  return loadFollowupForDisposition(active.id, input.campaignId, input.dispositionId);
+  const followup = await loadFollowupForDisposition(
+    active.id,
+    input.campaignId,
+    input.dispositionId,
+  );
+  if (!followup) return null;
+  let stageName: string | null = null;
+  let tagNames: string[] = [];
+  if (followup.moveStageId || followup.addTagIds.length > 0) {
+    const supabase = await createServerClient();
+    const [stageRes, tagRes] = await Promise.all([
+      followup.moveStageId
+        ? supabase.from('stages').select('name').eq('id', followup.moveStageId).maybeSingle()
+        : Promise.resolve({ data: null }),
+      followup.addTagIds.length > 0
+        ? supabase.from('tags').select('id, name').in('id', followup.addTagIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+    stageName = (stageRes.data as { name: string } | null)?.name ?? null;
+    tagNames = ((tagRes.data ?? []) as { id: string; name: string }[]).map((t) => t.name);
+  }
+  return { followup, stageName, tagNames };
 }
 
 // Direct path for the disposition dialog: enqueue email/SMS/task follow-ups

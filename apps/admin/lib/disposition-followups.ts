@@ -16,6 +16,9 @@ export type DispositionFollowup = {
   createTask: boolean;
   taskTitle: string | null;
   taskDueMinutes: number | null;
+  // Lead-state transitions fired alongside the messaging follow-ups.
+  moveStageId: string | null;
+  addTagIds: string[];
 };
 
 type FollowupRow = {
@@ -32,6 +35,8 @@ type FollowupRow = {
   create_task: boolean;
   task_title: string | null;
   task_due_minutes: number | null;
+  move_stage_id: string | null;
+  add_tag_ids: string[] | null;
 };
 
 function mapFollowup(row: FollowupRow): DispositionFollowup {
@@ -49,11 +54,13 @@ function mapFollowup(row: FollowupRow): DispositionFollowup {
     createTask: row.create_task,
     taskTitle: row.task_title,
     taskDueMinutes: row.task_due_minutes,
+    moveStageId: row.move_stage_id,
+    addTagIds: row.add_tag_ids ?? [],
   };
 }
 
 const SELECT =
-  'id, brand_id, campaign_id, disposition_id, enabled, send_email, email_subject, email_body, send_sms, sms_body, create_task, task_title, task_due_minutes';
+  'id, brand_id, campaign_id, disposition_id, enabled, send_email, email_subject, email_body, send_sms, sms_body, create_task, task_title, task_due_minutes, move_stage_id, add_tag_ids';
 
 // Resolve the follow-up template the dialer should use for this
 // (campaign, disposition). Campaign override beats brand default. Returns
@@ -112,6 +119,8 @@ type EnqueueResult = {
   email?: { id: string };
   sms?: { id: string };
   task?: { id: string };
+  stageMoved?: { stageId: string };
+  tagsAdded?: { tagIds: string[] };
 };
 
 // Render the resolved follow-up against the lead/brand and insert into the
@@ -228,6 +237,63 @@ export async function enqueueFollowups(input: {
       .select('id')
       .single();
     if (row) out.task = { id: row.id };
+  }
+
+  // Stage move. We re-read the lead's current stage for the audit log so
+  // the timeline event captures the transition both ways. Skipped if the
+  // lead is already on the target stage so we don't spam events.
+  if (tpl.moveStageId && lead.stage_id !== tpl.moveStageId) {
+    const { error: stageErr } = await supabase
+      .from('leads')
+      .update({ stage_id: tpl.moveStageId })
+      .eq('id', input.leadId);
+    if (!stageErr) {
+      out.stageMoved = { stageId: tpl.moveStageId };
+      await supabase.from('lead_events').insert({
+        brand_id: input.brandId,
+        lead_id: input.leadId,
+        member_id: input.memberId,
+        type: 'stage_change',
+        payload: {
+          from: lead.stage_id,
+          to: tpl.moveStageId,
+          via: 'disposition_followup',
+          disposition: disp?.code ?? null,
+        },
+      });
+    }
+  }
+
+  // Tag attach. on_conflict do nothing isn't exposed via PostgREST, so we
+  // pre-filter to tags the lead doesn't already have. Single insert keeps
+  // the round-trip count predictable when 0–N tags are configured.
+  if (tpl.addTagIds.length > 0) {
+    const { data: existing } = await supabase
+      .from('lead_tags')
+      .select('tag_id')
+      .eq('lead_id', input.leadId)
+      .in('tag_id', tpl.addTagIds);
+    const have = new Set((existing ?? []).map((r) => r.tag_id));
+    const toAdd = tpl.addTagIds.filter((id) => !have.has(id));
+    if (toAdd.length > 0) {
+      const { error: tagErr } = await supabase
+        .from('lead_tags')
+        .insert(toAdd.map((tagId) => ({ lead_id: input.leadId, tag_id: tagId })));
+      if (!tagErr) {
+        out.tagsAdded = { tagIds: toAdd };
+        await supabase.from('lead_events').insert({
+          brand_id: input.brandId,
+          lead_id: input.leadId,
+          member_id: input.memberId,
+          type: 'tag_add',
+          payload: {
+            tag_ids: toAdd,
+            via: 'disposition_followup',
+            disposition: disp?.code ?? null,
+          },
+        });
+      }
+    }
   }
 
   return out;

@@ -8,13 +8,19 @@ import type { DispositionFollowup } from '@/lib/disposition-followups';
 import { useState } from 'react';
 
 type Disposition = { id: string; code: string; label: string; tone: string };
+type StageOpt = { id: string; name: string };
+type TagOpt = { id: string; name: string; color: string | null };
 
 export function BrandFollowupsManager({
   dispositions,
   followups,
+  stages,
+  tags,
 }: {
   dispositions: Disposition[];
   followups: DispositionFollowup[];
+  stages: StageOpt[];
+  tags: TagOpt[];
 }) {
   const [error, setError] = useState<string | null>(null);
   return (
@@ -30,6 +36,8 @@ export function BrandFollowupsManager({
           campaignId={null}
           disposition={d}
           initial={followups.find((f) => f.dispositionId === d.id) ?? null}
+          stages={stages}
+          tags={tags}
           canManage={true}
           onError={setError}
         />

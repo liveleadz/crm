@@ -5,8 +5,10 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadCampaign } from '@/lib/campaigns';
 import { loadFollowupsForBrand } from '@/lib/disposition-followups';
 import { loadDispositions } from '@/lib/dispositions';
+import { loadKanban } from '@/lib/leads';
 import { loadLists } from '@/lib/lists';
 import { loadPools } from '@/lib/phone-pools';
+import { loadBrandTagsWithCounts } from '@/lib/tags';
 import { getCurrentBrandRole } from '@/lib/team';
 import { getMyProfile } from '@/lib/dialer';
 import { createServerClient } from '@leadpilot/db/server';
@@ -114,18 +116,31 @@ export default async function CampaignDetailPage({
     if (!profile || !campaign.agentIds.includes(profile.id)) notFound();
   }
 
-  const [scripts, calendars, members, lists, dispositions, followups, calls, appointments, pools] =
-    await Promise.all([
-      loadCallScripts(active.id),
-      loadCalendars(active.id),
-      loadMembers(active.id),
-      loadLists(active.id),
-      loadDispositions(active.id),
-      loadFollowupsForBrand(active.id, id),
-      loadRecentCalls(id),
-      loadRecentAppointments(id),
-      loadPools(active.id),
-    ]);
+  const [
+    scripts,
+    calendars,
+    members,
+    lists,
+    dispositions,
+    followups,
+    calls,
+    appointments,
+    pools,
+    kanban,
+    tags,
+  ] = await Promise.all([
+    loadCallScripts(active.id),
+    loadCalendars(active.id),
+    loadMembers(active.id),
+    loadLists(active.id),
+    loadDispositions(active.id),
+    loadFollowupsForBrand(active.id, id),
+    loadRecentCalls(id),
+    loadRecentAppointments(id),
+    loadPools(active.id),
+    loadKanban(active.id),
+    loadBrandTagsWithCounts(active.id),
+  ]);
 
   return (
     <>
@@ -154,6 +169,8 @@ export default async function CampaignDetailPage({
               tone: d.tone,
             }))}
             followups={followups}
+            stages={kanban.stages.map((s) => ({ id: s.id, name: s.name }))}
+            tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
             recentCalls={calls}
             recentAppointments={appointments}
             canManage={canManage}

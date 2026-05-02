@@ -23,6 +23,8 @@ type Calendar = { id: string; name: string };
 type Pool = { id: string; name: string; numberCount: number };
 type LeadList = { id: string; name: string; source: string; count: number };
 type Disposition = { id: string; code: string; label: string; tone: string };
+type StageOpt = { id: string; name: string };
+type TagOpt = { id: string; name: string; color: string | null };
 type CallRow = {
   id: string;
   startedAt: string;
@@ -58,6 +60,8 @@ export function CampaignEditor({
   lists,
   dispositions,
   followups,
+  stages,
+  tags,
   recentCalls,
   recentAppointments,
   canManage,
@@ -71,6 +75,8 @@ export function CampaignEditor({
   lists: LeadList[];
   dispositions: Disposition[];
   followups: DispositionFollowup[];
+  stages: StageOpt[];
+  tags: TagOpt[];
   recentCalls: CallRow[];
   recentAppointments: AppointmentRow[];
   canManage: boolean;
@@ -217,6 +223,8 @@ export function CampaignEditor({
           campaignId={c.id}
           dispositions={dispositions}
           initial={followups}
+          stages={stages}
+          tags={tags}
           canManage={canManage}
           onError={setError}
         />
@@ -610,12 +618,16 @@ function FollowupsTab({
   campaignId,
   dispositions,
   initial,
+  stages,
+  tags,
   canManage,
   onError,
 }: {
   campaignId: string;
   dispositions: Disposition[];
   initial: DispositionFollowup[];
+  stages: StageOpt[];
+  tags: TagOpt[];
   canManage: boolean;
   onError: (msg: string) => void;
 }) {
@@ -634,6 +646,8 @@ function FollowupsTab({
             campaignId={campaignId}
             disposition={d}
             initial={initial.find((f) => f.dispositionId === d.id) ?? null}
+            stages={stages}
+            tags={tags}
             canManage={canManage}
             onError={onError}
           />
@@ -647,12 +661,16 @@ function FollowupRow({
   campaignId,
   disposition,
   initial,
+  stages,
+  tags,
   canManage,
   onError,
 }: {
   campaignId: string | null;
   disposition: Disposition;
   initial: DispositionFollowup | null;
+  stages: StageOpt[];
+  tags: TagOpt[];
   canManage: boolean;
   onError: (msg: string) => void;
 }) {
@@ -666,6 +684,8 @@ function FollowupRow({
   const [createTask, setCreateTask] = useState(initial?.createTask ?? false);
   const [taskTitle, setTaskTitle] = useState(initial?.taskTitle ?? '');
   const [taskDueMin, setTaskDueMin] = useState(initial?.taskDueMinutes ?? 60);
+  const [moveStageId, setMoveStageId] = useState<string | null>(initial?.moveStageId ?? null);
+  const [addTagIds, setAddTagIds] = useState<string[]>(initial?.addTagIds ?? []);
   const [hasOverride, setHasOverride] = useState(!!initial);
   const [saving, setSaving] = useState(false);
   const [, startTransition] = useTransition();
@@ -689,6 +709,8 @@ function FollowupRow({
         createTask,
         taskTitle: taskTitle || null,
         taskDueMinutes: createTask ? taskDueMin : null,
+        moveStageId,
+        addTagIds,
       });
       setSaving(false);
       if (!res.ok) onError(res.error);
@@ -714,6 +736,8 @@ function FollowupRow({
         setSmsBody('');
         setCreateTask(false);
         setTaskTitle('');
+        setMoveStageId(null);
+        setAddTagIds([]);
       }
     });
   }
@@ -729,7 +753,15 @@ function FollowupRow({
         <span className="font-mono text-[10.5px] text-txt-3">{disposition.code}</span>
         <span className="ml-auto text-[11px] text-txt-3">
           {hasOverride
-            ? `${[sendEmail && 'email', sendSms && 'sms', createTask && 'task'].filter(Boolean).join(' + ') || 'configured'}`
+            ? `${[
+                sendEmail && 'email',
+                sendSms && 'sms',
+                createTask && 'task',
+                moveStageId && 'stage',
+                addTagIds.length > 0 && 'tags',
+              ]
+                .filter(Boolean)
+                .join(' + ') || 'configured'}`
             : campaignId
               ? 'inherits brand default'
               : 'not configured'}
@@ -856,6 +888,59 @@ function FollowupRow({
                 />
               </div>
             )}
+          </div>
+
+          <div className="space-y-2 rounded-md border border-line p-2.5">
+            <div className="text-[12px] font-medium">Lead transitions</div>
+            <div className="space-y-1">
+              <label className="text-[11px] text-txt-3">Move to stage</label>
+              <select
+                value={moveStageId ?? ''}
+                onChange={(e) => setMoveStageId(e.target.value || null)}
+                disabled={!canManage}
+                className={inputCls}
+              >
+                <option value="">— no change —</option>
+                {stages.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[11px] text-txt-3">Add tags</label>
+              {tags.length === 0 ? (
+                <div className="text-[11px] text-txt-3">No tags configured.</div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {tags.map((t) => {
+                    const on = addTagIds.includes(t.id);
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        disabled={!canManage}
+                        onClick={() =>
+                          setAddTagIds((prev) =>
+                            prev.includes(t.id)
+                              ? prev.filter((id) => id !== t.id)
+                              : [...prev, t.id],
+                          )
+                        }
+                        className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                          on
+                            ? 'border-teal bg-teal/15 text-teal'
+                            : 'border-line bg-canvas text-txt-2 hover:bg-surface-2'
+                        }`}
+                      >
+                        {t.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           {canManage && (

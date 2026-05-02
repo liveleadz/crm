@@ -65,6 +65,8 @@ export default async function SettingsPage() {
                 tone: d.tone,
               }))}
               followups={brandFollowups}
+              stages={stages.map((s) => ({ id: s.id, name: s.name }))}
+              tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
             />
           </section>
         </div>
