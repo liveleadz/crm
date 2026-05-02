@@ -86,6 +86,7 @@ export type Database = {
         Row: {
           brand_id: string
           calendar_id: string | null
+          campaign_id: string | null
           created_at: string
           ends_at: string | null
           ext_etag: string | null
@@ -103,6 +104,7 @@ export type Database = {
         Insert: {
           brand_id: string
           calendar_id?: string | null
+          campaign_id?: string | null
           created_at?: string
           ends_at?: string | null
           ext_etag?: string | null
@@ -120,6 +122,7 @@ export type Database = {
         Update: {
           brand_id?: string
           calendar_id?: string | null
+          campaign_id?: string | null
           created_at?: string
           ends_at?: string | null
           ext_etag?: string | null
@@ -147,6 +150,13 @@ export type Database = {
             columns: ["calendar_id"]
             isOneToOne: false
             referencedRelation: "calendars"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "appointments_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
             referencedColumns: ["id"]
           },
           {
@@ -472,6 +482,7 @@ export type Database = {
         Row: {
           brand_id: string
           callback_at: string | null
+          campaign_id: string | null
           created_at: string
           direction: Database["public"]["Enums"]["call_direction"]
           disposition: string | null
@@ -500,6 +511,7 @@ export type Database = {
         Insert: {
           brand_id: string
           callback_at?: string | null
+          campaign_id?: string | null
           created_at?: string
           direction: Database["public"]["Enums"]["call_direction"]
           disposition?: string | null
@@ -528,6 +540,7 @@ export type Database = {
         Update: {
           brand_id?: string
           callback_at?: string | null
+          campaign_id?: string | null
           created_at?: string
           direction?: Database["public"]["Enums"]["call_direction"]
           disposition?: string | null
@@ -562,6 +575,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "calls_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "calls_lead_id_fkey"
             columns: ["lead_id"]
             isOneToOne: false
@@ -580,6 +600,223 @@ export type Database = {
             columns: ["number_id"]
             isOneToOne: false
             referencedRelation: "numbers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      campaign_agents: {
+        Row: {
+          campaign_id: string
+          member_id: string
+        }
+        Insert: {
+          campaign_id: string
+          member_id: string
+        }
+        Update: {
+          campaign_id?: string
+          member_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_agents_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_agents_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      campaign_lists: {
+        Row: {
+          campaign_id: string
+          list_id: string
+        }
+        Insert: {
+          campaign_id: string
+          list_id: string
+        }
+        Update: {
+          campaign_id?: string
+          list_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_lists_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_lists_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "lead_lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      campaigns: {
+        Row: {
+          brand_id: string
+          calendar_id: string | null
+          created_at: string
+          created_by: string | null
+          default_owner_id: string | null
+          description: string | null
+          id: string
+          name: string
+          recently_called_minutes: number
+          script_id: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          brand_id: string
+          calendar_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          default_owner_id?: string | null
+          description?: string | null
+          id?: string
+          name: string
+          recently_called_minutes?: number
+          script_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          brand_id?: string
+          calendar_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          default_owner_id?: string | null
+          description?: string | null
+          id?: string
+          name?: string
+          recently_called_minutes?: number
+          script_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaigns_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaigns_calendar_id_fkey"
+            columns: ["calendar_id"]
+            isOneToOne: false
+            referencedRelation: "calendars"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaigns_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaigns_default_owner_id_fkey"
+            columns: ["default_owner_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaigns_script_id_fkey"
+            columns: ["script_id"]
+            isOneToOne: false
+            referencedRelation: "scripts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      disposition_followups: {
+        Row: {
+          brand_id: string
+          campaign_id: string | null
+          create_task: boolean
+          created_at: string
+          disposition_id: string
+          email_body: string | null
+          email_subject: string | null
+          enabled: boolean
+          id: string
+          send_email: boolean
+          send_sms: boolean
+          sms_body: string | null
+          task_due_minutes: number | null
+          task_title: string | null
+          updated_at: string
+        }
+        Insert: {
+          brand_id: string
+          campaign_id?: string | null
+          create_task?: boolean
+          created_at?: string
+          disposition_id: string
+          email_body?: string | null
+          email_subject?: string | null
+          enabled?: boolean
+          id?: string
+          send_email?: boolean
+          send_sms?: boolean
+          sms_body?: string | null
+          task_due_minutes?: number | null
+          task_title?: string | null
+          updated_at?: string
+        }
+        Update: {
+          brand_id?: string
+          campaign_id?: string | null
+          create_task?: boolean
+          created_at?: string
+          disposition_id?: string
+          email_body?: string | null
+          email_subject?: string | null
+          enabled?: boolean
+          id?: string
+          send_email?: boolean
+          send_sms?: boolean
+          sms_body?: string | null
+          task_due_minutes?: number | null
+          task_title?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "disposition_followups_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "disposition_followups_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "disposition_followups_disposition_id_fkey"
+            columns: ["disposition_id"]
+            isOneToOne: false
+            referencedRelation: "dispositions"
             referencedColumns: ["id"]
           },
         ]
