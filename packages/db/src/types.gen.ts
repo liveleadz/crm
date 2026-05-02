@@ -489,6 +489,8 @@ export type Database = {
           duration_sec: number | null
           ended_at: string | null
           from_number: string
+          handled_at: string | null
+          handled_by: string | null
           hangup_cause: string | null
           id: string
           is_voicemail: boolean
@@ -518,6 +520,8 @@ export type Database = {
           duration_sec?: number | null
           ended_at?: string | null
           from_number: string
+          handled_at?: string | null
+          handled_by?: string | null
           hangup_cause?: string | null
           id?: string
           is_voicemail?: boolean
@@ -547,6 +551,8 @@ export type Database = {
           duration_sec?: number | null
           ended_at?: string | null
           from_number?: string
+          handled_at?: string | null
+          handled_by?: string | null
           hangup_cause?: string | null
           id?: string
           is_voicemail?: boolean

@@ -11,6 +11,7 @@ import { TodayOutcomes } from '@/components/dashboard/today-outcomes';
 import { RecentImports } from '@/components/dashboard/recent-imports';
 import { TopTags } from '@/components/dashboard/top-tags';
 import { MyCampaigns } from '@/components/dashboard/my-campaigns';
+import { InboundCard } from '@/components/dashboard/inbound-card';
 import { RealtimeRefresher } from '@/components/realtime-refresher';
 
 export default async function DashboardPage() {
@@ -46,7 +47,10 @@ export default async function DashboardPage() {
           <div className="lg:col-span-2">
             <PipelineByStage pipeline={pipeline} />
           </div>
-          <RecentCalls calls={recentCalls} />
+          <div className="space-y-4">
+            <InboundCard brandId={active.id} />
+            <RecentCalls calls={recentCalls} />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
