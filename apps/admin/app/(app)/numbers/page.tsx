@@ -2,6 +2,8 @@ import { PageHeader } from '@/components/page-header';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadNumbersWithHealth } from '@/lib/numbers';
 import { NumbersManager } from '@/components/numbers/numbers-manager';
+import { PoolManager } from '@/components/numbers/pool-manager';
+import { loadPools, loadPoolMembers } from '@/lib/phone-pools';
 import { createServerClient } from '@leadpilot/db/server';
 
 async function loadBrandMembers(brandId: string) {
@@ -49,11 +51,18 @@ export default async function NumbersPage() {
     );
   }
 
-  const [numbers, members, routes] = await Promise.all([
+  const supabase = await createServerClient();
+  const [numbers, members, routes, pools, brandRow] = await Promise.all([
     loadNumbersWithHealth(active.id),
     loadBrandMembers(active.id),
     loadAllInboundRoutes(active.id),
+    loadPools(active.id),
+    supabase.from('brands').select('default_pool_id').eq('id', active.id).maybeSingle(),
   ]);
+  const poolsWithMembers = await Promise.all(
+    pools.map(async (p) => ({ ...p, members: await loadPoolMembers(p.id) })),
+  );
+  const defaultPoolId = (brandRow.data?.default_pool_id as string | null) ?? null;
 
   const subtitle =
     numbers.length === 0
@@ -75,6 +84,18 @@ export default async function NumbersPage() {
           voicemailGreeting: r.voicemail_greeting,
         }))}
       />
+      <div className="px-6 pb-6">
+        <PoolManager
+          pools={poolsWithMembers}
+          numbers={numbers.map((n) => ({
+            id: n.id,
+            e164: n.e164,
+            label: n.label,
+            active: n.active,
+          }))}
+          defaultPoolId={defaultPoolId}
+        />
+      </div>
     </>
   );
 }

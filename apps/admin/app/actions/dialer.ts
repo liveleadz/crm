@@ -10,7 +10,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { getActiveBrand } from '@/lib/active-brand';
-import { getMyProfile, getOutboundFromNumber, toE164 } from '@/lib/dialer';
+import { getMyProfile, toE164 } from '@/lib/dialer';
+import { pickOutboundNumber } from '@/lib/phone-pools';
 import { signDialToken } from '@/lib/dial-token';
 import { runAutomations } from '@/lib/automation-engine';
 import {
@@ -56,7 +57,11 @@ export async function prepareCall(input: {
   const to = toE164(input.toNumber);
   if (!to) return { ok: false, error: 'Enter a valid phone number.' };
 
-  const fromNumber = await getOutboundFromNumber(active.id);
+  const fromNumber = await pickOutboundNumber({
+    brandId: active.id,
+    campaignId: input.campaignId ?? null,
+    leadId: input.leadId ?? null,
+  });
   if (!fromNumber) {
     return {
       ok: false,

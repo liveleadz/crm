@@ -20,6 +20,7 @@ import type { DispositionFollowup } from '@/lib/disposition-followups';
 type Member = { id: string; fullName: string | null; email: string };
 type Script = { id: string; name: string; subject: string | null };
 type Calendar = { id: string; name: string };
+type Pool = { id: string; name: string; numberCount: number };
 type LeadList = { id: string; name: string; source: string; count: number };
 type Disposition = { id: string; code: string; label: string; tone: string };
 type CallRow = {
@@ -53,6 +54,7 @@ export function CampaignEditor({
   scripts,
   calendars,
   members,
+  pools = [],
   lists,
   dispositions,
   followups,
@@ -64,6 +66,7 @@ export function CampaignEditor({
   scripts: Script[];
   calendars: Calendar[];
   members: Member[];
+  pools?: Pool[];
   lists: LeadList[];
   dispositions: Disposition[];
   followups: DispositionFollowup[];
@@ -94,6 +97,7 @@ export function CampaignEditor({
         scriptId: 'scriptId',
         calendarId: 'calendarId',
         defaultOwnerId: 'defaultOwnerId',
+        phonePoolId: 'phonePoolId',
         recentlyCalledMinutes: 'recentlyCalledMinutes',
       };
       const key = map[field as string];
@@ -176,6 +180,7 @@ export function CampaignEditor({
           scripts={scripts}
           calendars={calendars}
           members={members}
+          pools={pools}
           canManage={canManage}
           onChange={save}
         />
@@ -227,6 +232,7 @@ function OverviewTab({
   scripts,
   calendars,
   members,
+  pools,
   canManage,
   onChange,
 }: {
@@ -234,6 +240,7 @@ function OverviewTab({
   scripts: Script[];
   calendars: Calendar[];
   members: Member[];
+  pools: Pool[];
   canManage: boolean;
   onChange: <K extends keyof Campaign>(field: K, value: Campaign[K]) => void;
 }) {
@@ -296,6 +303,24 @@ function OverviewTab({
           {members.map((m) => (
             <option key={m.id} value={m.id}>
               {m.fullName ?? m.email}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field
+        label="Caller-ID pool"
+        hint="Rotate outbound numbers for this campaign. Leave blank to use the brand default."
+      >
+        <select
+          value={c.phonePoolId ?? ''}
+          disabled={!canManage}
+          onChange={(e) => onChange('phonePoolId', e.target.value || null)}
+          className={fieldCls}
+        >
+          <option value="">— Use brand default —</option>
+          {pools.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.numberCount} number{p.numberCount === 1 ? '' : 's'})
             </option>
           ))}
         </select>

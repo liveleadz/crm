@@ -11,6 +11,7 @@ export type Campaign = {
   scriptId: string | null;
   calendarId: string | null;
   defaultOwnerId: string | null;
+  phonePoolId: string | null;
   status: CampaignStatus;
   recentlyCalledMinutes: number;
   listIds: string[];
@@ -37,6 +38,7 @@ function mapCampaign(row: {
   script_id: string | null;
   calendar_id: string | null;
   default_owner_id: string | null;
+  phone_pool_id: string | null;
   status: string;
   recently_called_minutes: number;
   created_at: string;
@@ -51,6 +53,7 @@ function mapCampaign(row: {
     scriptId: row.script_id,
     calendarId: row.calendar_id,
     defaultOwnerId: row.default_owner_id,
+    phonePoolId: row.phone_pool_id,
     status: row.status as CampaignStatus,
     recentlyCalledMinutes: row.recently_called_minutes,
     listIds: (row.campaign_lists ?? []).map((r) => r.list_id),
@@ -67,7 +70,7 @@ export async function loadCampaigns(
   let q = supabase
     .from('campaigns')
     .select(
-      'id, brand_id, name, description, script_id, calendar_id, default_owner_id, status, recently_called_minutes, created_at, campaign_lists(list_id), campaign_agents(member_id)',
+      'id, brand_id, name, description, script_id, calendar_id, default_owner_id, phone_pool_id, status, recently_called_minutes, created_at, campaign_lists(list_id), campaign_agents(member_id)',
     )
     .eq('brand_id', brandId)
     .order('created_at', { ascending: false });
@@ -85,7 +88,7 @@ export async function loadCampaign(campaignId: string): Promise<Campaign | null>
   const { data } = await supabase
     .from('campaigns')
     .select(
-      'id, brand_id, name, description, script_id, calendar_id, default_owner_id, status, recently_called_minutes, created_at, campaign_lists(list_id), campaign_agents(member_id)',
+      'id, brand_id, name, description, script_id, calendar_id, default_owner_id, phone_pool_id, status, recently_called_minutes, created_at, campaign_lists(list_id), campaign_agents(member_id)',
     )
     .eq('id', campaignId)
     .maybeSingle();

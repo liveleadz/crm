@@ -76,6 +76,7 @@ export async function updateCampaign(input: {
   scriptId?: string | null;
   calendarId?: string | null;
   defaultOwnerId?: string | null;
+  phonePoolId?: string | null;
   recentlyCalledMinutes?: number;
 }): Promise<ActionResult> {
   const guard = await requireManager();
@@ -92,6 +93,7 @@ export async function updateCampaign(input: {
   if (input.scriptId !== undefined) patch.script_id = input.scriptId;
   if (input.calendarId !== undefined) patch.calendar_id = input.calendarId;
   if (input.defaultOwnerId !== undefined) patch.default_owner_id = input.defaultOwnerId;
+  if (input.phonePoolId !== undefined) patch.phone_pool_id = input.phonePoolId;
   if (typeof input.recentlyCalledMinutes === 'number') {
     patch.recently_called_minutes = Math.max(0, Math.floor(input.recentlyCalledMinutes));
   }

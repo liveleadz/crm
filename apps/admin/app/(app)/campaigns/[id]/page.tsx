@@ -6,6 +6,7 @@ import { loadCampaign } from '@/lib/campaigns';
 import { loadFollowupsForBrand } from '@/lib/disposition-followups';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadLists } from '@/lib/lists';
+import { loadPools } from '@/lib/phone-pools';
 import { getCurrentBrandRole } from '@/lib/team';
 import { getMyProfile } from '@/lib/dialer';
 import { createServerClient } from '@leadpilot/db/server';
@@ -113,7 +114,7 @@ export default async function CampaignDetailPage({
     if (!profile || !campaign.agentIds.includes(profile.id)) notFound();
   }
 
-  const [scripts, calendars, members, lists, dispositions, followups, calls, appointments] =
+  const [scripts, calendars, members, lists, dispositions, followups, calls, appointments, pools] =
     await Promise.all([
       loadCallScripts(active.id),
       loadCalendars(active.id),
@@ -123,6 +124,7 @@ export default async function CampaignDetailPage({
       loadFollowupsForBrand(active.id, id),
       loadRecentCalls(id),
       loadRecentAppointments(id),
+      loadPools(active.id),
     ]);
 
   return (
@@ -138,6 +140,7 @@ export default async function CampaignDetailPage({
             scripts={scripts}
             calendars={calendars}
             members={members}
+            pools={pools.map((p) => ({ id: p.id, name: p.name, numberCount: p.numberCount }))}
             lists={lists.map((l) => ({
               id: l.id,
               name: l.name,

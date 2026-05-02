@@ -346,6 +346,7 @@ export type Database = {
           color: string | null
           created_at: string
           dba: string | null
+          default_pool_id: string | null
           ein: string | null
           id: string
           name: string
@@ -357,6 +358,7 @@ export type Database = {
           color?: string | null
           created_at?: string
           dba?: string | null
+          default_pool_id?: string | null
           ein?: string | null
           id: string
           name: string
@@ -368,13 +370,22 @@ export type Database = {
           color?: string | null
           created_at?: string
           dba?: string | null
+          default_pool_id?: string | null
           ein?: string | null
           id?: string
           name?: string
           slug?: string
           timezone?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "brands_default_pool_id_fkey"
+            columns: ["default_pool_id"]
+            isOneToOne: false
+            referencedRelation: "phone_pools"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       calendar_members: {
         Row: {
@@ -680,6 +691,7 @@ export type Database = {
           description: string | null
           id: string
           name: string
+          phone_pool_id: string | null
           recently_called_minutes: number
           script_id: string | null
           status: string
@@ -694,6 +706,7 @@ export type Database = {
           description?: string | null
           id?: string
           name: string
+          phone_pool_id?: string | null
           recently_called_minutes?: number
           script_id?: string | null
           status?: string
@@ -708,6 +721,7 @@ export type Database = {
           description?: string | null
           id?: string
           name?: string
+          phone_pool_id?: string | null
           recently_called_minutes?: number
           script_id?: string | null
           status?: string
@@ -740,6 +754,13 @@ export type Database = {
             columns: ["default_owner_id"]
             isOneToOne: false
             referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaigns_phone_pool_id_fkey"
+            columns: ["phone_pool_id"]
+            isOneToOne: false
+            referencedRelation: "phone_pools"
             referencedColumns: ["id"]
           },
           {
@@ -1649,6 +1670,77 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "numbers_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      phone_pool_numbers: {
+        Row: {
+          last_used_at: string | null
+          number_id: string
+          pool_id: string
+          weight: number
+        }
+        Insert: {
+          last_used_at?: string | null
+          number_id: string
+          pool_id: string
+          weight?: number
+        }
+        Update: {
+          last_used_at?: string | null
+          number_id?: string
+          pool_id?: string
+          weight?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "phone_pool_numbers_number_id_fkey"
+            columns: ["number_id"]
+            isOneToOne: false
+            referencedRelation: "numbers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "phone_pool_numbers_pool_id_fkey"
+            columns: ["pool_id"]
+            isOneToOne: false
+            referencedRelation: "phone_pools"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      phone_pools: {
+        Row: {
+          brand_id: string
+          created_at: string
+          id: string
+          name: string
+          strategy: string
+          updated_at: string
+        }
+        Insert: {
+          brand_id: string
+          created_at?: string
+          id?: string
+          name: string
+          strategy?: string
+          updated_at?: string
+        }
+        Update: {
+          brand_id?: string
+          created_at?: string
+          id?: string
+          name?: string
+          strategy?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "phone_pools_brand_id_fkey"
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
