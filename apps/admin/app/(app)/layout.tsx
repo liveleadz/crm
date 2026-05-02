@@ -43,7 +43,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <IncomingCallProvider
-      dispositions={dispositions.map((d) => ({ code: d.code, label: d.label, tone: d.tone }))}
+      dispositions={dispositions.map((d) => ({ id: d.id, code: d.code, label: d.label, tone: d.tone }))}
     >
       <div className="flex h-screen flex-col">
         <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />

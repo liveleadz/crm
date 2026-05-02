@@ -13,6 +13,12 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { getMyProfile, getOutboundFromNumber, toE164 } from '@/lib/dialer';
 import { signDialToken } from '@/lib/dial-token';
 import { runAutomations } from '@/lib/automation-engine';
+import {
+  enqueueFollowups,
+  loadFollowupForDisposition,
+  type DispositionFollowup,
+  type FollowupOverrides,
+} from '@/lib/disposition-followups';
 import { createServerClient } from '@leadpilot/db/server';
 
 type PrepareCallResult =
@@ -209,20 +215,31 @@ export async function setDisposition(input: {
   disposition: string;
   note?: string | null;
   callbackAt?: string | null; // ISO timestamp when disposition === 'callback'
+  campaignId?: string | null; // attribution if the call started ad-hoc
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const supabase = await createServerClient();
   const callbackAt =
     input.disposition === 'callback' ? input.callbackAt ?? null : null;
+  // We patch campaign_id only when the caller passes it explicitly so we
+  // don't accidentally null out an existing attribution.
+  const patch: {
+    disposition: string;
+    note: string | null;
+    callback_at: string | null;
+    needs_disposition: boolean;
+    campaign_id?: string | null;
+  } = {
+    disposition: input.disposition,
+    note: input.note?.trim() ? input.note.trim() : null,
+    callback_at: callbackAt,
+    needs_disposition: false,
+  };
+  if (input.campaignId !== undefined) patch.campaign_id = input.campaignId;
   const { data: row, error } = await supabase
     .from('calls')
-    .update({
-      disposition: input.disposition,
-      note: input.note?.trim() ? input.note.trim() : null,
-      callback_at: callbackAt,
-      needs_disposition: false,
-    })
+    .update(patch)
     .eq('id', input.callId)
-    .select('brand_id, lead_id, member_id')
+    .select('brand_id, lead_id, member_id, campaign_id')
     .single();
   if (error) return { ok: false, error: error.message };
 
@@ -244,6 +261,59 @@ export async function setDisposition(input: {
   revalidatePath('/leads');
   revalidatePath('/tasks');
   return { ok: true };
+}
+
+// Fetch the resolved follow-up template for the disposition picker.
+// Returns null if neither a campaign override nor a brand default exists.
+export async function getFollowupForDisposition(input: {
+  campaignId: string | null;
+  dispositionId: string;
+}): Promise<DispositionFollowup | null> {
+  const active = await getActiveBrand();
+  if (!active) return null;
+  return loadFollowupForDisposition(active.id, input.campaignId, input.dispositionId);
+}
+
+// Direct path for the disposition dialog: enqueue email/SMS/task follow-ups
+// for a call. Separate from runAutomations() — reps don't need to build a
+// workflow to get a "thanks for chatting" email out the door.
+export async function sendDispositionFollowups(input: {
+  callId: string;
+  campaignId: string | null;
+  dispositionId: string;
+  overrides?: FollowupOverrides;
+}): Promise<
+  | {
+      ok: true;
+      enqueued: { email: boolean; sms: boolean; task: boolean };
+    }
+  | { ok: false; error: string }
+> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false, error: 'No active brand.' };
+  const profile = await getMyProfile();
+  if (!profile) return { ok: false, error: 'Not authenticated.' };
+  const supabase = await createServerClient();
+  const { data: call } = await supabase
+    .from('calls')
+    .select('lead_id, brand_id')
+    .eq('id', input.callId)
+    .maybeSingle();
+  if (!call) return { ok: false, error: 'Call not found.' };
+  if (!call.lead_id) return { ok: true, enqueued: { email: false, sms: false, task: false } };
+  const result = await enqueueFollowups({
+    brandId: call.brand_id,
+    leadId: call.lead_id,
+    callId: input.callId,
+    campaignId: input.campaignId,
+    dispositionId: input.dispositionId,
+    memberId: profile.id,
+    overrides: input.overrides,
+  });
+  return {
+    ok: true,
+    enqueued: { email: !!result.email, sms: !!result.sms, task: !!result.task },
+  };
 }
 
 // Bulk re-disposition for the /calls list. Applies a single disposition
