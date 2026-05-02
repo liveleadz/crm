@@ -109,6 +109,9 @@ function TriggerEditor({
     if (kind === 'disposition_set') config = { codes: [] };
     else if (kind === 'lead_created') config = { source_in: [] };
     else if (kind === 'stage_changed') config = { to_stage_in: [], from_stage_in: [] };
+    else if (kind === 'task_completed') config = { task_kind_in: [] };
+    else if (kind === 'call_ended') config = { direction_in: [] };
+    else if (kind === 'tag_added') config = { tag_in: [] };
     onChange({
       ...node,
       data: {
@@ -130,6 +133,9 @@ function TriggerEditor({
           <option value="stage_changed">When a lead stage changes</option>
           <option value="email_received">When an inbound email is received</option>
           <option value="appointment_booked">When an appointment is booked</option>
+          <option value="task_completed">When a task is completed</option>
+          <option value="call_ended">When a call ends</option>
+          <option value="tag_added">When a tag is added to a lead</option>
         </select>
       </div>
 
@@ -146,6 +152,173 @@ function TriggerEditor({
       )}
       {triggerType === 'email_received' && <EmailReceivedTriggerFields />}
       {triggerType === 'appointment_booked' && <AppointmentBookedTriggerFields />}
+      {triggerType === 'task_completed' && (
+        <TaskCompletedTriggerFields node={node} onChange={onChange} />
+      )}
+      {triggerType === 'call_ended' && (
+        <CallEndedTriggerFields node={node} onChange={onChange} />
+      )}
+      {triggerType === 'tag_added' && (
+        <TagAddedTriggerFields node={node} ctx={ctx} onChange={onChange} />
+      )}
+    </div>
+  );
+}
+
+function TaskCompletedTriggerFields({
+  node,
+  onChange,
+}: {
+  node: Extract<GraphNode, { type: 'trigger' }>;
+  onChange: (n: GraphNode) => void;
+}) {
+  const kinds = Array.isArray(node.data.trigger_config.task_kind_in)
+    ? (node.data.trigger_config.task_kind_in as string[])
+    : [];
+  function toggle(k: string) {
+    const next = kinds.includes(k) ? kinds.filter((x) => x !== k) : [...kinds, k];
+    onChange({
+      ...node,
+      data: {
+        ...node.data,
+        trigger_config: { ...node.data.trigger_config, task_kind_in: next },
+      },
+    });
+  }
+  return (
+    <div>
+      <Label>Task kind filter (optional)</Label>
+      <p className="mb-1.5 text-[11px] text-txt-3">
+        Leave empty to fire on any kind. Otherwise only completions of the selected kinds trigger
+        the workflow.
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {(['call', 'text', 'email', 'meeting', 'note', 'other'] as const).map((k) => {
+          const on = kinds.includes(k);
+          return (
+            <button
+              type="button"
+              key={k}
+              onClick={() => toggle(k)}
+              className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                on
+                  ? 'border-teal/60 bg-teal/10 text-teal'
+                  : 'border-line bg-canvas text-txt-2 hover:border-teal/30'
+              }`}
+            >
+              {k}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CallEndedTriggerFields({
+  node,
+  onChange,
+}: {
+  node: Extract<GraphNode, { type: 'trigger' }>;
+  onChange: (n: GraphNode) => void;
+}) {
+  const dirs = Array.isArray(node.data.trigger_config.direction_in)
+    ? (node.data.trigger_config.direction_in as string[])
+    : [];
+  function toggle(d: string) {
+    const next = dirs.includes(d) ? dirs.filter((x) => x !== d) : [...dirs, d];
+    onChange({
+      ...node,
+      data: {
+        ...node.data,
+        trigger_config: { ...node.data.trigger_config, direction_in: next },
+      },
+    });
+  }
+  return (
+    <div>
+      <Label>Direction filter (optional)</Label>
+      <p className="mb-1.5 text-[11px] text-txt-3">
+        Leave empty to fire on any call. Duration is exposed as
+        {' '}
+        <code className="rounded bg-canvas px-1">{'{{trigger.durationSec}}'}</code>.
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {(['inbound', 'outbound'] as const).map((d) => {
+          const on = dirs.includes(d);
+          return (
+            <button
+              type="button"
+              key={d}
+              onClick={() => toggle(d)}
+              className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                on
+                  ? 'border-teal/60 bg-teal/10 text-teal'
+                  : 'border-line bg-canvas text-txt-2 hover:border-teal/30'
+              }`}
+            >
+              {d}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TagAddedTriggerFields({
+  node,
+  ctx,
+  onChange,
+}: {
+  node: Extract<GraphNode, { type: 'trigger' }>;
+  ctx: Props['ctx'];
+  onChange: (n: GraphNode) => void;
+}) {
+  const tagIds = Array.isArray(node.data.trigger_config.tag_in)
+    ? (node.data.trigger_config.tag_in as string[])
+    : [];
+  function toggle(id: string) {
+    const next = tagIds.includes(id) ? tagIds.filter((x) => x !== id) : [...tagIds, id];
+    onChange({
+      ...node,
+      data: {
+        ...node.data,
+        trigger_config: { ...node.data.trigger_config, tag_in: next },
+      },
+    });
+  }
+  return (
+    <div>
+      <Label>Tag filter (optional)</Label>
+      <p className="mb-1.5 text-[11px] text-txt-3">
+        Leave empty to fire on any tag. Tag name is exposed as
+        {' '}
+        <code className="rounded bg-canvas px-1">{'{{trigger.tagName}}'}</code>.
+      </p>
+      {ctx.tags.length === 0 ? (
+        <p className="text-[12px] text-txt-3">No tags defined.</p>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {ctx.tags.map((t) => {
+            const on = tagIds.includes(t.id);
+            return (
+              <button
+                type="button"
+                key={t.id}
+                onClick={() => toggle(t.id)}
+                className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                  on
+                    ? 'border-teal/60 bg-teal/10 text-teal'
+                    : 'border-line bg-canvas text-txt-2 hover:border-teal/30'
+                }`}
+              >
+                {t.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

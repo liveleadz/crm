@@ -12,6 +12,7 @@ import {
   type TaskPriority,
   type TaskRow,
 } from '@/lib/tasks';
+import { runAutomations } from '@/lib/automation-engine';
 
 const KINDS: TaskKind[] = ['call', 'text', 'email', 'meeting', 'note', 'other'];
 const PRIORITIES: TaskPriority[] = ['low', 'normal', 'high'];
@@ -251,6 +252,17 @@ export async function completeTask(taskId: string) {
     })
     .eq('id', taskId);
   if (doneErr) return { ok: false as const, error: doneErr.message };
+
+  // Fan out user-defined automations. Best-effort — never block the close.
+  void runAutomations({
+    trigger: 'task_completed',
+    brandId: existing.brand_id,
+    leadId: existing.lead_id,
+    memberId: existing.assignee_id ?? user.id,
+    taskId: existing.id,
+    taskKind: existing.kind,
+    taskTitle: existing.title,
+  });
 
   // Spawn next occurrence if this task has a recurrence rule and a due_at.
   let nextId: string | null = null;

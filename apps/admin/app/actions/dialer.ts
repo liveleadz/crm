@@ -173,14 +173,30 @@ export async function markCallEnded(input: {
   durationSec?: number;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const supabase = await createServerClient();
-  const { error } = await supabase
+  const { data: row, error } = await supabase
     .from('calls')
     .update({
       ended_at: new Date().toISOString(),
       duration_sec: input.durationSec ?? null,
     })
-    .eq('id', input.callId);
+    .eq('id', input.callId)
+    .select('brand_id, lead_id, member_id, direction')
+    .single();
   if (error) return { ok: false, error: error.message };
+
+  // Fan out call_ended automations. Best-effort.
+  if (row && (row.direction === 'inbound' || row.direction === 'outbound')) {
+    void runAutomations({
+      trigger: 'call_ended',
+      brandId: row.brand_id,
+      leadId: row.lead_id,
+      memberId: row.member_id,
+      callId: input.callId,
+      direction: row.direction,
+      durationSec: input.durationSec ?? null,
+    });
+  }
+
   revalidatePath('/calls');
   return { ok: true };
 }

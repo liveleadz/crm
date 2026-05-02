@@ -630,6 +630,12 @@ export type PipelineStageRow = {
   pctOfTop: number;
   // Conversion to the next stage by position. Null on the last stage.
   conversion: number | null;
+  // Movement within the report window, sourced from lead_events.
+  entered: number;
+  exited: number;
+  // Average dwell time for stints that ended in the window. Null when
+  // there are no completed stints to measure.
+  avgDaysInStage: number | null;
 };
 
 export type PipelineReport = {
@@ -645,8 +651,14 @@ export async function loadPipelineReport(
 ): Promise<PipelineReport> {
   const supabase = await createServerClient();
   const { fromIso, toIso } = rangeBounds(filter);
+  // Pull a wider window of events so we can measure dwell time even when
+  // a stint started before the report window. 365d is enough for SMB
+  // sales cycles without being absurd.
+  const historySinceIso = new Date(
+    new Date(fromIso).getTime() - 365 * 86_400_000,
+  ).toISOString();
 
-  const [{ data: stages }, { data: leadCounts }] = await Promise.all([
+  const [{ data: stages }, { data: leadCounts }, { data: events }] = await Promise.all([
     supabase
       .from('stages')
       .select('id, name, position, is_won, is_lost')
@@ -657,6 +669,15 @@ export async function loadPipelineReport(
       .select('id, stage_id')
       .eq('brand_id', brandId)
       .limit(50_000),
+    supabase
+      .from('lead_events')
+      .select('lead_id, payload, created_at')
+      .eq('brand_id', brandId)
+      .eq('type', 'stage_change')
+      .gte('created_at', historySinceIso)
+      .order('lead_id', { ascending: true })
+      .order('created_at', { ascending: true })
+      .limit(100_000),
   ]);
 
   const stageList = stages ?? [];
@@ -669,6 +690,62 @@ export async function loadPipelineReport(
     countByStage.set(l.stage_id, (countByStage.get(l.stage_id) ?? 0) + 1);
   }
 
+  // Aggregate movement + dwell from the event stream. `entered` and
+  // `exited` count rows whose created_at falls in the window. Dwell is
+  // attributed to a stage at the moment a lead leaves it: when consecutive
+  // events show stage A → B and the B event is in the window, we add
+  // (B.created_at − A.created_at) to A's dwell totals.
+  const enteredByStage = new Map<string, number>();
+  const exitedByStage = new Map<string, number>();
+  const dwellMs = new Map<string, { sum: number; count: number }>();
+
+  type StageEvent = {
+    leadId: string;
+    fromStage: string | null;
+    toStage: string | null;
+    at: number;
+  };
+  const eventRows = (events ?? []) as Array<{
+    lead_id: string;
+    payload: Record<string, unknown> | null;
+    created_at: string;
+  }>;
+  const fromMs = new Date(fromIso).getTime();
+  const toMs = new Date(toIso).getTime();
+
+  let prevByLead: StageEvent | null = null;
+  for (const r of eventRows) {
+    const payload = r.payload ?? {};
+    const fromStage =
+      typeof payload.from_stage_id === 'string' ? payload.from_stage_id : null;
+    const toStage =
+      typeof payload.to_stage_id === 'string' ? payload.to_stage_id : null;
+    const at = new Date(r.created_at).getTime();
+    const cur: StageEvent = { leadId: r.lead_id, fromStage, toStage, at };
+
+    const inWindow = at >= fromMs && at <= toMs;
+    if (inWindow) {
+      if (toStage) enteredByStage.set(toStage, (enteredByStage.get(toStage) ?? 0) + 1);
+      if (fromStage) exitedByStage.set(fromStage, (exitedByStage.get(fromStage) ?? 0) + 1);
+    }
+
+    // Dwell: only meaningful between consecutive events for the same lead.
+    if (prevByLead && prevByLead.leadId === cur.leadId && prevByLead.toStage) {
+      const stintEndedAt = cur.at;
+      const stintStartedAt = prevByLead.at;
+      // Attribute the stint to the stage the lead was in (prev.toStage)
+      // when the *exit* lands in the window.
+      if (stintEndedAt >= fromMs && stintEndedAt <= toMs) {
+        const stageId = prevByLead.toStage;
+        const slot = dwellMs.get(stageId) ?? { sum: 0, count: 0 };
+        slot.sum += stintEndedAt - stintStartedAt;
+        slot.count += 1;
+        dwellMs.set(stageId, slot);
+      }
+    }
+    prevByLead = cur;
+  }
+
   const top = stageList[0];
   const topCount = top ? countByStage.get(top.id) ?? 0 : 0;
 
@@ -676,6 +753,11 @@ export async function loadPipelineReport(
     const count = countByStage.get(s.id) ?? 0;
     const next = stageList[i + 1];
     const nextCount = next ? countByStage.get(next.id) ?? 0 : null;
+    const dwell = dwellMs.get(s.id);
+    const avgDaysInStage =
+      dwell && dwell.count > 0
+        ? Math.round((dwell.sum / dwell.count / 86_400_000) * 10) / 10
+        : null;
     return {
       stageId: s.id,
       name: s.name,
@@ -685,6 +767,9 @@ export async function loadPipelineReport(
       count,
       pctOfTop: topCount > 0 ? count / topCount : 0,
       conversion: nextCount === null ? null : count > 0 ? nextCount / count : 0,
+      entered: enteredByStage.get(s.id) ?? 0,
+      exited: exitedByStage.get(s.id) ?? 0,
+      avgDaysInStage,
     };
   });
 

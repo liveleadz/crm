@@ -119,6 +119,12 @@ function labelTrigger(t: string): string {
       return 'email received';
     case 'appointment_booked':
       return 'appointment booked';
+    case 'task_completed':
+      return 'task completed';
+    case 'call_ended':
+      return 'call ended';
+    case 'tag_added':
+      return 'tag added';
     default:
       return t;
   }

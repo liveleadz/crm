@@ -365,6 +365,21 @@ export function describeTrigger(
   if (triggerType === 'appointment_booked') {
     return 'When an appointment is booked';
   }
+  if (triggerType === 'task_completed') {
+    const kinds = Array.isArray(config.task_kind_in) ? (config.task_kind_in as string[]) : [];
+    if (kinds.length === 0) return 'When a task is completed';
+    return `When a ${kinds.join('/')} task is completed`;
+  }
+  if (triggerType === 'call_ended') {
+    const dirs = Array.isArray(config.direction_in) ? (config.direction_in as string[]) : [];
+    if (dirs.length === 0) return 'When a call ends';
+    return `When an ${dirs.join('/')} call ends`;
+  }
+  if (triggerType === 'tag_added') {
+    const tags = Array.isArray(config.tag_in) ? (config.tag_in as string[]) : [];
+    if (tags.length === 0) return 'When a tag is added to a lead';
+    return `When ${tags.length} specific tag${tags.length === 1 ? '' : 's'} added to a lead`;
+  }
   return 'Click to choose a trigger';
 }
 

@@ -90,6 +90,18 @@ export function AutomationForm({
     return Array.isArray(v) ? (v as string[]) : [];
   });
   const [sourceDraft, setSourceDraft] = useState('');
+  const [taskKindIn, setTaskKindIn] = useState<string[]>(() => {
+    const v = initial?.triggerConfig?.task_kind_in;
+    return Array.isArray(v) ? (v as string[]) : [];
+  });
+  const [directionIn, setDirectionIn] = useState<string[]>(() => {
+    const v = initial?.triggerConfig?.direction_in;
+    return Array.isArray(v) ? (v as string[]) : [];
+  });
+  const [tagIn, setTagIn] = useState<string[]>(() => {
+    const v = initial?.triggerConfig?.tag_in;
+    return Array.isArray(v) ? (v as string[]) : [];
+  });
   const nextId = useIdGenerator();
   const [actions, setActions] = useState<{ id: string; data: AutomationAction }[]>(() =>
     (initial?.actions ?? []).map((a) => ({ id: nextId(), data: a })),
@@ -181,6 +193,9 @@ export function AutomationForm({
     if (triggerType === 'disposition_set') triggerConfig = { codes };
     else if (triggerType === 'lead_created') triggerConfig = { source_in: sourceIn };
     else if (triggerType === 'stage_changed') triggerConfig = { to_stage_in: toStageIn };
+    else if (triggerType === 'task_completed') triggerConfig = { task_kind_in: taskKindIn };
+    else if (triggerType === 'call_ended') triggerConfig = { direction_in: directionIn };
+    else if (triggerType === 'tag_added') triggerConfig = { tag_in: tagIn };
 
     setSaving(true);
     const err = await onSave({
@@ -267,6 +282,9 @@ export function AutomationForm({
                   <option value="stage_changed">When a lead stage changes</option>
                   <option value="email_received">When an inbound email is received</option>
                   <option value="appointment_booked">When an appointment is booked</option>
+                  <option value="task_completed">When a task is completed</option>
+                  <option value="call_ended">When a call ends</option>
+                  <option value="tag_added">When a tag is added to a lead</option>
                 </select>
               </div>
 
@@ -408,6 +426,103 @@ export function AutomationForm({
                 <p className="text-[12px] text-txt-3">
                   Fires when a new appointment is created for a lead.
                 </p>
+              )}
+
+              {triggerType === 'task_completed' && (
+                <div>
+                  <p className="mb-2 text-[12px] text-txt-2">
+                    Task kind filter (optional — leave empty to fire on any kind):
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(['call', 'text', 'email', 'meeting', 'note', 'other'] as const).map((k) => {
+                      const on = taskKindIn.includes(k);
+                      return (
+                        <button
+                          type="button"
+                          key={k}
+                          onClick={() =>
+                            setTaskKindIn((prev) =>
+                              prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k],
+                            )
+                          }
+                          className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                            on
+                              ? 'border-teal/60 bg-teal/10 text-teal'
+                              : 'border-line bg-surface text-txt-2 hover:border-teal/30'
+                          }`}
+                        >
+                          {k}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {triggerType === 'call_ended' && (
+                <div>
+                  <p className="mb-2 text-[12px] text-txt-2">
+                    Direction filter (optional — leave empty to fire on any call):
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(['inbound', 'outbound'] as const).map((d) => {
+                      const on = directionIn.includes(d);
+                      return (
+                        <button
+                          type="button"
+                          key={d}
+                          onClick={() =>
+                            setDirectionIn((prev) =>
+                              prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d],
+                            )
+                          }
+                          className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                            on
+                              ? 'border-teal/60 bg-teal/10 text-teal'
+                              : 'border-line bg-surface text-txt-2 hover:border-teal/30'
+                          }`}
+                        >
+                          {d}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {triggerType === 'tag_added' && (
+                <div>
+                  <p className="mb-2 text-[12px] text-txt-2">
+                    Tag filter (optional — leave empty to fire on any tag):
+                  </p>
+                  {tags.length === 0 ? (
+                    <p className="text-[12px] text-txt-3">No tags defined.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {tags.map((t) => {
+                        const on = tagIn.includes(t.id);
+                        return (
+                          <button
+                            type="button"
+                            key={t.id}
+                            onClick={() =>
+                              setTagIn((prev) =>
+                                prev.includes(t.id) ? prev.filter((x) => x !== t.id) : [...prev, t.id],
+                              )
+                            }
+                            className={`rounded-full border px-2.5 py-1 text-[11.5px] transition-colors ${
+                              on
+                                ? 'border-teal/60 bg-teal/10 text-teal'
+                                : 'border-line bg-surface text-txt-2 hover:border-teal/30'
+                            }`}
+                          >
+                            {t.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

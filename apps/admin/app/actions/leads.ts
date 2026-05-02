@@ -144,6 +144,16 @@ export async function moveLeadStage(leadId: string, stageId: string) {
   if (error) return { ok: false as const, error: error.message };
 
   if (prior?.brand_id && prior.stage_id !== stageId) {
+    // Audit row — powers the pipeline report's entered/exited/dwell metrics.
+    await supabase.from('lead_events').insert({
+      brand_id: prior.brand_id,
+      lead_id: leadId,
+      type: 'stage_change',
+      payload: {
+        from_stage_id: prior.stage_id ?? null,
+        to_stage_id: stageId,
+      },
+    });
     void runAutomations({
       trigger: 'stage_changed',
       brandId: prior.brand_id,
@@ -347,6 +357,17 @@ export async function logCall(input: {
     .from('leads')
     .update({ updated_at: new Date().toISOString() })
     .eq('id', input.leadId);
+
+  // Manual call logs end the call right away — fire call_ended automations.
+  void runAutomations({
+    trigger: 'call_ended',
+    brandId: active.id,
+    leadId: input.leadId,
+    memberId: user.id,
+    callId: call.id,
+    direction: input.direction,
+    durationSec: input.durationSec ?? null,
+  });
 
   revalidatePath('/leads');
   revalidatePath('/dashboard');
@@ -723,6 +744,16 @@ export async function bulkMoveLeadsStage(input: {
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
+  // Snapshot prior stages so we can record an audit row per actual change.
+  const { data: priors } = await supabase
+    .from('leads')
+    .select('id, stage_id')
+    .in('id', ids)
+    .eq('brand_id', active.id);
+  const priorMap = new Map<string, string | null>(
+    (priors ?? []).map((r) => [r.id, r.stage_id]),
+  );
+
   const { error, count } = await supabase
     .from('leads')
     .update(
@@ -732,6 +763,23 @@ export async function bulkMoveLeadsStage(input: {
     .in('id', ids)
     .eq('brand_id', active.id);
   if (error) return { ok: false, error: error.message };
+
+  // Audit rows for the leads whose stage actually changed. We deliberately
+  // skip firing the stage_changed automation trigger here — bulk ops
+  // bypass automations to avoid storms — but the audit still records the
+  // movement for the pipeline report.
+  const eventRows = Array.from(priorMap.entries())
+    .filter(([, prior]) => prior !== input.stageId)
+    .map(([leadId, prior]) => ({
+      brand_id: active.id,
+      lead_id: leadId,
+      type: 'stage_change',
+      payload: { from_stage_id: prior, to_stage_id: input.stageId },
+    }));
+  if (eventRows.length > 0) {
+    await supabase.from('lead_events').insert(eventRows);
+  }
+
   revalidatePath('/leads');
   revalidatePath('/dashboard');
   return { ok: true, count: count ?? 0 };

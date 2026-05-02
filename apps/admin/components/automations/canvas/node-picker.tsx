@@ -110,6 +110,43 @@ const TRIGGER_GROUP: PickerGroup = {
         </svg>
       ),
     },
+    {
+      kind: 'trigger',
+      triggerType: 'task_completed',
+      label: 'When a task is completed',
+      description: 'Fires when an agent marks a task done.',
+      accent: TRIGGER_ACCENT,
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <path d="M9 11l3 3L22 4" />
+        </svg>
+      ),
+    },
+    {
+      kind: 'trigger',
+      triggerType: 'call_ended',
+      label: 'When a call ends',
+      description: 'Fires when a call hangs up (inbound or outbound).',
+      accent: TRIGGER_ACCENT,
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="M22 16.92V21a1 1 0 01-1.11 1A19 19 0 012 4.11 1 1 0 013 3h4.09a1 1 0 011 .75l1.27 5a1 1 0 01-.29 1L7.21 11.21a16 16 0 005.58 5.58l1.45-1.86a1 1 0 011-.29l5 1.27a1 1 0 01.76 1z" />
+        </svg>
+      ),
+    },
+    {
+      kind: 'trigger',
+      triggerType: 'tag_added',
+      label: 'When a tag is added to a lead',
+      description: 'Fires when a tag is attached to a lead.',
+      accent: TRIGGER_ACCENT,
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="M20.59 13.41L13.42 20.58a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" />
+        </svg>
+      ),
+    },
   ],
 };
 
@@ -337,6 +374,9 @@ export function NodePicker({
       if (t === 'disposition_set') trigger_config = { codes: [] };
       else if (t === 'lead_created') trigger_config = { source_in: [] };
       else if (t === 'stage_changed') trigger_config = { to_stage_in: [], from_stage_in: [] };
+      else if (t === 'task_completed') trigger_config = { task_kind_in: [] };
+      else if (t === 'call_ended') trigger_config = { direction_in: [] };
+      else if (t === 'tag_added') trigger_config = { tag_in: [] };
       onPick({
         type: 'trigger',
         data: { trigger_type: t, trigger_config },

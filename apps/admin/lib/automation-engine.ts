@@ -75,13 +75,45 @@ type AppointmentBookedTrigger = {
   startsAt: string;
 };
 
+type TaskCompletedTrigger = {
+  trigger: 'task_completed';
+  brandId: string;
+  leadId: string | null;
+  memberId: string | null;
+  taskId: string;
+  taskKind: string;
+  taskTitle: string;
+};
+
+type CallEndedTrigger = {
+  trigger: 'call_ended';
+  brandId: string;
+  leadId: string | null;
+  memberId: string | null;
+  callId: string;
+  direction: 'inbound' | 'outbound';
+  durationSec: number | null;
+};
+
+type TagAddedTrigger = {
+  trigger: 'tag_added';
+  brandId: string;
+  leadId: string;
+  memberId: string | null;
+  tagId: string;
+  tagName: string | null;
+};
+
 export type AutomationTriggerInput =
   | DispositionTrigger
   | CallReceivedTrigger
   | LeadCreatedTrigger
   | StageChangedTrigger
   | EmailReceivedTrigger
-  | AppointmentBookedTrigger;
+  | AppointmentBookedTrigger
+  | TaskCompletedTrigger
+  | CallEndedTrigger
+  | TagAddedTrigger;
 
 type Row = {
   id: string;
@@ -236,6 +268,35 @@ function buildCtx(input: AutomationTriggerInput) {
           startsAt: input.startsAt,
         },
       };
+    case 'task_completed':
+      return {
+        ...base,
+        trigger: {
+          kind: input.trigger,
+          taskId: input.taskId,
+          taskKind: input.taskKind,
+          taskTitle: input.taskTitle,
+        },
+      };
+    case 'call_ended':
+      return {
+        ...base,
+        trigger: {
+          kind: input.trigger,
+          callId: input.callId,
+          direction: input.direction,
+          durationSec: input.durationSec,
+        },
+      };
+    case 'tag_added':
+      return {
+        ...base,
+        trigger: {
+          kind: input.trigger,
+          tagId: input.tagId,
+          tagName: input.tagName,
+        },
+      };
   }
 }
 
@@ -271,6 +332,27 @@ function matches(config: Record<string, unknown>, input: AutomationTriggerInput)
     return true;
   }
   if (input.trigger === 'email_received' || input.trigger === 'appointment_booked') {
+    return true;
+  }
+  if (input.trigger === 'task_completed') {
+    const kinds = config.task_kind_in;
+    if (Array.isArray(kinds) && kinds.length > 0) {
+      return kinds.includes(input.taskKind);
+    }
+    return true;
+  }
+  if (input.trigger === 'call_ended') {
+    const dirs = config.direction_in;
+    if (Array.isArray(dirs) && dirs.length > 0) {
+      return dirs.includes(input.direction);
+    }
+    return true;
+  }
+  if (input.trigger === 'tag_added') {
+    const tags = config.tag_in;
+    if (Array.isArray(tags) && tags.length > 0) {
+      return tags.includes(input.tagId);
+    }
     return true;
   }
   return false;

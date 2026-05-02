@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadBrandTags, loadLeadTags, type Tag } from '@/lib/tags';
+import { runAutomations } from '@/lib/automation-engine';
 
 // Palette keys recognised by the frontend chip renderer. We round-robin assign
 // when callers don't pass a color so newly-created tags get visual variety.
@@ -99,10 +100,37 @@ export async function addTagToLead(leadId: string, tagId: string) {
   const { error } = await supabase
     .from('lead_tags')
     .insert({ lead_id: leadId, tag_id: tagId, created_by: user.id });
-  if (error && !/duplicate/i.test(error.message)) {
+  const wasDuplicate = !!error && /duplicate/i.test(error.message);
+  if (error && !wasDuplicate) {
     return { ok: false as const, error: error.message };
   }
   bumpLead(leadId);
+
+  // Fire tag_added automation only on real first attach (not idempotent
+  // re-tags). Best-effort: lookup brand+tag name, never block the response.
+  if (!wasDuplicate) {
+    const { data: lead } = await supabase
+      .from('leads')
+      .select('brand_id')
+      .eq('id', leadId)
+      .maybeSingle();
+    const { data: tag } = await supabase
+      .from('tags')
+      .select('name')
+      .eq('id', tagId)
+      .maybeSingle();
+    if (lead?.brand_id) {
+      void runAutomations({
+        trigger: 'tag_added',
+        brandId: lead.brand_id,
+        leadId,
+        memberId: user.id,
+        tagId,
+        tagName: tag?.name ?? null,
+      });
+    }
+  }
+
   return { ok: true as const };
 }
 

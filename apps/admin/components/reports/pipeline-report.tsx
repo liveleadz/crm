@@ -55,7 +55,7 @@ export function PipelineReportView({ report }: { report: PipelineReport }) {
                   : 'bg-teal';
               const widthPct = Math.max(2, Math.round(s.pctOfTop * 100));
               return (
-                <li key={s.stageId} className="grid grid-cols-[180px_1fr_220px] items-center gap-4 px-5 py-2.5">
+                <li key={s.stageId} className="grid grid-cols-[180px_1fr_280px] items-center gap-4 px-5 py-2.5">
                   <div className="flex items-center gap-2">
                     <span className="text-[12.5px] font-medium">{s.name}</span>
                     {s.isWon && (
@@ -72,14 +72,29 @@ export function PipelineReportView({ report }: { report: PipelineReport }) {
                   <div className="h-2 overflow-hidden rounded-full bg-canvas">
                     <div className={`h-full ${tone}`} style={{ width: `${widthPct}%` }} aria-hidden />
                   </div>
-                  <div className="flex items-center justify-end gap-3 text-[12px] tabular-nums">
-                    <span className="font-medium">{s.count.toLocaleString()}</span>
-                    <span className="text-txt-3">{formatPct(s.pctOfTop)} of top</span>
-                    {s.conversion !== null && (
-                      <span className="text-txt-3" title="Conversion to next stage">
-                        → {formatPct(s.conversion)}
+                  <div className="flex flex-col items-end gap-0.5 tabular-nums">
+                    <div className="flex items-center gap-3 text-[12px]">
+                      <span className="font-medium">{s.count.toLocaleString()}</span>
+                      <span className="text-txt-3">{formatPct(s.pctOfTop)} of top</span>
+                      {s.conversion !== null && (
+                        <span className="text-txt-3" title="Conversion to next stage">
+                          → {formatPct(s.conversion)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-[10.5px] text-txt-3">
+                      <span title="Leads that entered this stage in range">
+                        +{s.entered.toLocaleString()} in
                       </span>
-                    )}
+                      <span title="Leads that left this stage in range">
+                        −{s.exited.toLocaleString()} out
+                      </span>
+                      {s.avgDaysInStage !== null && (
+                        <span title="Average dwell time for stints completed in range">
+                          {s.avgDaysInStage}d avg
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </li>
               );

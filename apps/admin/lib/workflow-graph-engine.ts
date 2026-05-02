@@ -372,7 +372,24 @@ export async function executeAction(action: AutomationAction, ctx: GraphRunConte
 
   switch (action.kind) {
     case 'move_stage': {
+      // Snapshot the prior stage so the audit row captures both ends.
+      const { data: prior } = await supabase
+        .from('leads')
+        .select('stage_id')
+        .eq('id', ctx.leadId!)
+        .maybeSingle();
       await supabase.from('leads').update({ stage_id: action.stage_id }).eq('id', ctx.leadId!);
+      if (prior?.stage_id !== action.stage_id) {
+        await supabase.from('lead_events').insert({
+          brand_id: ctx.brandId,
+          lead_id: ctx.leadId!,
+          type: 'stage_change',
+          payload: {
+            from_stage_id: prior?.stage_id ?? null,
+            to_stage_id: action.stage_id,
+          },
+        });
+      }
       return;
     }
     case 'mark_dnc': {
