@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
 import {
   DndContext,
@@ -44,7 +45,12 @@ function initials(first: string | null, last: string | null) {
 
 function fullName(l: LeadCard) {
   const name = [l.firstName, l.lastName].filter(Boolean).join(' ').trim();
-  return name || 'Unnamed lead';
+  return name || l.companyName || 'Unnamed lead';
+}
+
+function cardSubline(l: LeadCard): string | null {
+  const hasName = !!(l.firstName || l.lastName);
+  return hasName && l.companyName ? l.companyName : null;
 }
 
 function timeAgo(iso: string) {
@@ -393,12 +399,28 @@ function StageColumn({
   onSelectChange: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `stage:${stage.id}` });
+  // Skip the power-dial entry point for terminal stages — there's no
+  // outreach value in dialing leads already marked won or lost, and the
+  // dial-queue would skip them anyway via DNC + recently-called filters.
+  const showPowerDial = leads.length > 0 && !stage.isWon && !stage.isLost;
   return (
     <div className="flex w-[260px] shrink-0 flex-col rounded-2xl border border-line bg-canvas">
       <div className="flex h-10 items-center gap-2 border-b border-line px-3">
         <span className={`h-2 w-2 rounded-full ${dotClass(stage.color)}`} />
         <span className="text-[12.5px] font-semibold">{stage.name}</span>
         <span className="ml-auto font-mono text-[11px] text-txt-3">{leads.length}</span>
+        {showPowerDial && (
+          <Link
+            href={`/dialer?stage=${stage.id}`}
+            title={`Power dial all leads in ${stage.name}`}
+            aria-label={`Power dial ${stage.name}`}
+            className="grid h-6 w-6 place-items-center rounded-md text-txt-3 hover:bg-surface hover:text-teal"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" />
+            </svg>
+          </Link>
+        )}
       </div>
       <div
         ref={setNodeRef}
@@ -477,7 +499,12 @@ function DraggableLead({
         <div className="grid h-7 w-7 place-items-center rounded-full bg-teal/15 text-[11px] font-semibold text-teal">
           {initials(lead.firstName, lead.lastName)}
         </div>
-        <span className="flex-1 truncate text-[12.5px] font-medium">{fullName(lead)}</span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] font-medium">{fullName(lead)}</div>
+          {cardSubline(lead) && (
+            <div className="truncate text-[10.5px] text-txt-3">{cardSubline(lead)}</div>
+          )}
+        </div>
       </div>
       {lead.phone && (
         <div className="mt-2 font-mono text-[11.5px] text-txt-2">{lead.phone}</div>

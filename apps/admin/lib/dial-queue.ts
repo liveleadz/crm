@@ -9,6 +9,7 @@ import 'server-only';
 
 import { createServerClient } from '@leadpilot/db/server';
 import { dialWindowCheck } from './tcpa';
+import { pickCompanyFromCustom } from './company-name';
 
 export type QueuedLead = {
   id: string;
@@ -24,35 +25,14 @@ export type QueuedLead = {
   state: string | null;
 };
 
-// Common keys we accept for "company name" in the leads.custom JSONB,
-// since there's no first-class column. Order matters — first hit wins.
-const COMPANY_KEYS = [
-  'company',
-  'company_name',
-  'companyName',
-  'Company',
-  'Company Name',
-  'business',
-  'business_name',
-  'organization',
-  'org',
-];
-
-function pickCompany(custom: unknown): string | null {
-  if (!custom || typeof custom !== 'object') return null;
-  const obj = custom as Record<string, unknown>;
-  for (const k of COMPANY_KEYS) {
-    const v = obj[k];
-    if (typeof v === 'string' && v.trim()) return v.trim();
-  }
-  return null;
-}
-
 export type QueueFilter = {
   listId?: string | null;
   search?: string | null;
   source?: string | null;
   tagIds?: string[] | null;
+  // Optional pipeline stage filter — used by the "Power dial this stage"
+  // entry point on the kanban.
+  stageId?: string | null;
   // Skip leads that already had a logged call within this window. 0 disables.
   recentlyCalledMinutes?: number;
   // Hard cap so a click-to-dial doesn't queue 50k leads on a huge brand.
@@ -158,6 +138,12 @@ export async function loadDialQueue(
   // List membership: leads have list_id directly (no join table).
   if (filter.listId && !campaignListIds) {
     query = query.eq('list_id', filter.listId);
+  }
+
+  // Stage filter: dial everyone in a single pipeline stage. Stacks with
+  // ad-hoc filters (search/source/tags); ignored in campaign mode.
+  if (filter.stageId && !campaignListIds) {
+    query = query.eq('stage_id', filter.stageId);
   }
 
   // Tag filter: any-of semantics. tag_id IN (…) is small (the user's
@@ -272,7 +258,7 @@ export async function loadDialQueue(
       phone: l.phone as string,
       email: l.email,
       stageId: l.stage_id,
-      companyName: pickCompany(l.custom),
+      companyName: pickCompanyFromCustom(l.custom),
       city: l.city,
       state: l.state,
     }));

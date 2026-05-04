@@ -1,6 +1,7 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
 import { loadTagsForLeads, type Tag } from './tags';
+import { pickCompanyFromCustom } from './company-name';
 
 export type LeadStage = {
   id: string;
@@ -15,6 +16,10 @@ export type LeadCard = {
   id: string;
   firstName: string | null;
   lastName: string | null;
+  // Pulled from leads.custom JSONB so the table/kanban can fall back to
+  // company name when the lead has no person name. Same key resolution
+  // as the dialer queue.
+  companyName: string | null;
   phone: string | null;
   email: string | null;
   source: string;
@@ -193,7 +198,7 @@ export async function loadKanban(brandId: string, filter: KanbanFilter = {}) {
   let leadsQuery = supabase
     .from('leads')
     .select(
-      'id, first_name, last_name, phone, email, source, stage_id, updated_at, do_not_call, do_not_email',
+      'id, first_name, last_name, phone, email, source, stage_id, updated_at, do_not_call, do_not_email, custom',
     )
     .eq('brand_id', brandId)
     .order('updated_at', { ascending: false });
@@ -257,6 +262,7 @@ export async function loadKanban(brandId: string, filter: KanbanFilter = {}) {
     id: l.id,
     firstName: l.first_name,
     lastName: l.last_name,
+    companyName: pickCompanyFromCustom(l.custom),
     phone: l.phone,
     email: l.email,
     source: l.source,

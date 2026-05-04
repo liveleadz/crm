@@ -177,7 +177,11 @@ export function LeadsTable({ leads, stages, stageById, tagLibrary, team }: Props
             {leads.map((lead) => {
               const stage = lead.stageId ? stageById[lead.stageId] : null;
               const fullName = [lead.firstName, lead.lastName].filter(Boolean).join(' ').trim();
-              const display = fullName || 'Unnamed lead';
+              // Prefer person name; fall back to company name from
+              // imports (CSVs that only have a business + phone), then a
+              // generic placeholder so the row never reads as blank.
+              const display = fullName || lead.companyName || 'Unnamed lead';
+              const subline = fullName && lead.companyName ? lead.companyName : null;
               const isChecked = selected.has(lead.id);
               return (
                 <tr
@@ -201,6 +205,11 @@ export function LeadsTable({ leads, stages, stageById, tagLibrary, team }: Props
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="font-medium text-txt-1">{display}</div>
+                    {subline && (
+                      <div className="mt-0.5 truncate text-[11px] text-txt-3">
+                        {subline}
+                      </div>
+                    )}
                     {(lead.doNotCall || lead.doNotEmail) && (
                       <div className="mt-0.5 flex gap-1">
                         {lead.doNotCall && (
