@@ -214,14 +214,30 @@ export function PowerDialer({
     };
   }, []);
 
-  async function getClient(): Promise<SignalWireClient> {
-    if (clientRef.current) return clientRef.current;
+  async function getClient(force = false): Promise<SignalWireClient> {
+    if (clientRef.current && !force) return clientRef.current;
+    if (force && clientRef.current) {
+      try {
+        await clientRef.current.disconnect();
+      } catch {
+        /* ignore */
+      }
+      clientRef.current = null;
+    }
     const tokenRes = await fetch('/api/signalwire/token', { method: 'POST' });
     if (!tokenRes.ok) throw new Error('Could not get SignalWire token.');
     const { token } = (await tokenRes.json()) as { token: string };
     const client = await SignalWire({ token });
     clientRef.current = client;
     return client;
+  }
+
+  // SignalWire's SAT (and the underlying `authblock`) ages out after ~2h.
+  // The cached client keeps trying to use it, so dial() fails with
+  // 422 authblock_is_expired. Detect and force a fresh client + retry.
+  function isAuthExpiredError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    return /authblock_is_expired|authblock has passed|UnprocessableEntity/i.test(msg);
   }
 
   async function dialIndex(i: number) {
@@ -242,14 +258,25 @@ export function PowerDialer({
         return;
       }
       callIdRef.current = prep.callId;
-      const client = await getClient();
-      const session = await client.dial({
-        to: prep.fabricAddress,
-        audio: true,
-        video: false,
-        negotiateVideo: false,
-        userVariables: { t: prep.dialToken },
-      });
+      const dialOnce = async () => {
+        const client = await getClient();
+        return client.dial({
+          to: prep.fabricAddress,
+          audio: true,
+          video: false,
+          negotiateVideo: false,
+          userVariables: { t: prep.dialToken },
+        });
+      };
+      let session: FabricRoomSession;
+      try {
+        session = await dialOnce();
+      } catch (err) {
+        if (!isAuthExpiredError(err)) throw err;
+        // Token expired — force a new client + token, then retry once.
+        await getClient(true);
+        session = await dialOnce();
+      }
       sessionRef.current = session;
       const swCallId = (session as unknown as { id?: string }).id;
       if (swCallId) {

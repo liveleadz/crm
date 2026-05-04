@@ -117,8 +117,16 @@ export function WebRTCDialPad({
     setNumber((n) => n.slice(0, -1));
   }
 
-  async function getClient(): Promise<SignalWireClient> {
-    if (clientRef.current) return clientRef.current;
+  async function getClient(force = false): Promise<SignalWireClient> {
+    if (clientRef.current && !force) return clientRef.current;
+    if (force && clientRef.current) {
+      try {
+        await clientRef.current.disconnect();
+      } catch {
+        /* ignore */
+      }
+      clientRef.current = null;
+    }
     const tokenRes = await fetch('/api/signalwire/token', { method: 'POST' });
     if (!tokenRes.ok) {
       throw new Error(`Token fetch failed (${tokenRes.status})`);
@@ -127,6 +135,13 @@ export function WebRTCDialPad({
     const client = await SignalWire({ token });
     clientRef.current = client;
     return client;
+  }
+
+  // The cached SAT can expire (~2h); on `authblock_is_expired` we drop
+  // the client, mint a fresh token, and retry the dial once.
+  function isAuthExpiredError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    return /authblock_is_expired|authblock has passed|UnprocessableEntity/i.test(msg);
   }
 
   async function placeCall() {
@@ -140,17 +155,27 @@ export function WebRTCDialPad({
       }
       callIdRef.current = prep.callId;
 
-      const client = await getClient();
-      const session = await client.dial({
-        to: prep.fabricAddress,
-        audio: true,
-        video: false,
-        negotiateVideo: false,
-        // Primary channel for passing our signed dial token to the SWML
-        // webhook. Forwarded in the webhook request body as
-        // call.user_variables.t. URL query string is a fallback.
-        userVariables: { t: prep.dialToken },
-      });
+      const dialOnce = async () => {
+        const client = await getClient();
+        return client.dial({
+          to: prep.fabricAddress,
+          audio: true,
+          video: false,
+          negotiateVideo: false,
+          // Primary channel for passing our signed dial token to the SWML
+          // webhook. Forwarded in the webhook request body as
+          // call.user_variables.t. URL query string is a fallback.
+          userVariables: { t: prep.dialToken },
+        });
+      };
+      let session: FabricRoomSession;
+      try {
+        session = await dialOnce();
+      } catch (err) {
+        if (!isAuthExpiredError(err)) throw err;
+        await getClient(true);
+        session = await dialOnce();
+      }
       sessionRef.current = session;
 
       // Persist the SignalWire-side identifier so status callbacks can
