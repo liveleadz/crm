@@ -7,6 +7,7 @@
 import { revalidatePath } from 'next/cache';
 import { getActiveBrand } from '@/lib/active-brand';
 import { createServerClient } from '@leadpilot/db/server';
+import { DISPOSITION_CATEGORIES, type DispositionCategory } from '@/lib/dispositions';
 
 type Result<T = void> = T extends void
   ? { ok: true } | { ok: false; error: string }
@@ -18,10 +19,15 @@ function validateTone(tone: string): tone is 'good' | 'neutral' | 'bad' {
   return tone === 'good' || tone === 'neutral' || tone === 'bad';
 }
 
+function validateCategory(c: string): c is DispositionCategory {
+  return (DISPOSITION_CATEGORIES as readonly string[]).includes(c);
+}
+
 export async function createDisposition(input: {
   code: string;
   label: string;
   tone: string;
+  category?: string;
 }): Promise<Result> {
   const active = await getActiveBrand();
   if (!active) return { ok: false, error: 'No active brand.' };
@@ -33,6 +39,8 @@ export async function createDisposition(input: {
   }
   if (!label) return { ok: false, error: 'Label is required.' };
   if (!validateTone(input.tone)) return { ok: false, error: 'Invalid tone.' };
+  const category: DispositionCategory =
+    input.category && validateCategory(input.category) ? input.category : 'other';
 
   const supabase = await createServerClient();
   // Place new entry at the end of the active list.
@@ -51,6 +59,7 @@ export async function createDisposition(input: {
     code,
     label,
     tone: input.tone,
+    category,
     sort_order: nextSort,
   });
   if (error) {
@@ -59,6 +68,26 @@ export async function createDisposition(input: {
     }
     return { ok: false, error: error.message };
   }
+  revalidatePath('/(app)/settings', 'page');
+  return { ok: true };
+}
+
+// Update only the category — used by the row's category select. Kept
+// separate from updateDisposition so the UI can patch one field
+// without sending the label/tone too.
+export async function setDispositionCategory(input: {
+  id: string;
+  category: string;
+}): Promise<Result> {
+  if (!validateCategory(input.category)) {
+    return { ok: false, error: 'Invalid category.' };
+  }
+  const supabase = await createServerClient();
+  const { error } = await supabase
+    .from('dispositions')
+    .update({ category: input.category })
+    .eq('id', input.id);
+  if (error) return { ok: false, error: error.message };
   revalidatePath('/(app)/settings', 'page');
   return { ok: true };
 }

@@ -886,6 +886,7 @@ export type Database = {
       dispositions: {
         Row: {
           brand_id: string
+          category: string
           code: string
           cooldown_minutes: number | null
           created_at: string
@@ -898,6 +899,7 @@ export type Database = {
         }
         Insert: {
           brand_id: string
+          category?: string
           code: string
           cooldown_minutes?: number | null
           created_at?: string
@@ -910,6 +912,7 @@ export type Database = {
         }
         Update: {
           brand_id?: string
+          category?: string
           code?: string
           cooldown_minutes?: number | null
           created_at?: string

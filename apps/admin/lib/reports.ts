@@ -10,6 +10,11 @@ import 'server-only';
 
 import { createServerClient } from '@leadpilot/db/server';
 import { addDaysToDateKey, getLocalParts, localDayKey } from './datetime';
+import {
+  CONNECTED_CATEGORIES,
+  loadCategoryByCode,
+  type DispositionCategory,
+} from './dispositions';
 
 export type ReportRange = '7d' | '30d' | '90d' | 'custom';
 export type DirectionFilter = 'all' | 'inbound' | 'outbound';
@@ -36,8 +41,25 @@ export type ReportKpis = {
   avgTalkSec: number;
   salesCount: number;
   salesRate: number;            // 0..1
+  // Category-based counts (Phase M). Source of truth for the disposition
+  // taxonomy now lives on dispositions.category, so these are stable
+  // even when a brand renames its codes/labels.
   voicemailCount: number;
   callbackCount: number;
+  wrongNumberCount: number;
+  noAnswerCount: number;
+  appointmentSetCount: number;
+  notInterestedCount: number;
+  doNotCallCount: number;
+  // Per-category rates over total calls. Rendered as the headline
+  // "% wrong number, % no answer, % appointment set" strip.
+  voicemailRate: number;
+  callbackRate: number;
+  wrongNumberRate: number;
+  noAnswerRate: number;
+  appointmentSetRate: number;
+  notInterestedRate: number;
+  doNotCallRate: number;
 };
 
 export type AgentRow = {
@@ -97,10 +119,10 @@ export type CallReport = {
 
 const DAY_MS = 86_400_000;
 
-// Connected-equivalent dispositions — used for connect rate, avg talk
-// time denominator when we want "of calls that actually went through",
-// and the daily trend's "connects" series.
-const CONNECTED_CODES = new Set(['connected', 'sale', 'callback', 'not_interested']);
+// Helper: a code → category lookup function, falling back to 'other'
+// for unknown codes. Loaded once per report request via
+// `loadCategoryByCode(brandId)`.
+type CategoryLookup = (code: string | null | undefined) => DispositionCategory;
 
 function rangeBounds(filter: ReportFilter): { fromIso: string; toIso: string } {
   const now = Date.now();
@@ -121,36 +143,61 @@ type CallRow = {
   duration_sec: number | null;
 };
 
-function computeKpis(rows: CallRow[]): ReportKpis {
+function computeKpis(rows: CallRow[], categoryFor: CategoryLookup): ReportKpis {
   let inboundCalls = 0;
   let outboundCalls = 0;
   let connectedCalls = 0;
   let totalTalkSec = 0;
   let salesCount = 0;
+  // Category buckets.
   let voicemailCount = 0;
   let callbackCount = 0;
+  let wrongNumberCount = 0;
+  let noAnswerCount = 0;
+  let appointmentSetCount = 0;
+  let notInterestedCount = 0;
+  let doNotCallCount = 0;
   for (const r of rows) {
     if (r.direction === 'inbound') inboundCalls += 1;
     else outboundCalls += 1;
-    if (r.disposition && CONNECTED_CODES.has(r.disposition)) connectedCalls += 1;
+    const cat = categoryFor(r.disposition);
+    if (CONNECTED_CATEGORIES.has(cat)) connectedCalls += 1;
     if (r.disposition === 'sale') salesCount += 1;
-    if (r.disposition === 'voicemail') voicemailCount += 1;
-    if (r.disposition === 'callback') callbackCount += 1;
+    if (cat === 'voicemail') voicemailCount += 1;
+    if (cat === 'callback') callbackCount += 1;
+    if (cat === 'wrong_number') wrongNumberCount += 1;
+    if (cat === 'no_answer') noAnswerCount += 1;
+    if (cat === 'appointment_set') appointmentSetCount += 1;
+    if (cat === 'not_interested') notInterestedCount += 1;
+    if (cat === 'do_not_call') doNotCallCount += 1;
     totalTalkSec += r.duration_sec ?? 0;
   }
   const totalCalls = rows.length;
+  const rate = (n: number) => (totalCalls > 0 ? n / totalCalls : 0);
   return {
     totalCalls,
     inboundCalls,
     outboundCalls,
     connectedCalls,
-    connectRate: totalCalls > 0 ? connectedCalls / totalCalls : 0,
+    connectRate: rate(connectedCalls),
     totalTalkSec,
     avgTalkSec: connectedCalls > 0 ? Math.round(totalTalkSec / connectedCalls) : 0,
     salesCount,
-    salesRate: totalCalls > 0 ? salesCount / totalCalls : 0,
+    salesRate: rate(salesCount),
     voicemailCount,
     callbackCount,
+    wrongNumberCount,
+    noAnswerCount,
+    appointmentSetCount,
+    notInterestedCount,
+    doNotCallCount,
+    voicemailRate: rate(voicemailCount),
+    callbackRate: rate(callbackCount),
+    wrongNumberRate: rate(wrongNumberCount),
+    noAnswerRate: rate(noAnswerCount),
+    appointmentSetRate: rate(appointmentSetCount),
+    notInterestedRate: rate(notInterestedCount),
+    doNotCallRate: rate(doNotCallCount),
   };
 }
 
@@ -184,6 +231,13 @@ export async function loadCallReport(
   const { data: calls } = await query;
   const rows = calls ?? [];
 
+  // Brand-specific code → category lookup. Loaded once per request and
+  // reused for all rollups (KPIs, per-agent, by-source, heatmap, trend,
+  // prev-period). Falls back to 'other' for unmapped codes.
+  const categoryFor = await loadCategoryByCode(brandId);
+  const isConnect = (code: string | null | undefined) =>
+    CONNECTED_CATEGORIES.has(categoryFor(code));
+
   // Member lookup for the per-agent table. We only fetch member rows
   // referenced by these calls (small, bounded set).
   const memberIds = Array.from(
@@ -204,7 +258,7 @@ export async function loadCallReport(
   }
 
   // ---------- KPIs ----------
-  const kpis = computeKpis(rows);
+  const kpis = computeKpis(rows, categoryFor);
 
   // ---------- By agent ----------
   type AgentAgg = {
@@ -223,7 +277,7 @@ export async function loadCallReport(
       sales: 0,
     };
     a.calls += 1;
-    if (r.disposition && CONNECTED_CODES.has(r.disposition)) a.connects += 1;
+    if (isConnect(r.disposition)) a.connects += 1;
     if (r.disposition === 'sale') a.sales += 1;
     a.talkSec += r.duration_sec ?? 0;
     byAgentMap.set(r.member_id, a);
@@ -286,7 +340,7 @@ export async function loadCallReport(
     const key = (r.lead_id && sourceByLeadId.get(r.lead_id)) || 'unknown';
     const a = sourceMap.get(key) ?? { calls: 0, connects: 0, sales: 0 };
     a.calls += 1;
-    if (r.disposition && CONNECTED_CODES.has(r.disposition)) a.connects += 1;
+    if (isConnect(r.disposition)) a.connects += 1;
     if (r.disposition === 'sale') a.sales += 1;
     sourceMap.set(key, a);
   }
@@ -319,7 +373,7 @@ export async function loadCallReport(
     const cell = heatIndex.get(`${lp.weekday}:${lp.hour}`);
     if (!cell) continue;
     cell.calls += 1;
-    if (r.disposition && CONNECTED_CODES.has(r.disposition)) cell.connects += 1;
+    if (isConnect(r.disposition)) cell.connects += 1;
   }
 
   // ---------- Daily trend ----------
@@ -338,7 +392,7 @@ export async function loadCallReport(
     const cur = trendMap.get(key);
     if (!cur) continue;
     cur.calls += 1;
-    if (r.disposition && CONNECTED_CODES.has(r.disposition)) cur.connects += 1;
+    if (isConnect(r.disposition)) cur.connects += 1;
   }
   const trend: TrendPoint[] = Array.from(trendMap.entries())
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
@@ -366,7 +420,7 @@ export async function loadCallReport(
     prevQuery = prevQuery.eq('direction', filter.direction);
   }
   const { data: prevRows } = await prevQuery;
-  const prevKpis = computeKpis(prevRows ?? []);
+  const prevKpis = computeKpis(prevRows ?? [], categoryFor);
 
   return {
     fromIso,
@@ -1027,7 +1081,7 @@ export async function loadCampaignReport(
 
   const ids = campaigns.map((c) => c.id);
 
-  const [callsRes, apptsRes, goodDispRes] = await Promise.all([
+  const [callsRes, apptsRes, categoryFor] = await Promise.all([
     supabase
       .from('calls')
       .select('campaign_id, disposition')
@@ -1044,16 +1098,20 @@ export async function loadCampaignReport(
       .gte('created_at', fromIso)
       .lte('created_at', toIso)
       .limit(100_000),
-    supabase.from('dispositions').select('code').eq('brand_id', brandId).eq('tone', 'good'),
+    loadCategoryByCode(brandId),
   ]);
-  const goodCodes = new Set((goodDispRes.data ?? []).map((r) => r.code));
+  // Connect = any disposition whose category is in the connected set
+  // (connected, appointment_set, callback, not_interested). Stable
+  // across brand-renamed labels.
+  const isConnect = (code: string | null | undefined) =>
+    CONNECTED_CATEGORIES.has(categoryFor(code));
 
   const callTotals = new Map<string, { calls: number; connects: number }>();
   for (const r of callsRes.data ?? []) {
     if (!r.campaign_id) continue;
     const cur = callTotals.get(r.campaign_id) ?? { calls: 0, connects: 0 };
     cur.calls += 1;
-    if (r.disposition && goodCodes.has(r.disposition)) cur.connects += 1;
+    if (isConnect(r.disposition)) cur.connects += 1;
     callTotals.set(r.campaign_id, cur);
   }
 
@@ -1093,7 +1151,7 @@ export async function loadCampaignReport(
   for (const r of callsRes.data ?? []) {
     if (!r.campaign_id) continue;
     tCalls += 1;
-    if (r.disposition && goodCodes.has(r.disposition)) tConnects += 1;
+    if (isConnect(r.disposition)) tConnects += 1;
   }
   for (const r of apptsRes.data ?? []) {
     if (!r.campaign_id) continue;

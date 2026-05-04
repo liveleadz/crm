@@ -9,10 +9,17 @@ import {
   archiveDisposition,
   createDisposition,
   reorderDispositions,
+  setDispositionCategory,
   setDispositionCooldown,
   updateDisposition,
 } from '@/app/actions/dispositions';
-import type { Disposition, DispositionTone } from '@/lib/dispositions';
+import {
+  DISPOSITION_CATEGORIES,
+  DISPOSITION_CATEGORY_LABELS,
+  type Disposition,
+  type DispositionCategory,
+  type DispositionTone,
+} from '@/lib/dispositions';
 
 const TONE_DOT: Record<DispositionTone, string> = {
   good: 'bg-teal',
@@ -25,6 +32,9 @@ const TONE_OPTIONS: { value: DispositionTone; label: string }[] = [
   { value: 'neutral', label: 'Neutral' },
   { value: 'bad', label: 'Bad' },
 ];
+
+const CATEGORY_OPTIONS: { value: DispositionCategory; label: string }[] =
+  DISPOSITION_CATEGORIES.map((c) => ({ value: c, label: DISPOSITION_CATEGORY_LABELS[c] }));
 
 export function DispositionsManager({ initial }: { initial: Disposition[] }) {
   const [items, setItems] = useState<Disposition[]>(initial);
@@ -55,6 +65,15 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
     patch(id, { tone });
     startTransition(async () => {
       const res = await updateDisposition({ id, label: current.label, tone });
+      if (!res.ok) setError(res.error);
+    });
+  }
+
+  function changeCategory(id: string, category: DispositionCategory) {
+    setError(null);
+    patch(id, { category });
+    startTransition(async () => {
+      const res = await setDispositionCategory({ id, category });
       if (!res.ok) setError(res.error);
     });
   }
@@ -117,11 +136,12 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
         </div>
       )}
       <div className="overflow-hidden rounded-xl border border-line bg-surface">
-        <div className="grid grid-cols-[60px_1fr_140px_110px_110px_36px] items-center gap-3 border-b border-line bg-canvas px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        <div className="grid grid-cols-[60px_1fr_120px_100px_140px_100px_36px] items-center gap-3 border-b border-line bg-canvas px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
           <span>Order</span>
           <span>Label</span>
           <span>Code</span>
           <span>Tone</span>
+          <span title="Fixed metric bucket the reports layer aggregates against. Rename your label freely; categories keep your KPIs stable.">Category</span>
           <span title="Suppress redial of this lead for N minutes after a call resolves with this disposition.">Cooldown</span>
           <span></span>
         </div>
@@ -133,7 +153,7 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
           items.map((d, i) => (
             <div
               key={d.id}
-              className="grid grid-cols-[60px_1fr_140px_110px_110px_36px] items-center gap-3 border-b border-line/60 px-3 py-2.5 last:border-b-0"
+              className="grid grid-cols-[60px_1fr_120px_100px_140px_100px_36px] items-center gap-3 border-b border-line/60 px-3 py-2.5 last:border-b-0"
             >
               <div className="flex items-center gap-1">
                 <button
@@ -181,6 +201,17 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
                 {TONE_OPTIONS.map((t) => (
                   <option key={t.value} value={t.value}>
                     {t.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={d.category}
+                onChange={(e) => changeCategory(d.id, e.target.value as DispositionCategory)}
+                className="rounded-md border border-line bg-canvas px-2 py-1 text-[11.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+              >
+                {CATEGORY_OPTIONS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
                   </option>
                 ))}
               </select>
@@ -242,6 +273,7 @@ function AddDisposition({
   const [label, setLabel] = useState('');
   const [code, setCode] = useState('');
   const [tone, setTone] = useState<DispositionTone>('neutral');
+  const [category, setCategory] = useState<DispositionCategory>('other');
   const [saving, setSaving] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -255,7 +287,7 @@ function AddDisposition({
     }
     setSaving(true);
     startTransition(async () => {
-      const res = await createDisposition({ code: finalCode, label: trimmed, tone });
+      const res = await createDisposition({ code: finalCode, label: trimmed, tone, category });
       setSaving(false);
       if (!res.ok) {
         onError(res.error);
@@ -269,12 +301,14 @@ function AddDisposition({
         code: finalCode,
         label: trimmed,
         tone,
+        category,
         sortOrder: (existing.at(-1)?.sortOrder ?? 0) + 1,
         cooldownMinutes: null,
       });
       setLabel('');
       setCode('');
       setTone('neutral');
+      setCategory('other');
     });
   }
 
@@ -305,6 +339,18 @@ function AddDisposition({
         {TONE_OPTIONS.map((t) => (
           <option key={t.value} value={t.value}>
             {t.label}
+          </option>
+        ))}
+      </select>
+      <select
+        value={category}
+        onChange={(e) => setCategory(e.target.value as DispositionCategory)}
+        title="Metric category — keeps reports stable when you rename labels."
+        className="rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+      >
+        {CATEGORY_OPTIONS.map((c) => (
+          <option key={c.value} value={c.value}>
+            {c.label}
           </option>
         ))}
       </select>
