@@ -97,16 +97,6 @@ export function LeadFilters({
     setSource(v);
     navigate({ q: search, source: v, tagIds, dnc, dne });
   }
-  function toggleDnc() {
-    const v = !dnc;
-    setDnc(v);
-    navigate({ q: search, source, tagIds, dnc: v, dne });
-  }
-  function toggleDne() {
-    const v = !dne;
-    setDne(v);
-    navigate({ q: search, source, tagIds, dnc, dne: v });
-  }
   function toggleTag(id: string) {
     const v = tagIds.includes(id) ? tagIds.filter((t) => t !== id) : [...tagIds, id];
     setTagIds(v);
@@ -288,25 +278,6 @@ export function LeadFilters({
           })}
         </div>
       )}
-
-      <label className="flex cursor-pointer select-none items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[11.5px] text-txt-2">
-        <input
-          type="checkbox"
-          checked={dnc}
-          onChange={toggleDnc}
-          className="h-3.5 w-3.5 accent-teal"
-        />
-        Hide DNC
-      </label>
-      <label className="flex cursor-pointer select-none items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[11.5px] text-txt-2">
-        <input
-          type="checkbox"
-          checked={dne}
-          onChange={toggleDne}
-          className="h-3.5 w-3.5 accent-teal"
-        />
-        Hide DNE
-      </label>
 
       {anyActive && (
         <div className="ml-auto flex items-center gap-2">
