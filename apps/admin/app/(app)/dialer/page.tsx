@@ -20,6 +20,8 @@ type SearchParams = Promise<{
   q?: string;
   source?: string;
   tags?: string;
+  // Power-dial everyone in a single pipeline stage (kanban entry point).
+  stage?: string;
   // Campaign mode: bundles script + calendar + lists + agents.
   campaign?: string;
 }>;
@@ -32,7 +34,7 @@ export default async function DialerPage({
   const active = await getActiveBrand();
   const sp = await searchParams;
   const campaignParam = sp.campaign ?? null;
-  const adHocQueueMode = !!(sp.list || sp.q || sp.source || sp.tags);
+  const adHocQueueMode = !!(sp.list || sp.q || sp.source || sp.tags || sp.stage);
 
   // Campaign mode hard-locks: only assigned agents (or manager+) can run.
   let campaign: Campaign | null = null;
@@ -45,6 +47,18 @@ export default async function DialerPage({
   }
 
   const queueMode = adHocQueueMode || !!campaign;
+
+  // Persist key for "resume where you left off". Only stable inputs
+  // (campaign / list / stage) get persisted — ad-hoc search/tag/source
+  // filters change too freely to make a sensible session.
+  const persistKey =
+    campaign?.id
+      ? `campaign:${campaign.id}`
+      : sp.list
+        ? `list:${sp.list}`
+        : sp.stage
+          ? `stage:${sp.stage}`
+          : null;
 
   const [fromNumber, dispositions, script] = active
     ? await Promise.all([
@@ -63,6 +77,7 @@ export default async function DialerPage({
           tagIds: sp.tags
             ? sp.tags.split(',').map((s) => s.trim()).filter(Boolean)
             : null,
+          stageId: sp.stage ?? null,
           campaignId: campaign?.id ?? null,
           // Don't redial leads we just rang in the last 4h. Campaign mode
           // overrides this from the campaign's recently_called_minutes.
@@ -96,6 +111,7 @@ export default async function DialerPage({
             dispositions={dispositions}
             queue={queue}
             campaignId={campaign?.id ?? null}
+            sessionKey={persistKey}
             script={script}
             tcpaPolicy={
               campaign

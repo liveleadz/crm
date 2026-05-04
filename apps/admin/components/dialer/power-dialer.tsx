@@ -9,7 +9,8 @@
 //   queued → connecting → in_call → wrap_up → (auto-advance)
 // Plus paused / done overlays.
 
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { createPortal } from 'react-dom';
 import { SignalWire, type SignalWireClient, type FabricRoomSession } from '@signalwire/js';
 import {
   attachSignalwireCallId,
@@ -56,6 +57,7 @@ export function PowerDialer({
   dispositions,
   queue,
   campaignId = null,
+  sessionKey = null,
   script = null,
   tcpaPolicy = null,
   brandTimezone = 'UTC',
@@ -67,6 +69,12 @@ export function PowerDialer({
   // When set, every call is attributed to this campaign and the script
   // panel renders on the right.
   campaignId?: string | null;
+  // Stable identifier for "resume where you left off". When provided,
+  // we persist outcomes (handled lead ids + dispositions) to
+  // localStorage so navigating away and coming back doesn't lose
+  // progress — the next dial picks up at the first non-handled lead in
+  // the (possibly refreshed) queue.
+  sessionKey?: string | null;
   script?: ScriptRow | null;
   // When the campaign opted into TCPA, render a small badge on the
   // Ready card showing the lead-local time and whether we're inside
@@ -100,6 +108,85 @@ export function PowerDialer({
   // an extra click. Tracked here so the disposition-picker callback can
   // peek without retriggering React state.
   const autoAdvanceRef = useRef(true);
+
+  // localStorage key for resume-where-you-left-off. Null disables
+  // persistence (ad-hoc filter sessions where the queue isn't stable).
+  const storageKey = sessionKey ? `lp:dial-session:${sessionKey}` : null;
+  const [resumed, setResumed] = useState(false);
+
+  // On mount: rehydrate handled outcomes from localStorage. We then
+  // skip the index past any leads that already have a saved outcome,
+  // so the next dial picks up where the agent left off. Status stays
+  // paused so the rep explicitly chooses to resume.
+  useEffect(() => {
+    if (!storageKey) return;
+    let raw: string | null = null;
+    try {
+      raw = window.localStorage.getItem(storageKey);
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    let saved: { outcomes: Outcome[] } | null = null;
+    try {
+      saved = JSON.parse(raw) as { outcomes: Outcome[] };
+    } catch {
+      return;
+    }
+    if (!saved || !Array.isArray(saved.outcomes) || saved.outcomes.length === 0) return;
+    const queueIds = new Set(queue.map((q) => q.id));
+    const handled = saved.outcomes.filter((o) => queueIds.has(o.leadId));
+    if (handled.length === 0) {
+      // Nothing in the saved set still appears in the (refreshed)
+      // queue — likely the dial-window already filtered them out.
+      // Drop the stale entry so we don't keep parsing it.
+      try {
+        window.localStorage.removeItem(storageKey);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const handledIds = new Set(handled.map((o) => o.leadId));
+    let i = 0;
+    while (i < queue.length) {
+      const q = queue[i];
+      if (!q || !handledIds.has(q.id)) break;
+      i++;
+    }
+    setOutcomes(handled);
+    setIndex(i);
+    setResumed(true);
+    if (i >= queue.length) {
+      setStatus({ kind: 'done' });
+    } else {
+      setStatus({ kind: 'paused' });
+      autoAdvanceRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist outcomes whenever they change. Cleared when the queue
+  // wraps up (status === 'done') so the next session starts fresh.
+  useEffect(() => {
+    if (!storageKey) return;
+    if (outcomes.length === 0) return;
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify({ outcomes }));
+    } catch {
+      /* quota — ignore */
+    }
+  }, [outcomes, storageKey]);
+
+  useEffect(() => {
+    if (!storageKey) return;
+    if (status.kind !== 'done') return;
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      /* ignore */
+    }
+  }, [status.kind, storageKey]);
 
   const current = queue[index] ?? null;
   const remaining = Math.max(0, queue.length - index);
@@ -390,6 +477,11 @@ export function PowerDialer({
               <span className="text-teal">{remaining} left</span>
             </span>
           </div>
+          {resumed && status.kind === 'paused' && (
+            <div className="mb-3 rounded-lg border border-teal/30 bg-teal/5 px-3 py-1.5 text-[11.5px] text-teal">
+              Resumed where you left off — {completed} already handled. Hit Resume to keep dialing.
+            </div>
+          )}
 
           {queue.length === 0 ? (
             <div className="rounded-xl border border-dashed border-line p-6 text-center text-[12px] text-txt-3">
@@ -585,8 +677,201 @@ export function PowerDialer({
           onClose={() => setBookingOpen(false)}
         />
       )}
+      {(status.kind === 'connecting' ||
+        status.kind === 'in_call' ||
+        status.kind === 'wrap_up') &&
+        current && (
+          <FloatingCallWidget
+            status={status}
+            lead={current}
+            elapsed={elapsed}
+            muted={muted}
+            onMute={toggleMute}
+            onHangup={hangupCurrent}
+          />
+        )}
     </div>
   );
+}
+
+// Draggable, position: fixed call panel that overlays the page during
+// connecting / in-call / wrap-up. Always-visible reference for the rep:
+// timer, mute, hang up. Position persists across reloads via
+// localStorage so it lands wherever the rep last left it.
+function FloatingCallWidget({
+  status,
+  lead,
+  elapsed,
+  muted,
+  onMute,
+  onHangup,
+}: {
+  status: Status;
+  lead: QueuedLead;
+  elapsed: number;
+  muted: boolean;
+  onMute: () => void;
+  onHangup: () => void;
+}) {
+  const STORAGE_KEY = 'lp:call-widget-pos';
+  const [mounted, setMounted] = useState(false);
+  // Default: bottom-right with margins. Calculated lazily once we know
+  // the viewport size in the browser.
+  const [pos, setPos] = useState<{ x: number; y: number }>({ x: 24, y: 24 });
+  const widgetRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+    let initial: { x: number; y: number } | null = null;
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const p = JSON.parse(raw) as { x: number; y: number };
+        if (typeof p.x === 'number' && typeof p.y === 'number') initial = p;
+      }
+    } catch {
+      /* ignore */
+    }
+    if (initial) {
+      setPos(clampToViewport(initial));
+    } else {
+      // Default: bottom-right, 24px margin, ~280x130 widget.
+      setPos({ x: window.innerWidth - 280 - 24, y: window.innerHeight - 130 - 24 });
+    }
+  }, []);
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // Only the header bar starts a drag — buttons stop propagation.
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: pos.x,
+      origY: pos.y,
+    };
+  }, [pos.x, pos.y]);
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const next = clampToViewport({
+      x: d.origX + (e.clientX - d.startX),
+      y: d.origY + (e.clientY - d.startY),
+    });
+    setPos(next);
+  }, []);
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(pos));
+    } catch {
+      /* ignore */
+    }
+  }, [pos]);
+
+  if (!mounted) return null;
+
+  const subline = leadSubline(lead);
+  const labelText =
+    status.kind === 'connecting'
+      ? 'Calling…'
+      : status.kind === 'in_call'
+        ? 'On call'
+        : 'Wrap-up';
+  const dotCls =
+    status.kind === 'in_call'
+      ? 'bg-teal animate-pulse'
+      : status.kind === 'connecting'
+        ? 'bg-bs animate-pulse'
+        : 'bg-txt-3';
+
+  const node = (
+    <div
+      ref={widgetRef}
+      className="fixed z-[60] w-[280px] select-none rounded-2xl border border-line bg-surface shadow-2xl"
+      style={{ left: `${pos.x}px`, top: `${pos.y}px` }}
+    >
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        className="flex cursor-grab items-center gap-2 rounded-t-2xl border-b border-line bg-canvas px-3 py-1.5 active:cursor-grabbing"
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${dotCls}`} />
+        <span className="text-[10.5px] font-semibold uppercase tracking-wider text-txt-3">
+          {labelText}
+        </span>
+        {status.kind === 'in_call' && (
+          <span className="ml-auto font-mono text-[11.5px] text-teal">
+            {formatDur(elapsed)}
+          </span>
+        )}
+      </div>
+      <div className="px-3 py-2.5">
+        <div className="truncate text-[13px] font-semibold text-txt-1">
+          {leadDisplay(lead)}
+        </div>
+        {subline && (
+          <div className="mt-0.5 truncate text-[11.5px] text-txt-3">{subline}</div>
+        )}
+        <div className="mt-1 truncate font-mono text-[11.5px] text-txt-2">
+          {lead.phone}
+        </div>
+        <div className="mt-2.5 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onMute}
+            disabled={status.kind !== 'in_call'}
+            className={`flex-1 rounded-lg border px-2 py-1.5 text-[11.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              muted
+                ? 'border-hp bg-hp text-white'
+                : 'border-line bg-canvas text-txt-2 hover:bg-surface'
+            }`}
+            title="Mute (M)"
+          >
+            {muted ? 'Unmute' : 'Mute'}
+          </button>
+          <button
+            type="button"
+            onClick={onHangup}
+            disabled={status.kind === 'wrap_up'}
+            className="flex-1 rounded-lg border border-hp bg-hp px-2 py-1.5 text-[11.5px] font-semibold text-white shadow-[inset_0_-2px_0_0_rgba(0,0,0,0.22)] hover:bg-hp/90 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Hang up (H)"
+          >
+            Hang up
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return createPortal(node, document.body);
+}
+
+// Keep the widget within viewport bounds when dragged or after a
+// resize. Approximate the widget at 280x130 — exact size doesn't
+// matter, we just don't want it dragged offscreen.
+function clampToViewport(p: { x: number; y: number }): { x: number; y: number } {
+  if (typeof window === 'undefined') return p;
+  const W = 280;
+  const H = 130;
+  const maxX = Math.max(0, window.innerWidth - W);
+  const maxY = Math.max(0, window.innerHeight - H);
+  return {
+    x: Math.min(Math.max(0, p.x), maxX),
+    y: Math.min(Math.max(0, p.y), maxY),
+  };
 }
 
 // Lightweight panel pinned to the left of the dialer in campaign mode.
