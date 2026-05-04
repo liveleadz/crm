@@ -14,7 +14,13 @@ const ICON = (path: ReactNode) => (
   </svg>
 );
 
-const WORKSPACE: NavItem[] = [
+// Sidebar groups: Live (manager-relevant overview pages), Daily Work
+// (the agent's everyday surface), Strategy (campaign/automation
+// builders), and Management (mgr+ only). Order chosen so the most-used
+// agent pages stay above the fold while the manager's situational-
+// awareness pages sit at the very top.
+
+const LIVE: NavItem[] = [
   {
     href: '/dashboard',
     label: 'Dashboard',
@@ -25,6 +31,44 @@ const WORKSPACE: NavItem[] = [
         <rect x="14" y="12" width="7" height="9" rx="1.5" />
         <rect x="3" y="16" width="7" height="5" rx="1.5" />
       </>,
+    ),
+  },
+  {
+    href: '/inbox',
+    label: 'Inbox',
+    icon: ICON(
+      <>
+        <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+      </>,
+    ),
+  },
+  {
+    href: '/reports',
+    label: 'Reports',
+    icon: ICON(
+      <>
+        <path d="M3 3v18h18" />
+        <path d="m19 9-5 5-4-4-3 3" />
+      </>,
+    ),
+  },
+];
+
+const DAILY: NavItem[] = [
+  {
+    href: '/dialer',
+    label: 'Dialer',
+    icon: ICON(
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <circle cx="12" cy="12" r="3" />
+      </>,
+    ),
+    badge: (
+      <span className="ml-auto inline-flex h-[22px] items-center rounded-full bg-ll/15 px-2 text-[11.5px] font-medium text-ll">
+        Live
+      </span>
     ),
   },
   {
@@ -57,40 +101,6 @@ const WORKSPACE: NavItem[] = [
     ),
   },
   {
-    href: '/inbox',
-    label: 'Inbox',
-    icon: ICON(
-      <>
-        <path d="M22 12h-6l-2 3h-4l-2-3H2" />
-        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-      </>,
-    ),
-  },
-  {
-    href: '/dialer',
-    label: 'Dialer',
-    icon: ICON(
-      <>
-        <circle cx="12" cy="12" r="10" />
-        <circle cx="12" cy="12" r="3" />
-      </>,
-    ),
-    badge: (
-      <span className="ml-auto inline-flex h-[22px] items-center rounded-full bg-ll/15 px-2 text-[11.5px] font-medium text-ll">
-        Live
-      </span>
-    ),
-  },
-  {
-    href: '/campaigns',
-    label: 'Campaigns',
-    icon: ICON(
-      <>
-        <path d="M3 11l18-8-4 18-5-7-5-3z" />
-      </>,
-    ),
-  },
-  {
     href: '/tasks',
     label: 'Tasks',
     icon: ICON(
@@ -120,6 +130,18 @@ const WORKSPACE: NavItem[] = [
       </>,
     ),
   },
+];
+
+const STRATEGY: NavItem[] = [
+  {
+    href: '/campaigns',
+    label: 'Campaigns',
+    icon: ICON(
+      <>
+        <path d="M3 11l18-8-4 18-5-7-5-3z" />
+      </>,
+    ),
+  },
   {
     href: '/workflows',
     label: 'Automations',
@@ -133,22 +155,12 @@ const WORKSPACE: NavItem[] = [
       </>,
     ),
   },
-  {
-    href: '/reports',
-    label: 'Reports',
-    icon: ICON(
-      <>
-        <path d="M3 3v18h18" />
-        <path d="m19 9-5 5-4-4-3 3" />
-      </>,
-    ),
-  },
 ];
 
 const MANAGEMENT: NavItem[] = [
   {
     href: '/team',
-    label: 'Team & Assignments',
+    label: 'Team & Performance',
     icon: ICON(
       <>
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -241,17 +253,21 @@ export function Sidebar({ role }: { role: MemberRole | null }) {
   return (
     <aside className="flex w-[232px] shrink-0 flex-col border-r border-line bg-surface">
       <nav className="flex-1 space-y-0.5 overflow-auto p-3 text-[13px]">
-        <div className="px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-wider text-txt-3">
-          Workspace
-        </div>
-        {WORKSPACE.map((item) => (
+        <SectionHeader>Live</SectionHeader>
+        {LIVE.map((item) => (
+          <NavLink key={item.href} item={item} active={isActive(item.href)} />
+        ))}
+        <SectionHeader>Daily Work</SectionHeader>
+        {DAILY.map((item) => (
+          <NavLink key={item.href} item={item} active={isActive(item.href)} />
+        ))}
+        <SectionHeader>Strategy</SectionHeader>
+        {STRATEGY.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />
         ))}
         {showManagement && (
           <>
-            <div className="px-2 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-wider text-txt-3">
-              Management
-            </div>
+            <SectionHeader>Management</SectionHeader>
             {MANAGEMENT.map((item) => (
               <NavLink key={item.href} item={item} active={isActive(item.href)} />
             ))}
@@ -264,5 +280,13 @@ export function Sidebar({ role }: { role: MemberRole | null }) {
         ))}
       </div>
     </aside>
+  );
+}
+
+function SectionHeader({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-2 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-wider text-txt-3 first:pt-1">
+      {children}
+    </div>
   );
 }
