@@ -75,18 +75,6 @@ export default async function LeadsListPage({
 
   const stageById = new Map(stages.map((s) => [s.id, s]));
 
-  // Encode current filters into the /dialer link so power dial uses the
-  // exact same filtered set the agent is looking at. Empty params are
-  // omitted so the dialer page picks up only the relevant ones.
-  const dialerParams = new URLSearchParams();
-  if (activeListId) dialerParams.set('list', activeListId);
-  if (search) dialerParams.set('q', search);
-  if (source) dialerParams.set('source', source);
-  if (tagIds.length > 0) dialerParams.set('tags', tagIds.join(','));
-  const powerDialHref = dialerParams.toString()
-    ? `/dialer?${dialerParams.toString()}`
-    : `/dialer?list=all`;
-
   return (
     <>
       <PageHeader
@@ -95,12 +83,6 @@ export default async function LeadsListPage({
         actions={
           stages.length > 0 ? (
             <>
-              <Link
-                href={powerDialHref as `/dialer?${string}`}
-                className="rounded-lg border border-teal/40 bg-teal/10 px-3 py-1.5 text-[12px] font-medium text-teal hover:bg-teal/20"
-              >
-                Power dial
-              </Link>
               <Link
                 href="/pipelines/import"
                 className="rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-txt-2 hover:bg-canvas"
