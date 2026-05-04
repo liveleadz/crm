@@ -32,6 +32,7 @@ import {
   type ScriptSection,
 } from '@/lib/scripts';
 import { dialWindowCheck, type TcpaPolicy } from '@/lib/tcpa';
+import { usePresence } from '@/components/presence/presence-provider';
 
 type Status =
   | { kind: 'idle' } // queue not started yet
@@ -85,6 +86,22 @@ export function PowerDialer({
 }) {
   const [index, setIndex] = useState(0);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const { setOnCall } = usePresence();
+
+  // Mirror dialer status into presence: any of connecting/in_call/wrap_up
+  // counts as "on a call" for the live floor. Idle/done/paused/error
+  // releases the pin.
+  useEffect(() => {
+    const onCall =
+      status.kind === 'connecting' ||
+      status.kind === 'in_call' ||
+      status.kind === 'wrap_up';
+    setOnCall(onCall);
+  }, [status.kind, setOnCall]);
+  // Belt-and-suspenders: if the dialer unmounts mid-call (rare — user
+  // navigated away during connecting), release the on_call pin so the
+  // live floor stops showing this agent as on_call.
+  useEffect(() => () => setOnCall(false), [setOnCall]);
   // Active script section. Null when the script is plain text or no
   // script attached. Reset to entry on each new call; advanced by the
   // disposition save callback for the *next* call.

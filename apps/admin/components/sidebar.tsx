@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import type { Route } from 'next';
 import type { ReactNode } from 'react';
 import type { MemberRole } from '@/lib/team';
+import { LiveTeamWidget } from '@/components/presence/live-team-widget';
 
 type NavItem = { href: Route; label: string; icon: ReactNode; badge?: ReactNode };
 
@@ -245,7 +246,7 @@ function canSeeManagement(role: MemberRole | null): boolean {
   return role === 'owner' || role === 'admin' || role === 'manager';
 }
 
-export function Sidebar({ role }: { role: MemberRole | null }) {
+export function Sidebar({ role, brandId }: { role: MemberRole | null; brandId: string }) {
   const pathname = usePathname();
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
   const showManagement = canSeeManagement(role);
@@ -274,6 +275,11 @@ export function Sidebar({ role }: { role: MemberRole | null }) {
           </>
         )}
       </nav>
+      {showManagement && (
+        <div className="border-t border-line px-3 pt-3">
+          <LiveTeamWidget brandId={brandId} />
+        </div>
+      )}
       <div className="space-y-0.5 border-t border-line p-3">
         {FOOTER.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />

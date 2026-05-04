@@ -14,6 +14,7 @@ import {
   type DispositionChoice,
 } from '@/components/dialer/disposition-picker';
 import { LeadContextPanel } from '@/components/dialer/lead-context-panel';
+import { usePresence } from '@/components/presence/presence-provider';
 
 const KEYS: { value: string; sub?: string }[] = [
   { value: '1' },
@@ -55,6 +56,18 @@ export function WebRTCDialPad({
   const [number, setNumber] = useState(initialNumber ?? '');
   const leadIdRef = useRef<string | null>(initialLeadId ?? null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const { setOnCall } = usePresence();
+
+  // Pin presence to on_call while connecting/in_call/wrap_up. Same shape
+  // as the power dialer.
+  useEffect(() => {
+    const onCall =
+      status.kind === 'connecting' ||
+      status.kind === 'in_call' ||
+      status.kind === 'wrap_up';
+    setOnCall(onCall);
+  }, [status.kind, setOnCall]);
+  useEffect(() => () => setOnCall(false), [setOnCall]);
   const [muted, setMuted] = useState(false);
   const [, startTransition] = useTransition();
   const [elapsed, setElapsed] = useState(0);

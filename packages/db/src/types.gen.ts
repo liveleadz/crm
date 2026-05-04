@@ -1493,6 +1493,48 @@ export type Database = {
           },
         ]
       }
+      member_presence: {
+        Row: {
+          brand_id: string
+          last_event_at: string
+          last_session_started_at: string | null
+          member_id: string
+          seconds_today: number
+          status: string
+        }
+        Insert: {
+          brand_id: string
+          last_event_at?: string
+          last_session_started_at?: string | null
+          member_id: string
+          seconds_today?: number
+          status: string
+        }
+        Update: {
+          brand_id?: string
+          last_event_at?: string
+          last_session_started_at?: string | null
+          member_id?: string
+          seconds_today?: number
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "member_presence_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "member_presence_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       members: {
         Row: {
           avatar_url: string | null
