@@ -135,6 +135,18 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
           {error}
         </div>
       )}
+      {(() => {
+        const otherCount = items.filter((d) => d.category === 'other').length;
+        if (otherCount === 0) return null;
+        return (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-txt-2">
+            <span className="font-medium">{otherCount}</span>{' '}
+            disposition{otherCount === 1 ? '' : 's'} set to{' '}
+            <span className="font-mono">Other</span> — pick a category so they
+            roll up in report KPIs.
+          </div>
+        );
+      })()}
       <div className="overflow-hidden rounded-xl border border-line bg-surface">
         <div className="grid grid-cols-[60px_1fr_120px_100px_140px_100px_36px] items-center gap-3 border-b border-line bg-canvas px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
           <span>Order</span>
@@ -207,7 +219,14 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
               <select
                 value={d.category}
                 onChange={(e) => changeCategory(d.id, e.target.value as DispositionCategory)}
-                className="rounded-md border border-line bg-canvas px-2 py-1 text-[11.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+                title={
+                  d.category === 'other'
+                    ? "Pick a standard category. 'Other' is excluded from the outcome mix on report KPIs."
+                    : undefined
+                }
+                className={`rounded-md border bg-canvas px-2 py-1 text-[11.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20 ${
+                  d.category === 'other' ? 'border-amber-500/60' : 'border-line'
+                }`}
               >
                 {CATEGORY_OPTIONS.map((c) => (
                   <option key={c.value} value={c.value}>
