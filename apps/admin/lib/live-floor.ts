@@ -34,8 +34,16 @@ export type ActiveCall = {
   campaignName: string | null;
 };
 
+// Calls with `ended_at IS NULL` are treated as in-progress, but a row
+// that was never closed (dropped webhook, crashed dialer leg, seed data)
+// would otherwise sit on the floor forever — and its elapsed timer
+// would tick into the thousands of hours. Anything older than this
+// window is presumed dead and excluded.
+const ACTIVE_CALL_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
 export async function loadActiveCalls(brandId: string): Promise<ActiveCall[]> {
   const supabase = await createServerClient();
+  const sinceIso = new Date(Date.now() - ACTIVE_CALL_MAX_AGE_MS).toISOString();
   const { data: calls } = await supabase
     .from('calls')
     .select(
@@ -43,6 +51,7 @@ export async function loadActiveCalls(brandId: string): Promise<ActiveCall[]> {
     )
     .eq('brand_id', brandId)
     .is('ended_at', null)
+    .gte('started_at', sinceIso)
     .order('started_at', { ascending: false })
     .limit(100);
   const rows = calls ?? [];
