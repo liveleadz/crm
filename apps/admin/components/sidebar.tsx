@@ -6,6 +6,7 @@ import type { Route } from 'next';
 import type { ReactNode } from 'react';
 import type { MemberRole } from '@/lib/team';
 import { LiveTeamWidget } from '@/components/presence/live-team-widget';
+import { LiveFloorNavLink } from '@/components/sidebar/live-floor-nav-link';
 
 type NavItem = { href: Route; label: string; icon: ReactNode; badge?: ReactNode };
 
@@ -258,6 +259,7 @@ export function Sidebar({ role, brandId }: { role: MemberRole | null; brandId: s
         {LIVE.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />
         ))}
+        {showManagement && <LiveFloorNavLink brandId={brandId} />}
         <SectionHeader>Daily Work</SectionHeader>
         {DAILY.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />
