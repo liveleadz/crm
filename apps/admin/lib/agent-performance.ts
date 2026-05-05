@@ -7,9 +7,9 @@ import 'server-only';
 // campaigns this agent runs (with cheap per-campaign call totals over
 // the same window), and a recent-calls list.
 //
-// Time-on-screen: today only for v1. Longer rollups need a daily
-// snapshot table that hasn't shipped yet — the page surfaces the
-// limitation inline rather than guessing.
+// Phase R: 7d / 30d on-screen totals are now backed by the
+// `member_screen_daily` rollup table (today's live count is read from
+// `member_presence.seconds_today` and added on top).
 
 import { createServerClient } from '@leadpilot/db/server';
 import { loadCallReport, type CallReport, type ReportFilter } from './reports';
@@ -24,6 +24,8 @@ export type AgentIdentity = {
   isActive: boolean;
   presence: PresenceStatus;
   secondsToday: number;
+  seconds7d: number;
+  seconds30d: number;
 };
 
 export type AgentRecentCall = {
@@ -61,7 +63,21 @@ export async function loadAgentPerformance(
   const scoped: ReportFilter = { ...filter, agentId: memberId };
   const supabase = await createServerClient();
 
-  const [report, presence, identityRes, campaigns, recentRes] = await Promise.all([
+  // Local-day window for the screen-time rollup. We pull 30 days of
+  // history (the longest window we render) and slice it into 7d/30d
+  // sums client-side.
+  const tz = filter.timezone || 'UTC';
+  const todayLocal = localDayKey(new Date(), tz);
+  const thirtyDaysAgoLocal = localDayKey(
+    new Date(Date.now() - 29 * 24 * 60 * 60_000),
+    tz,
+  );
+  const sevenDaysAgoLocal = localDayKey(
+    new Date(Date.now() - 6 * 24 * 60 * 60_000),
+    tz,
+  );
+
+  const [report, presence, identityRes, campaigns, recentRes, screenRes] = await Promise.all([
     loadCallReport(brandId, scoped),
     loadBrandPresence(brandId),
     supabase
@@ -80,6 +96,12 @@ export async function loadAgentPerformance(
       .eq('member_id', memberId)
       .order('started_at', { ascending: false })
       .limit(50),
+    supabase
+      .from('member_screen_daily')
+      .select('day_local, seconds_on_screen')
+      .eq('brand_id', brandId)
+      .eq('member_id', memberId)
+      .gte('day_local', thirtyDaysAgoLocal),
   ]);
 
   // Identity
@@ -89,6 +111,18 @@ export async function loadAgentPerformance(
       | { id: string; email: string; full_name: string | null }
       | null;
     const p = presence.find((row) => row.memberId === memberId);
+    const secondsToday = p?.secondsToday ?? 0;
+
+    // Today's seconds aren't in `member_screen_daily` yet (they're
+    // still accumulating in `member_presence`), so add them on top.
+    let seconds7d = secondsToday;
+    let seconds30d = secondsToday;
+    for (const r of screenRes.data ?? []) {
+      if (r.day_local === todayLocal) continue; // safety: ignore if a snapshot already exists for today.
+      if (r.day_local >= sevenDaysAgoLocal) seconds7d += r.seconds_on_screen ?? 0;
+      seconds30d += r.seconds_on_screen ?? 0;
+    }
+
     identity = {
       memberId,
       email: member?.email ?? '',
@@ -96,7 +130,9 @@ export async function loadAgentPerformance(
       role: identityRes.data.role,
       isActive: identityRes.data.is_active,
       presence: p?.status ?? 'offline',
-      secondsToday: p?.secondsToday ?? 0,
+      secondsToday,
+      seconds7d,
+      seconds30d,
     };
   }
 
@@ -189,4 +225,17 @@ async function loadAgentCampaignTotals(
       callsInRange: totalByCampaign.get(c.id) ?? 0,
     }))
     .sort((a, b) => b.callsInRange - a.callsInRange);
+}
+
+// YYYY-MM-DD in the brand's local timezone — same shape stored in
+// `member_screen_daily.day_local`. Inlined to avoid pulling 'server-only'
+// helpers transitively.
+function localDayKey(date: Date, tz: string): string {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return fmt.format(date);
 }

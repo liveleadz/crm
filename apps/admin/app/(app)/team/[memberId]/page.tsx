@@ -168,8 +168,8 @@ export default async function AgentPerformancePage({
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <Stat label="On screen today" value={formatScreenTime(perf.identity.secondsToday)} />
-            <Stat label="On screen 7d" value="—" hint="coming soon" />
-            <Stat label="On screen 30d" value="—" hint="coming soon" />
+            <Stat label="On screen 7d" value={formatScreenTime(perf.identity.seconds7d)} />
+            <Stat label="On screen 30d" value={formatScreenTime(perf.identity.seconds30d)} />
           </div>
         </section>
 

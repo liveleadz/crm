@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/email-pull",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/screen-rollup",
+      "schedule": "0 * * * *"
     }
   ]
 }

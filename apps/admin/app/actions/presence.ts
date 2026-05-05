@@ -71,6 +71,28 @@ export async function pingPresence(input: {
     : null;
   const newDay = prevSessionKey === null || prevSessionKey !== todayKey;
 
+  // Phase R: when a day rollover happens AND the prior session
+  // accumulated meaningful time, persist a snapshot to
+  // `member_screen_daily` so 7d/30d totals can be reconstructed later.
+  // The cron at /api/cron/screen-rollup is the backstop for agents who
+  // never came back the next day.
+  if (
+    newDay &&
+    existing?.last_session_started_at &&
+    (existing.seconds_today ?? 0) > 0 &&
+    prevSessionKey
+  ) {
+    await supabase.from('member_screen_daily').upsert(
+      {
+        brand_id: active.id,
+        member_id: user.id,
+        day_local: prevSessionKey,
+        seconds_on_screen: existing.seconds_today,
+      },
+      { onConflict: 'brand_id,member_id,day_local' },
+    );
+  }
+
   // Accumulate only if the previous status was a working state.
   let secondsToday = newDay ? 0 : existing?.seconds_today ?? 0;
   if (

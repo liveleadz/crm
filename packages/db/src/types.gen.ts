@@ -1535,6 +1535,45 @@ export type Database = {
           },
         ]
       }
+      member_screen_daily: {
+        Row: {
+          brand_id: string
+          captured_at: string
+          day_local: string
+          member_id: string
+          seconds_on_screen: number
+        }
+        Insert: {
+          brand_id: string
+          captured_at?: string
+          day_local: string
+          member_id: string
+          seconds_on_screen?: number
+        }
+        Update: {
+          brand_id?: string
+          captured_at?: string
+          day_local?: string
+          member_id?: string
+          seconds_on_screen?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "member_screen_daily_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "member_screen_daily_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       members: {
         Row: {
           avatar_url: string | null
