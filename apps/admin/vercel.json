@@ -19,6 +19,10 @@
     {
       "path": "/api/cron/screen-rollup",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/sla-tick",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

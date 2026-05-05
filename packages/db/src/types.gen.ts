@@ -1972,6 +1972,51 @@ export type Database = {
           },
         ]
       }
+      sla_violations: {
+        Row: {
+          brand_id: string
+          detail: Json
+          id: string
+          kind: string
+          last_seen_at: string
+          member_id: string
+          opened_at: string
+        }
+        Insert: {
+          brand_id: string
+          detail?: Json
+          id?: string
+          kind: string
+          last_seen_at?: string
+          member_id: string
+          opened_at?: string
+        }
+        Update: {
+          brand_id?: string
+          detail?: Json
+          id?: string
+          kind?: string
+          last_seen_at?: string
+          member_id?: string
+          opened_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sla_violations_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sla_violations_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       sms: {
         Row: {
           body: string

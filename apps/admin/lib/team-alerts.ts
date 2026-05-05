@@ -51,6 +51,19 @@ export type TeamAlert =
       name: string;
       totalLeads: number;
       unreachablePct: number;
+    }
+  | {
+      // Phase S — open SLA violations from /api/cron/sla-tick.
+      kind: 'agent_idle';
+      memberId: string;
+      name: string;
+      minutes: number;
+    }
+  | {
+      kind: 'no_calls_active';
+      memberId: string;
+      name: string;
+      minutes: number;
     };
 
 export type TeamAlerts = {
@@ -73,44 +86,49 @@ export async function loadTeamAlerts(
   const sevenDaysAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
   const vmThresholdIso = new Date(Date.now() - VM_BACKLOG_HOURS * 60 * 60_000).toISOString();
 
-  const [callsRes, apptsRes, membersRes, vmRes, pausedCampRes, listsRes] = await Promise.all([
-    supabase
-      .from('calls')
-      .select('member_id')
-      .eq('brand_id', brandId)
-      .gte('started_at', fromIso)
-      .lte('started_at', toIso)
-      .limit(50_000),
-    supabase
-      .from('appointments')
-      .select('member_id')
-      .eq('brand_id', brandId)
-      .gte('created_at', fromIso)
-      .lte('created_at', toIso)
-      .limit(10_000),
-    supabase
-      .from('brand_members')
-      .select('members!inner(id, full_name, email)')
-      .eq('brand_id', brandId)
-      .eq('is_active', true),
-    supabase
-      .from('calls')
-      .select('id, started_at')
-      .eq('brand_id', brandId)
-      .eq('direction', 'inbound')
-      .is('handled_at', null)
-      .lte('started_at', vmThresholdIso)
-      .order('started_at', { ascending: true }),
-    supabase
-      .from('campaigns')
-      .select('id, name, status')
-      .eq('brand_id', brandId)
-      .eq('status', 'paused'),
-    supabase
-      .from('lead_lists')
-      .select('id, name, source')
-      .eq('brand_id', brandId),
-  ]);
+  const [callsRes, apptsRes, membersRes, vmRes, pausedCampRes, listsRes, slaRes] =
+    await Promise.all([
+      supabase
+        .from('calls')
+        .select('member_id')
+        .eq('brand_id', brandId)
+        .gte('started_at', fromIso)
+        .lte('started_at', toIso)
+        .limit(50_000),
+      supabase
+        .from('appointments')
+        .select('member_id')
+        .eq('brand_id', brandId)
+        .gte('created_at', fromIso)
+        .lte('created_at', toIso)
+        .limit(10_000),
+      supabase
+        .from('brand_members')
+        .select('members!inner(id, full_name, email)')
+        .eq('brand_id', brandId)
+        .eq('is_active', true),
+      supabase
+        .from('calls')
+        .select('id, started_at')
+        .eq('brand_id', brandId)
+        .eq('direction', 'inbound')
+        .is('handled_at', null)
+        .lte('started_at', vmThresholdIso)
+        .order('started_at', { ascending: true }),
+      supabase
+        .from('campaigns')
+        .select('id, name, status')
+        .eq('brand_id', brandId)
+        .eq('status', 'paused'),
+      supabase
+        .from('lead_lists')
+        .select('id, name, source')
+        .eq('brand_id', brandId),
+      supabase
+        .from('sla_violations')
+        .select('member_id, kind, detail')
+        .eq('brand_id', brandId),
+    ]);
 
   const alerts: TeamAlert[] = [];
 
@@ -138,17 +156,17 @@ export async function loadTeamAlerts(
     totalAppts += a.appointments;
   }
   const teamConv = totalCalls > 0 ? totalAppts / totalCalls : 0;
+  const memberById = new Map<
+    string,
+    { full_name: string | null; email: string }
+  >();
+  for (const bm of membersRes.data ?? []) {
+    memberById.set(bm.members.id, {
+      full_name: bm.members.full_name,
+      email: bm.members.email,
+    });
+  }
   if (teamConv > 0) {
-    const memberById = new Map<
-      string,
-      { full_name: string | null; email: string }
-    >();
-    for (const bm of membersRes.data ?? []) {
-      memberById.set(bm.members.id, {
-        full_name: bm.members.full_name,
-        email: bm.members.email,
-      });
-    }
     for (const [memberId, agg] of byMember) {
       if (agg.calls < MIN_CALLS_FOR_REP_FLAG) continue;
       const conv = agg.appointments / agg.calls;
@@ -259,6 +277,32 @@ export async function loadTeamAlerts(
           unreachablePct: pct,
         });
       }
+    }
+  }
+
+  // 5) SLA violations (Phase S). The cron at /api/cron/sla-tick keeps
+  // this table at exactly the open set, so we render each row directly.
+  for (const v of slaRes.data ?? []) {
+    const m = memberById.get(v.member_id);
+    if (!m) continue;
+    const minutes =
+      typeof (v.detail as { minutes?: number } | null)?.minutes === 'number'
+        ? Math.max(0, Math.floor((v.detail as { minutes: number }).minutes))
+        : 30;
+    if (v.kind === 'agent_idle') {
+      alerts.push({
+        kind: 'agent_idle',
+        memberId: v.member_id,
+        name: m.full_name ?? m.email,
+        minutes,
+      });
+    } else if (v.kind === 'no_calls_active') {
+      alerts.push({
+        kind: 'no_calls_active',
+        memberId: v.member_id,
+        name: m.full_name ?? m.email,
+        minutes,
+      });
     }
   }
 

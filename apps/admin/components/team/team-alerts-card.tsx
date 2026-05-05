@@ -104,6 +104,34 @@ function AlertRow({ alert }: { alert: TeamAlert }) {
           </span>
         </Link>
       );
+    case 'agent_idle':
+      return (
+        <Link
+          href={`/team/${alert.memberId}`}
+          className="flex items-center justify-between rounded-lg border border-line/60 bg-canvas px-3 py-2 text-[12px] hover:border-line"
+        >
+          <div className="flex items-center gap-2">
+            <Dot tone="warn" />
+            <span className="font-medium">{alert.name}</span>
+            <span className="text-txt-3">idle, no activity</span>
+          </div>
+          <span className="font-mono text-[11px] text-txt-3">{alert.minutes}m</span>
+        </Link>
+      );
+    case 'no_calls_active':
+      return (
+        <Link
+          href={`/team/${alert.memberId}`}
+          className="flex items-center justify-between rounded-lg border border-line/60 bg-canvas px-3 py-2 text-[12px] hover:border-line"
+        >
+          <div className="flex items-center gap-2">
+            <Dot tone="warn" />
+            <span className="font-medium">{alert.name}</span>
+            <span className="text-txt-3">online but no calls placed</span>
+          </div>
+          <span className="font-mono text-[11px] text-txt-3">{alert.minutes}m</span>
+        </Link>
+      );
   }
 }
 
