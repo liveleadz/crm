@@ -6,6 +6,7 @@
 
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
+import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
 import { createCampaign, archiveCampaign } from '@/app/actions/campaigns';
 import type { Campaign, CampaignStatus } from '@/lib/campaigns';
@@ -153,6 +154,14 @@ export function CampaignsList({
                     className="rounded-lg bg-teal px-3 py-1 text-[11.5px] font-medium text-white hover:bg-teal/90"
                   >
                     Start dialing
+                  </Link>
+                )}
+                {canManage && (
+                  <Link
+                    href={`/campaigns/${c.id}/performance` as Route}
+                    className="rounded-lg border border-line px-2.5 py-1 text-[11.5px] font-medium text-txt-2 hover:border-teal/60 hover:text-teal"
+                  >
+                    Performance
                   </Link>
                 )}
                 {canManage && (

@@ -25,6 +25,10 @@ export type ReportFilter = {
   fromIso?: string | null;
   toIso?: string | null;
   agentId?: string | null;
+  /** When set, restrict the report to a single campaign. Used by the
+   * per-campaign performance page (Phase P) to drive the same KPIs/
+   * trend/heatmap from one campaign's slice of `calls`. */
+  campaignId?: string | null;
   direction?: DirectionFilter;
   /** IANA tz used to bucket the trend (per-day) and heatmap (dow×hour).
    *  Falls back to UTC when omitted. */
@@ -224,6 +228,7 @@ export async function loadCallReport(
     .limit(50_000);
 
   if (filter.agentId) query = query.eq('member_id', filter.agentId);
+  if (filter.campaignId) query = query.eq('campaign_id', filter.campaignId);
   if (filter.direction && filter.direction !== 'all') {
     query = query.eq('direction', filter.direction);
   }
@@ -416,6 +421,7 @@ export async function loadCallReport(
     .lte('started_at', prevToIso)
     .limit(50_000);
   if (filter.agentId) prevQuery = prevQuery.eq('member_id', filter.agentId);
+  if (filter.campaignId) prevQuery = prevQuery.eq('campaign_id', filter.campaignId);
   if (filter.direction && filter.direction !== 'all') {
     prevQuery = prevQuery.eq('direction', filter.direction);
   }
