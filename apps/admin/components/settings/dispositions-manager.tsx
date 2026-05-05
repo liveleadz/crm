@@ -19,7 +19,7 @@ import {
   type Disposition,
   type DispositionCategory,
   type DispositionTone,
-} from '@/lib/dispositions';
+} from '@/lib/dispositions-shared';
 
 const TONE_DOT: Record<DispositionTone, string> = {
   good: 'bg-teal',

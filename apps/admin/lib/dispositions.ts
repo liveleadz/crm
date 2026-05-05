@@ -1,74 +1,26 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
+import {
+  normalizeDispositionCategory,
+  type Disposition,
+  type DispositionCategory,
+  type DispositionTone,
+} from './dispositions-shared';
 
-export type DispositionTone = 'good' | 'neutral' | 'bad';
-
-// Fixed-vocabulary metric category. The brand's `code` and `label` are
-// brand-configurable, so reports cannot read them directly — a brand
-// could rename "Connected" to "Closed" and the connect rate would
-// silently drop to zero. `category` is the stable axis the reports
-// layer aggregates against.
-export type DispositionCategory =
-  | 'wrong_number'
-  | 'no_answer'
-  | 'voicemail'
-  | 'connected'
-  | 'appointment_set'
-  | 'callback'
-  | 'do_not_call'
-  | 'not_interested'
-  | 'other';
-
-export const DISPOSITION_CATEGORIES: DispositionCategory[] = [
-  'connected',
-  'appointment_set',
-  'callback',
-  'voicemail',
-  'no_answer',
-  'wrong_number',
-  'not_interested',
-  'do_not_call',
-  'other',
-];
-
-export const DISPOSITION_CATEGORY_LABELS: Record<DispositionCategory, string> = {
-  connected: 'Connected',
-  appointment_set: 'Appointment set',
-  callback: 'Callback',
-  voicemail: 'Voicemail',
-  no_answer: 'No answer',
-  wrong_number: 'Wrong number',
-  not_interested: 'Not interested',
-  do_not_call: 'Do not call',
-  other: 'Other',
-};
-
-// Categories that count as a "connect" for the connect-rate KPI.
-export const CONNECTED_CATEGORIES: ReadonlySet<DispositionCategory> = new Set<DispositionCategory>([
-  'connected',
-  'appointment_set',
-  'callback',
-  'not_interested',
-]);
-
-export type Disposition = {
-  id: string;
-  code: string;
-  label: string;
-  tone: DispositionTone;
-  category: DispositionCategory;
-  sortOrder: number;
-  // After a call resolves with this disposition, suppress this lead from
-  // queue / manual dial for N minutes. NULL/0 = no cooldown.
-  cooldownMinutes: number | null;
-};
-
-function normalizeCategory(raw: unknown): DispositionCategory {
-  if (typeof raw !== 'string') return 'other';
-  return (DISPOSITION_CATEGORIES as readonly string[]).includes(raw)
-    ? (raw as DispositionCategory)
-    : 'other';
-}
+// Re-export the shared surface so existing imports of '@/lib/dispositions'
+// keep working. Client components should import from
+// '@/lib/dispositions-shared' directly to avoid pulling in this
+// server-only module.
+export {
+  DISPOSITION_CATEGORIES,
+  DISPOSITION_CATEGORY_LABELS,
+  CONNECTED_CATEGORIES,
+} from './dispositions-shared';
+export type {
+  Disposition,
+  DispositionCategory,
+  DispositionTone,
+} from './dispositions-shared';
 
 // Active (non-archived) dispositions for a brand, in display order.
 export async function loadDispositions(brandId: string): Promise<Disposition[]> {
@@ -85,7 +37,7 @@ export async function loadDispositions(brandId: string): Promise<Disposition[]> 
     code: d.code,
     label: d.label,
     tone: (d.tone as DispositionTone) ?? 'neutral',
-    category: normalizeCategory(d.category),
+    category: normalizeDispositionCategory(d.category),
     sortOrder: d.sort_order,
     cooldownMinutes: d.cooldown_minutes ?? null,
   }));
@@ -105,7 +57,7 @@ export async function loadCategoryByCode(
     .eq('brand_id', brandId);
   const map = new Map<string, DispositionCategory>();
   for (const r of data ?? []) {
-    map.set(r.code, normalizeCategory(r.category));
+    map.set(r.code, normalizeDispositionCategory(r.category));
   }
   return (code) => (code ? map.get(code) ?? 'other' : 'other');
 }
