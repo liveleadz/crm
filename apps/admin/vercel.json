@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/sla-tick",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/presence-prune",
+      "schedule": "0 2 * * *"
     }
   ]
 }
