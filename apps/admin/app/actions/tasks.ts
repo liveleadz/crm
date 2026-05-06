@@ -253,8 +253,9 @@ export async function completeTask(taskId: string) {
     .eq('id', taskId);
   if (doneErr) return { ok: false as const, error: doneErr.message };
 
-  // Fan out user-defined automations. Best-effort — never block the close.
-  void runAutomations({
+  // Fan out user-defined automations. Awaited so the engine completes
+  // before the lambda terminates.
+  await runAutomations({
     trigger: 'task_completed',
     brandId: existing.brand_id,
     leadId: existing.lead_id,

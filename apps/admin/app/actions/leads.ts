@@ -53,8 +53,11 @@ export async function createLead(input: {
     .single();
   if (error || !data) return { ok: false as const, error: error?.message ?? 'Insert failed' };
 
-  // Fire lead_created automations. Fire-and-forget; never blocks the UI.
-  void runAutomations({
+  // Fire lead_created automations. Awaited so the engine actually runs to
+  // completion before this server action returns — `void` here meant Vercel
+  // could (and did) terminate the lambda mid-run, leaving workflow_runs never
+  // inserted. The engine swallows its own errors so awaiting can't fail.
+  await runAutomations({
     trigger: 'lead_created',
     brandId: active.id,
     leadId: data.id,
@@ -115,7 +118,7 @@ export async function createLeadFromCall(input: { callId: string }): Promise<
     .or(`from_number.eq.${leadPhone},to_number.eq.${leadPhone}`)
     .is('lead_id', null);
 
-  void runAutomations({
+  await runAutomations({
     trigger: 'lead_created',
     brandId: active.id,
     leadId: lead.id,
@@ -154,7 +157,7 @@ export async function moveLeadStage(leadId: string, stageId: string) {
         to_stage_id: stageId,
       },
     });
-    void runAutomations({
+    await runAutomations({
       trigger: 'stage_changed',
       brandId: prior.brand_id,
       leadId,
@@ -359,7 +362,8 @@ export async function logCall(input: {
     .eq('id', input.leadId);
 
   // Manual call logs end the call right away — fire call_ended automations.
-  void runAutomations({
+  // Awaited so the engine runs before the lambda terminates.
+  await runAutomations({
     trigger: 'call_ended',
     brandId: active.id,
     leadId: input.leadId,

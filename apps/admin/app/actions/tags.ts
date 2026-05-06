@@ -120,7 +120,7 @@ export async function addTagToLead(leadId: string, tagId: string) {
       .eq('id', tagId)
       .maybeSingle();
     if (lead?.brand_id) {
-      void runAutomations({
+      await runAutomations({
         trigger: 'tag_added',
         brandId: lead.brand_id,
         leadId,

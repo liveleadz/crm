@@ -78,7 +78,7 @@ export async function createAppointment(input: {
   // Best-effort external push; failures degrade to ext_status='failed'.
   if (input.calendarId) await pushAppointment(data.id);
 
-  void runAutomations({
+  await runAutomations({
     trigger: 'appointment_booked',
     brandId: active.id,
     leadId: input.leadId,

@@ -18,6 +18,7 @@
 // served with content-type: application/json.
 
 import { NextResponse, type NextRequest } from 'next/server';
+import { after } from 'next/server';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { signRecordingPath, signVoicemailPath } from '@/lib/dial-token';
 import { getPublicAppUrl, toE164 } from '@/lib/dialer';
@@ -190,17 +191,24 @@ async function handle(req: NextRequest) {
       fromNumber,
       toNumber: e164,
     });
-    void runAutomations({
-      trigger: 'call_received',
-      brandId: numberRow.brand_id,
-      callId,
-      numberId: numberRow.id,
-      leadId,
-      fromNumber,
-      toNumber: e164,
-    }).catch((e) => {
-      console.error('[inbound-swml:automations]', (e as Error).message);
-    });
+    // The SWML response must return fast or SignalWire drops the call, so
+    // we hand the automations off to `after()` — Next 15 keeps the lambda
+    // alive until this Promise settles even though the HTTP response has
+    // already been sent. This is the only correct shape on Vercel: plain
+    // `void` lets the lambda terminate mid-run, killing in-flight work.
+    after(
+      runAutomations({
+        trigger: 'call_received',
+        brandId: numberRow.brand_id,
+        callId,
+        numberId: numberRow.id,
+        leadId,
+        fromNumber,
+        toNumber: e164,
+      }).catch((e) => {
+        console.error('[inbound-swml:automations]', (e as Error).message);
+      })
+    );
   }
 
   // Compose the SWML response.

@@ -290,9 +290,13 @@ export async function markCallEnded(input: {
     .single();
   if (error) return { ok: false, error: error.message };
 
-  // Fan out call_ended automations. Best-effort.
+  // Fan out call_ended automations. Awaited so the engine actually runs to
+  // completion before this serverless invocation returns — `void` here meant
+  // Vercel could (and did) terminate the lambda mid-run, leaving workflow_runs
+  // never inserted and outbox/log rows missing. The engine swallows its own
+  // errors so awaiting can't fail the disposition save.
   if (row && (row.direction === 'inbound' || row.direction === 'outbound')) {
-    void runAutomations({
+    await runAutomations({
       trigger: 'call_ended',
       brandId: row.brand_id,
       leadId: row.lead_id,
@@ -574,7 +578,11 @@ export async function bookAppointmentFromCall(input: {
   // Best-effort external push.
   void pushAppointment(data.id);
 
-  void runAutomations({
+  // Awaited so the engine actually runs to completion before this serverless
+  // invocation returns — `void` here meant Vercel could (and did) terminate
+  // the lambda mid-run, leaving workflow_runs never inserted. The engine
+  // swallows its own errors so awaiting can't fail the appointment save.
+  await runAutomations({
     trigger: 'appointment_booked',
     brandId: active.id,
     leadId: input.leadId,

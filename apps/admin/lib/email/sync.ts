@@ -271,7 +271,7 @@ async function reconcileMessage(input: {
   // Fire email_received automations only on inbound messages tied to a
   // matched lead. Outbound (self-sent) doesn't trigger.
   if (direction === 'inbound' && leadId) {
-    void runAutomations({
+    await runAutomations({
       trigger: 'email_received',
       brandId,
       leadId,
