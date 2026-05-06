@@ -64,9 +64,19 @@ export function ActiveCallsGrid({
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
       {calls.map((c) => {
-        const elapsed = Math.max(0, Math.floor((now - new Date(c.startedAt).getTime()) / 1000));
-        const mins = Math.floor(elapsed / 60);
+        // Cap at the 2h floor horizon — anything beyond is a stale row
+        // that the janitor cron hasn't closed yet; never render a wall-
+        // clock that reads in the thousands of minutes.
+        const ACTIVE_CAP_SEC = 2 * 60 * 60;
+        const rawElapsed = Math.max(0, Math.floor((now - new Date(c.startedAt).getTime()) / 1000));
+        const elapsed = Math.min(rawElapsed, ACTIVE_CAP_SEC);
+        const hours = Math.floor(elapsed / 3600);
+        const mins = Math.floor((elapsed % 3600) / 60);
         const secs = elapsed % 60;
+        const elapsedLabel =
+          hours > 0
+            ? `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+            : `${mins}:${secs.toString().padStart(2, '0')}`;
         const card = (
           <div className="flex flex-col gap-2 rounded-xl border border-line bg-surface p-4">
             <div className="flex items-center gap-2">
@@ -75,7 +85,7 @@ export function ActiveCallsGrid({
                 {c.direction === 'inbound' ? 'Inbound' : 'Outbound'}
               </span>
               <span className="ml-auto font-mono text-[12px] tabular-nums text-txt-2">
-                {mins}:{secs.toString().padStart(2, '0')}
+                {elapsedLabel}
               </span>
             </div>
             <div className="text-[14px] font-medium">

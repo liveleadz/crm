@@ -7,7 +7,7 @@
 import { revalidatePath } from 'next/cache';
 import { getActiveBrand } from '@/lib/active-brand';
 import { createServerClient } from '@leadpilot/db/server';
-import { DISPOSITION_CATEGORIES, type DispositionCategory } from '@/lib/dispositions';
+import { DISPOSITION_CATEGORIES, type DispositionCategory } from '@/lib/dispositions-shared';
 
 type Result<T = void> = T extends void
   ? { ok: true } | { ok: false; error: string }

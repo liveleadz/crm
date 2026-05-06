@@ -259,7 +259,6 @@ export function Sidebar({ role, brandId }: { role: MemberRole | null; brandId: s
         {LIVE.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />
         ))}
-        {showManagement && <LiveFloorNavLink brandId={brandId} />}
         <SectionHeader>Daily Work</SectionHeader>
         {DAILY.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />
@@ -271,6 +270,7 @@ export function Sidebar({ role, brandId }: { role: MemberRole | null; brandId: s
         {showManagement && (
           <>
             <SectionHeader>Management</SectionHeader>
+            <LiveFloorNavLink brandId={brandId} />
             {MANAGEMENT.map((item) => (
               <NavLink key={item.href} item={item} active={isActive(item.href)} />
             ))}
