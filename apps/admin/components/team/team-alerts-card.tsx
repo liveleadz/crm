@@ -59,7 +59,7 @@ function AlertRow({ alert }: { alert: TeamAlert }) {
     case 'voicemail_backlog':
       return (
         <Link
-          href="/inbox"
+          href="/calls?view=inbox"
           className="flex items-center justify-between rounded-lg border border-line/60 bg-canvas px-3 py-2 text-[12px] hover:border-line"
         >
           <div className="flex items-center gap-2">

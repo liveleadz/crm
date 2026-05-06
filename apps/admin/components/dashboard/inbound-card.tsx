@@ -14,7 +14,7 @@ export async function InboundCard({ brandId }: { brandId: string }) {
           <h3 className="text-[13.5px] font-semibold text-txt-1">Inbound</h3>
           <p className="text-[11.5px] text-txt-3">Missed + voicemails awaiting triage</p>
         </div>
-        <Link href="/inbox" className="text-[11.5px] text-teal hover:underline">
+        <Link href="/calls?view=inbox" className="text-[11.5px] text-teal hover:underline">
           View all →
         </Link>
       </div>

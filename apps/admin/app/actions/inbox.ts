@@ -24,7 +24,7 @@ export async function markCallHandled(callId: string): Promise<Result> {
       .eq('id', callId)
       .eq('brand_id', active.id);
     if (error) return { ok: false, error: error.message };
-    revalidatePath('/inbox');
+    revalidatePath('/calls');
     revalidatePath('/dashboard');
     return { ok: true };
   } catch (err) {
@@ -43,7 +43,7 @@ export async function markCallUnhandled(callId: string): Promise<Result> {
       .eq('id', callId)
       .eq('brand_id', active.id);
     if (error) return { ok: false, error: error.message };
-    revalidatePath('/inbox');
+    revalidatePath('/calls');
     revalidatePath('/dashboard');
     return { ok: true };
   } catch (err) {

@@ -1,8 +1,8 @@
 'use client';
 
-// Per-row action buttons for the Inbox: Call Back (links to dialer in
-// single-call mode), Mark Handled / Reopen toggle. Server actions revalidate
-// /inbox + /dashboard so the badge counts update.
+// Per-row action buttons for the Inbox view (rendered inside /calls?view=inbox):
+// Call Back (links to dialer in single-call mode), Mark Handled / Reopen toggle.
+// Server actions revalidate /calls + /dashboard so the badge counts update.
 
 import Link from 'next/link';
 import type { Route } from 'next';
