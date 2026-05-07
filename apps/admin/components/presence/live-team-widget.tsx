@@ -3,11 +3,14 @@
 // Phase N: compact "Live team" widget pinned above the sidebar footer.
 // Reads `member_presence` directly from the browser client (RLS scopes
 // it to the active brand) and subscribes to postgres_changes so counts
-// update without a refresh.
+// update the instant the DB row flips.
 //
 // Status of rows older than STALE_MS is treated as 'offline' regardless
 // of their stored value, mirroring the server-side helper. Otherwise a
-// crashed tab would inflate "active" counts forever.
+// crashed tab would inflate "active" counts forever. To keep the dots
+// flipping into 'offline' the moment the staleness clock crosses, we
+// re-tally locally every few seconds against cached rows — no extra
+// DB round-trips beyond the Realtime stream.
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -15,7 +18,14 @@ import type { Route } from 'next';
 import { createBrowserClient } from '@leadpilot/db/client';
 
 const STALE_MS = 3 * 60 * 1000;
+// Local re-tally cadence. Cheap: pure arithmetic over a few cached rows.
+const TICK_MS = 3 * 1000;
+// Safety-net DB resync. Realtime + local tick cover the common case;
+// this catches any missed Realtime events (channel drop, brief
+// disconnect) without making the widget feel laggy.
+const RESYNC_MS = 60 * 1000;
 
+type PresenceRow = { status: string | null; last_event_at: string | null };
 type Counts = { onCall: number; active: number; idle: number; offline: number };
 
 function effectiveStatus(raw: string | null, lastEventAt: string | null): keyof Counts {
@@ -27,46 +37,57 @@ function effectiveStatus(raw: string | null, lastEventAt: string | null): keyof 
   return 'offline';
 }
 
+function tally(rows: PresenceRow[]): Counts {
+  const next: Counts = { onCall: 0, active: 0, idle: 0, offline: 0 };
+  for (const r of rows) next[effectiveStatus(r.status, r.last_event_at)] += 1;
+  return next;
+}
+
 export function LiveTeamWidget({ brandId }: { brandId: string }) {
-  const [counts, setCounts] = useState<Counts>({ onCall: 0, active: 0, idle: 0, offline: 0 });
+  const [rows, setRows] = useState<PresenceRow[]>([]);
+  // Drives a re-render every TICK_MS so `effectiveStatus` re-evaluates
+  // against a fresh `Date.now()`. The actual rows array can stay stable
+  // — only the staleness verdict changes as wall-clock advances.
+  const [, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     const supabase = createBrowserClient();
     let mounted = true;
 
-    async function refresh() {
+    async function resync() {
       const { data } = await supabase
         .from('member_presence')
         .select('status, last_event_at')
         .eq('brand_id', brandId);
       if (!mounted) return;
-      const next: Counts = { onCall: 0, active: 0, idle: 0, offline: 0 };
-      for (const r of data ?? []) {
-        next[effectiveStatus(r.status, r.last_event_at)] += 1;
-      }
-      setCounts(next);
+      setRows(data ?? []);
     }
 
-    void refresh();
-    // Re-tally every 30s so stale rows naturally roll into 'offline'
-    // even when no Realtime delta fires.
-    const tick = setInterval(refresh, 30 * 1000);
+    void resync();
+    const localTick = setInterval(() => setNow(Date.now()), TICK_MS);
+    const safetyResync = setInterval(() => void resync(), RESYNC_MS);
 
     const channel = supabase
       .channel(`presence:${brandId}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'member_presence', filter: `brand_id=eq.${brandId}` },
-        () => void refresh(),
+        () => void resync(),
       )
       .subscribe();
 
     return () => {
       mounted = false;
-      clearInterval(tick);
+      clearInterval(localTick);
+      clearInterval(safetyResync);
       void supabase.removeChannel(channel);
     };
   }, [brandId]);
+
+  // Recomputed on every render — cheap, and the local tick + Realtime
+  // events guarantee the component re-renders frequently enough that
+  // the dots track wall-clock staleness.
+  const counts = tally(rows);
 
   return (
     <Link
