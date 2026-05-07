@@ -8,6 +8,7 @@ import { Suspense, useState } from 'react';
 function LoginForm() {
   const searchParams = useSearchParams();
   const callbackError = searchParams.get('error');
+  const welcome = searchParams.get('welcome') === '1';
   const next = searchParams.get('next') ?? '/dashboard';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,6 +34,11 @@ function LoginForm() {
       <div className="w-full max-w-sm rounded-lg border border-line bg-surface p-8">
         <h1 className="mb-1 text-lg font-semibold">LeadPilot Admin</h1>
         <p className="mb-6 text-sm text-txt-2">Sign in to your account.</p>
+        {welcome && (
+          <div className="mb-4 rounded border border-teal/40 bg-teal/10 px-3 py-2 text-[12px] text-txt-1">
+            Password set. Sign in with your email and new password to finish setup.
+          </div>
+        )}
         <form onSubmit={onSubmit} className="space-y-3">
           <input
             type="email"

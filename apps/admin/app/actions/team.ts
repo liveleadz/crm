@@ -5,6 +5,15 @@ import { createServerClient } from '@leadpilot/db/server';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { getActiveBrand } from '@/lib/active-brand';
 import { canManageTeam, getCurrentBrandRole, type MemberRole } from '@/lib/team';
+import { getPublicAppUrl } from '@/lib/dialer';
+
+// Where the Supabase invite email's "Accept invite" link lands. Supabase
+// hashes the auth code, then 302s the user back to this URL with `?code=`.
+// `/auth/callback` exchanges the code for a session cookie and forwards
+// to `/welcome`, which gates the password-setup form.
+function inviteRedirectUrl() {
+  return `${getPublicAppUrl()}/auth/callback?next=/welcome`;
+}
 
 const ROLES: MemberRole[] = ['owner', 'admin', 'manager', 'agent', 'viewer'];
 
@@ -51,8 +60,12 @@ export async function inviteMember(input: { email: string; role: MemberRole }) {
     memberId = existing.id;
   } else {
     // Send Supabase auth invite. The trigger will create the members row when
-    // the invitee accepts and an auth.users record is created.
-    const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email);
+    // the invitee accepts and an auth.users record is created. `redirectTo`
+    // sends the invitee back through our `/auth/callback` so the session
+    // cookie is set before they land on `/welcome`.
+    const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
+      redirectTo: inviteRedirectUrl(),
+    });
     if (inviteErr || !invited?.user) {
       return { ok: false as const, error: inviteErr?.message ?? 'Invite failed' };
     }
@@ -154,7 +167,9 @@ export async function resendInvite(memberId: string) {
   // Supabase resends the invite email when the user is unconfirmed; for a
   // confirmed user it errors with "User already registered" — we surface
   // that message verbatim so the manager can act on it.
-  const { error } = await admin.auth.admin.inviteUserByEmail(target.email);
+  const { error } = await admin.auth.admin.inviteUserByEmail(target.email, {
+    redirectTo: inviteRedirectUrl(),
+  });
   if (error) return { ok: false as const, error: error.message };
 
   bump();
