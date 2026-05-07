@@ -20,10 +20,12 @@ import { createBrowserClient } from '@leadpilot/db/client';
 const STALE_MS = 3 * 60 * 1000;
 // Local re-tally cadence. Cheap: pure arithmetic over a few cached rows.
 const TICK_MS = 3 * 1000;
-// Safety-net DB resync. Realtime + local tick cover the common case;
-// this catches any missed Realtime events (channel drop, brief
-// disconnect) and any roster changes (invite / remove).
-const RESYNC_MS = 60 * 1000;
+// Safety-net DB resync. Realtime + the local tick cover the common
+// case; this catches any Realtime events the channel might drop (e.g.
+// brief network blip, websocket reconnect) and any roster changes the
+// publication doesn't surface. Tight enough that even a totally
+// broken Realtime stream would still feel "live".
+const RESYNC_MS = 15 * 1000;
 
 type PresenceRow = { member_id: string; status: string | null; last_event_at: string | null };
 type Bucket = 'onCall' | 'active' | 'idle' | 'offline';
@@ -77,13 +79,24 @@ export function LiveTeamWidget({ brandId }: { brandId: string }) {
       setPresence(map);
     }
 
-    void resyncRoster();
-    void resyncPresence();
-    const localTick = setInterval(() => setNow(Date.now()), TICK_MS);
-    const safetyResync = setInterval(() => {
+    function resyncAll() {
       void resyncRoster();
       void resyncPresence();
-    }, RESYNC_MS);
+    }
+
+    resyncAll();
+    const localTick = setInterval(() => setNow(Date.now()), TICK_MS);
+    const safetyResync = setInterval(resyncAll, RESYNC_MS);
+
+    // Re-fetch the moment a backgrounded tab returns. With OS tab
+    // throttling some intervals don't fire while hidden, so a manager
+    // flipping back to the dashboard would otherwise see stale dots
+    // for a few seconds. This makes the snap-back instant.
+    function onVisibility() {
+      if (document.visibilityState === 'visible') resyncAll();
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', resyncAll);
 
     const presenceChannel = supabase
       .channel(`presence:${brandId}`)
@@ -92,7 +105,13 @@ export function LiveTeamWidget({ brandId }: { brandId: string }) {
         { event: '*', schema: 'public', table: 'member_presence', filter: `brand_id=eq.${brandId}` },
         () => void resyncPresence(),
       )
-      .subscribe();
+      .subscribe((status) => {
+        // Surface SUBSCRIBED / CHANNEL_ERROR / TIMED_OUT / CLOSED so we
+        // can tell from devtools whether Realtime is actually wired up.
+        if (status !== 'SUBSCRIBED') {
+          console.info('[live-team] presence channel status:', status);
+        }
+      });
 
     const rosterChannel = supabase
       .channel(`brand_members:${brandId}`)
@@ -101,12 +120,18 @@ export function LiveTeamWidget({ brandId }: { brandId: string }) {
         { event: '*', schema: 'public', table: 'brand_members', filter: `brand_id=eq.${brandId}` },
         () => void resyncRoster(),
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status !== 'SUBSCRIBED') {
+          console.info('[live-team] roster channel status:', status);
+        }
+      });
 
     return () => {
       mounted = false;
       clearInterval(localTick);
       clearInterval(safetyResync);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', resyncAll);
       void supabase.removeChannel(presenceChannel);
       void supabase.removeChannel(rosterChannel);
     };
