@@ -225,8 +225,192 @@ export async function findIncomingPhoneNumberSid(
 }
 
 /**
+ * Find a Fabric resource by display name + type. Used to resolve the
+ * project's `leadpilot-inbound` swml_webhook so inbound calls can be
+ * bound to it via the Resource API.
+ *
+ * Why we don't take the resource ID via env: the resource is created
+ * once in the SignalWire dashboard and its ID is opaque; looking up by
+ * display name keeps the wiring discoverable from the UI ("the resource
+ * named `leadpilot-inbound`") and survives recreate-after-delete with
+ * no env var rotation.
+ */
+export async function findFabricResourceIdByName(input: {
+  name: string;
+  type: 'swml_webhook' | 'cxml_webhook' | 'swml_script';
+}): Promise<SwResult<string | null>> {
+  const auth = basicAuth();
+  const space = spaceUrl();
+  if (!auth || !space) {
+    return {
+      ok: false,
+      error:
+        'SignalWire credentials missing. Set SIGNALWIRE_PROJECT_ID, SIGNALWIRE_TOKEN, SIGNALWIRE_SPACE_URL.',
+    };
+  }
+  let url: string | null = `https://${space}/api/fabric/resources?page_size=100`;
+  while (url) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+        cache: 'no-store',
+      });
+    } catch (e) {
+      return { ok: false, error: `Network error: ${(e as Error).message}` };
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return {
+        ok: false,
+        status: res.status,
+        error: body ? `${res.status} ${body.slice(0, 240)}` : `HTTP ${res.status}`,
+      };
+    }
+    const json = (await res.json().catch(() => null)) as
+      | {
+          data?: Array<{ id: string; display_name: string | null; type: string }>;
+          links?: { next: string | null };
+        }
+      | null;
+    const match = json?.data?.find(
+      (r) => r.type === input.type && r.display_name === input.name,
+    );
+    if (match) return { ok: true, data: match.id };
+    url = json?.links?.next ?? null;
+  }
+  return { ok: true, data: null };
+}
+
+/**
+ * Bind an IncomingPhoneNumber to a Fabric Calling Handler Resource.
+ *
+ * This is the *correct* way to wire inbound calls when the response is
+ * SWML JSON. The legacy LaML `voice_url` field auto-creates a
+ * `cxml_webhook` resource that expects XML — when our `/api/swml/...`
+ * endpoint returns JSON, SignalWire's parser rejects the script and
+ * the call dies in ~1s with no SIP code (the "fails silently" symptom
+ * users were seeing). Binding to a `swml_webhook` resource via the
+ * Relay REST phone_numbers endpoint avoids the cXML shim entirely.
+ *
+ * `call_handler: 'relay_script'` is the documented enum value for a
+ * phone number whose calling handler is an SWML resource. Other values
+ * (`swml_webhook`, `swml_script`, `relay_application`) are rejected by
+ * the API for this purpose.
+ */
+export async function setIncomingPhoneNumberCallingHandler(input: {
+  sid: string;
+  resourceId: string;
+}): Promise<SwResult<{ sid: string; calling_handler_resource_id: string | null }>> {
+  const auth = basicAuth();
+  const space = spaceUrl();
+  if (!auth || !space) {
+    return {
+      ok: false,
+      error:
+        'SignalWire credentials missing. Set SIGNALWIRE_PROJECT_ID, SIGNALWIRE_TOKEN, SIGNALWIRE_SPACE_URL.',
+    };
+  }
+  const url = `https://${space}/api/relay/rest/phone_numbers/${input.sid}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        call_handler: 'relay_script',
+        calling_handler_resource_id: input.resourceId,
+      }),
+      signal: AbortSignal.timeout(15_000),
+      cache: 'no-store',
+    });
+  } catch (e) {
+    return { ok: false, error: `Network error: ${(e as Error).message}` };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    return {
+      ok: false,
+      status: res.status,
+      error: body ? `${res.status} ${body.slice(0, 240)}` : `HTTP ${res.status}`,
+    };
+  }
+  const json = (await res.json()) as {
+    id?: string;
+    calling_handler_resource_id?: string | null;
+  };
+  return {
+    ok: true,
+    data: {
+      sid: json.id ?? input.sid,
+      calling_handler_resource_id: json.calling_handler_resource_id ?? null,
+    },
+  };
+}
+
+/**
+ * Clear an IncomingPhoneNumber's voice webhook + calling handler so
+ * inbound calls stop reaching us. The Relay REST API requires a
+ * non-null `call_handler` even when "disconnecting", so we fall back
+ * to `laml_webhooks` with empty URLs — the carrier will still answer
+ * the call but our handler chain is fully detached.
+ */
+export async function clearIncomingPhoneNumberCallingHandler(input: {
+  sid: string;
+}): Promise<SwResult<{ sid: string }>> {
+  const auth = basicAuth();
+  const space = spaceUrl();
+  if (!auth || !space) {
+    return {
+      ok: false,
+      error:
+        'SignalWire credentials missing. Set SIGNALWIRE_PROJECT_ID, SIGNALWIRE_TOKEN, SIGNALWIRE_SPACE_URL.',
+    };
+  }
+  const url = `https://${space}/api/relay/rest/phone_numbers/${input.sid}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        call_handler: 'laml_webhooks',
+        call_request_url: '',
+      }),
+      signal: AbortSignal.timeout(15_000),
+      cache: 'no-store',
+    });
+  } catch (e) {
+    return { ok: false, error: `Network error: ${(e as Error).message}` };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    return {
+      ok: false,
+      status: res.status,
+      error: body ? `${res.status} ${body.slice(0, 240)}` : `HTTP ${res.status}`,
+    };
+  }
+  return { ok: true, data: { sid: input.sid } };
+}
+
+/**
  * Update an IncomingPhoneNumber's voice webhook so inbound calls POST to our
  * SWML route. SignalWire's LaML API uses form-encoded body for updates.
+ *
+ * NOTE: Prefer `setIncomingPhoneNumberCallingHandler` for SWML JSON
+ * endpoints. Setting `voice_url` here on a Resource-model account
+ * silently creates a `cxml_webhook` (XML) resource which then rejects
+ * our JSON responses. Kept for any path that genuinely needs LaML XML.
  */
 export async function setIncomingPhoneNumberVoiceUrl(input: {
   sid: string;

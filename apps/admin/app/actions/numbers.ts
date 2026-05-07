@@ -9,11 +9,19 @@ import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
 import {
+  clearIncomingPhoneNumberCallingHandler,
+  findFabricResourceIdByName,
   findIncomingPhoneNumberSid,
   lookupCnam,
-  setIncomingPhoneNumberVoiceUrl,
+  setIncomingPhoneNumberCallingHandler,
 } from '@/lib/signalwire';
-import { getPublicAppUrl } from '@/lib/dialer';
+
+// Display name of the SWML webhook resource on SignalWire that points at
+// `/api/swml/inbound-swml`. Created once in the dashboard; this code
+// looks it up by name on every connect so a redeploy / recreate doesn't
+// require an env-var change. Override via env if you renamed it.
+const INBOUND_RESOURCE_NAME =
+  process.env.SIGNALWIRE_INBOUND_RESOURCE_NAME ?? 'leadpilot-inbound';
 
 type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -136,15 +144,28 @@ export async function connectInboundNumber(input: {
     sid = lookup.data;
   }
 
-  // Point at the SWML endpoint, not the legacy LaML route. The SWML
-  // handler is the only path that dispatches to the agent's browser via
-  // <Connect to="/private/<email>"> — the LaML route returns voicemail
-  // XML and never rings the subscriber, so inbound calls "fail silently"
-  // (caller hears greeting + record beep, agent's popup never appears).
-  // SignalWire's IncomingPhoneNumber.voice_url accepts either pipeline;
-  // it switches on the response content-type (JSON → SWML, XML → LaML).
-  const voiceUrl = `${getPublicAppUrl()}/api/swml/inbound-swml`;
-  const update = await setIncomingPhoneNumberVoiceUrl({ sid, voiceUrl });
+  // Bind the number to the `leadpilot-inbound` SWML webhook resource.
+  // Setting the legacy `voice_url` here would silently auto-create a
+  // `cxml_webhook` resource that expects XML responses; our endpoint
+  // returns SWML JSON, the parser then rejects every script in ~1s
+  // and the call dies with no SIP code (the "fails silently in 1s"
+  // bug). Going through the Resource API binds to the correct
+  // swml_webhook handler so JSON responses are honored.
+  const lookup = await findFabricResourceIdByName({
+    name: INBOUND_RESOURCE_NAME,
+    type: 'swml_webhook',
+  });
+  if (!lookup.ok) return { ok: false, error: lookup.error };
+  if (!lookup.data) {
+    return {
+      ok: false,
+      error: `SignalWire resource "${INBOUND_RESOURCE_NAME}" not found. Create an SWML webhook with that name pointing at /api/swml/inbound-swml.`,
+    };
+  }
+  const update = await setIncomingPhoneNumberCallingHandler({
+    sid,
+    resourceId: lookup.data,
+  });
   if (!update.ok) return { ok: false, error: update.error };
 
   await supabase
@@ -181,10 +202,9 @@ export async function disconnectInboundNumber(input: {
     revalidatePath('/numbers');
     return { ok: true };
   }
-  // Clearing voice_url tells the carrier to stop forwarding inbound to us.
-  const update = await setIncomingPhoneNumberVoiceUrl({
+  // Detach the calling handler resource so inbound calls stop reaching us.
+  const update = await clearIncomingPhoneNumberCallingHandler({
     sid: num.signalwire_id,
-    voiceUrl: '',
   });
   if (!update.ok) return { ok: false, error: update.error };
   await supabase
