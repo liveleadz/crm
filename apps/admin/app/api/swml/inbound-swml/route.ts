@@ -297,10 +297,13 @@ async function handle(req: NextRequest) {
 
   // Compose the SWML response.
   //
-  // Recording starts INSIDE the connect (record_call action runs after
-  // bridge), so the agent's playback only contains the actual conversation
-  // — no "Connecting your call" TTS, no waiting silence, no ring tones.
-  // Voicemail uses its own record_call inside connect.result on no-answer.
+  // Recording is a top-level `record_call` action BEFORE the connect.
+  // SignalWire's SWML reference does NOT list `record_call` as a sub-
+  // property of `connect`, and putting it there used to make the parser
+  // reject the script and terminate the call in ~1s with no SIP code
+  // (visible in the Calls API as status=failed, duration=1s — the exact
+  // pattern users were seeing as "fail silently"). Recording started
+  // here keeps running through the bridge and ends on hangup.
   const sections: Array<Record<string, unknown>> = [
     { answer: {} },
     { play: { url: 'say:Connecting your call.' } },
@@ -375,39 +378,47 @@ async function handle(req: NextRequest) {
     });
     console.log('[inbound-swml] dispatching to', { ringEmails, addresses });
     if (addresses.length > 0) {
-      // Connect bridges the caller to the agent. record_call lives INSIDE
-      // the connect so the recording only captures the bridge audio (no
-      // ring tones / "connecting your call" prefix). On no-answer or
-      // failure, route to voicemail via connect.result. On a successful
-      // bridge, the call ends when either side hangs up and falls through
-      // to the final hangup (NOT to voicemail).
+      // Start the per-call recording BEFORE we bridge so the agent's
+      // playback covers from the SWML "answer" onward — including the
+      // greeting and bridge — and stops cleanly on hangup. record_call
+      // is its own top-level SWML action (NOT a sub-property of
+      // connect; the connect docs don't list record_call).
+      if (recStatusUrl) {
+        sections.push({
+          record_call: {
+            format: 'mp3',
+            stereo: true,
+            direction: 'both',
+            beep: false,
+            status_url: recStatusUrl,
+          },
+        });
+      }
+      // Connect bridges the caller to the agent. On a successful bridge
+      // (`connect_result == 'connected'`) the call ends naturally and we
+      // fall through to the final hangup. On any failure (no-answer,
+      // busy, declined, hangup, error) we route to voicemail via the
+      // documented `result` cond/then syntax.
       const connectInner: Record<string, unknown> = {
         to: addresses.length === 1 ? addresses[0] : addresses,
         timeout: connectTimeout,
         from: fromNumber !== 'unknown' ? fromNumber : e164,
       };
       if (callStatusUrl) connectInner.status_url = callStatusUrl;
-      if (recStatusUrl) {
-        connectInner.record_call = {
-          format: 'mp3',
-          stereo: true,
-          direction: 'both',
-          beep: false,
-          status_url: recStatusUrl,
-        };
-      }
       if (voicemailActions.length > 0) {
-        // SWML switches over `return_value` (set to "connected" or
-        // "failed" by the connect action) and expects a BARE action
-        // array per case, not { execute: [...] }. The previous shape
-        // was malformed — SignalWire rejected it, the script
-        // erroring out before the connect attempt could stabilize
-        // (which is why the user heard 20s of silence and the browser
-        // never rang). Verified against
-        // https://signalwire.com/docs/swml/reference/switch.
-        connectInner.result = {
-          failed: voicemailActions,
-        };
+        // SWML connect.result accepts either an object (switch shape:
+        // {variable, case}) or an array of {cond, then} blocks. The
+        // previous code used a bare {failed: [...]} shorthand which is
+        // not a documented form — the parser silently rejected it and
+        // the entire SWML script terminated within ~1 second of the
+        // call landing, producing the "fails silently in 1s" bug seen
+        // in the Calls API. Use the documented array+cond form.
+        connectInner.result = [
+          {
+            cond: "{{connect_result == 'failed'}}",
+            then: voicemailActions,
+          },
+        ];
       }
       sections.push({ connect: connectInner });
     } else if (voicemailActions.length > 0) {
