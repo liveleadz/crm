@@ -26,6 +26,7 @@ export type RecentCall = {
   direction: 'inbound' | 'outbound';
   disposition: string | null;
   leadName: string | null;
+  hasRecording: boolean;
 };
 
 export type TodayAppointment = {
@@ -129,7 +130,7 @@ export async function loadDashboard(brandId: string) {
       .eq('brand_id', brandId),
     supabase
       .from('calls')
-      .select('id, started_at, duration_sec, direction, disposition, leads(first_name, last_name)')
+      .select('id, started_at, duration_sec, direction, disposition, recording_url, leads(first_name, last_name)')
       .eq('brand_id', brandId)
       .order('started_at', { ascending: false })
       .limit(5),
@@ -209,6 +210,7 @@ export async function loadDashboard(brandId: string) {
       direction: c.direction,
       disposition: c.disposition,
       leadName: name || null,
+      hasRecording: Boolean(c.recording_url),
     };
   });
 

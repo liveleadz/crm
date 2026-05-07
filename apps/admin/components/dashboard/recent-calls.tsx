@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { RecentCall } from '@/lib/dashboard';
+import { RecordingButton } from '@/components/calls/recording-button';
 
 const DISPOSITION_LABEL: Record<string, string> = {
   connected: 'Connected',
@@ -73,11 +74,18 @@ export function RecentCalls({ calls }: { calls: RecentCall[] }) {
                 key={c.id}
                 className="flex items-center gap-3 rounded-xl p-2.5 hover:bg-surface-2"
               >
-                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-teal/10 text-teal">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <polygon points="5 3 19 12 5 21" />
-                  </svg>
-                </div>
+                {c.hasRecording ? (
+                  <RecordingButton callId={c.id} size="sm" />
+                ) : (
+                  <div
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-teal/10 text-teal opacity-40"
+                    title="No recording available"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="5 3 19 12 5 21" />
+                    </svg>
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 truncate">
                     <span className="truncate text-[12.5px] font-medium">
