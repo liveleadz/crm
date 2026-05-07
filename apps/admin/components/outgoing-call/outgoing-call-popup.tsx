@@ -126,12 +126,18 @@ export function OutgoingCallPopup() {
     dragRef.current = null;
   }, []);
 
+  // Hook MUST be called before any conditional return — otherwise the
+  // hook count changes between renders (popup hidden vs visible) and
+  // React throws "Rendered more hooks than during the previous render",
+  // crashing the component the moment a call starts. That was the
+  // root cause of the popup never appearing for outbound dials.
+  const localTimeLabel = useNowClock();
+
   if (!visible || !target || !pos) return null;
 
   const phone = formatPhone(target.toNumber);
   const headline = target.leadName || 'Unknown';
   const initials = initialsFor(headline === 'Unknown' ? phone : headline);
-  const localTimeLabel = useNowClock();
 
   return (
     <div
@@ -226,11 +232,11 @@ export function OutgoingCallPopup() {
                   label="Message"
                   href={
                     target.leadId
-                      ? (`/leads/${target.leadId}` as unknown as import('next').Route)
+                      ? (`/leads?lead=${target.leadId}` as unknown as import('next').Route)
                       : undefined
                   }
                   disabled={!target.leadId}
-                  hint={target.leadId ? 'Open lead inbox' : 'Lead not linked'}
+                  hint={target.leadId ? 'Open lead profile' : 'Lead not linked'}
                   icon={<MessageIcon />}
                 />
                 <ActionButton

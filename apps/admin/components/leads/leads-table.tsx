@@ -10,8 +10,8 @@
 // pattern shipped on /calls (bulk re-disposition).
 
 import Link from 'next/link';
-import { useMemo, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import type { LeadCard, LeadStage } from '@/lib/leads';
 import type { Tag } from '@/lib/tags';
 import {
@@ -46,9 +46,34 @@ type BulkMode =
 
 export function LeadsTable({ leads, stages, stageById, tagLibrary, team }: Props) {
   const router = useRouter();
-  const [openLeadId, setOpenLeadId] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  // Any link in the app that points at `/leads/{id}` is rewritten by
+  // `app/(app)/leads/[id]/page.tsx` to `/leads?lead={id}`. We pick that
+  // up here and pop the LeadDetailDrawer open so call-popup Message
+  // buttons, Live Floor active-call cards, task rows, etc. all land
+  // on the same drawer experience without a 404.
+  const leadParam = searchParams.get('lead');
+  const [openLeadId, setOpenLeadId] = useState<string | null>(leadParam);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkMode, setBulkMode] = useState<BulkMode>(null);
+
+  // Sync open drawer when the `lead` query param changes (e.g. user
+  // navigates from one lead link to another without a full page refresh).
+  useEffect(() => {
+    if (leadParam) setOpenLeadId(leadParam);
+  }, [leadParam]);
+
+  function closeDrawer() {
+    setOpenLeadId(null);
+    if (leadParam) {
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete('lead');
+      const qs = next.toString();
+      // `replace` so the back button doesn't pogo between open/closed
+      // drawer states.
+      router.replace(qs ? `/leads?${qs}` : '/leads');
+    }
+  }
 
   const allIds = useMemo(() => leads.map((l) => l.id), [leads]);
   const allSelected = selected.size > 0 && selected.size === allIds.length;
@@ -311,7 +336,7 @@ export function LeadsTable({ leads, stages, stageById, tagLibrary, team }: Props
         leadId={openLeadId}
         stages={stages}
         team={team}
-        onClose={() => setOpenLeadId(null)}
+        onClose={closeDrawer}
       />
       {bulkMode && (
         <BulkLeadsModal
