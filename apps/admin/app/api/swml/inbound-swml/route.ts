@@ -95,6 +95,17 @@ async function handle(req: NextRequest) {
 
   const supabase = createAdminClient();
 
+  // SignalWire's call identifier. The same real call gets retried by
+  // the platform when our response is slow or transient 5xxs, and each
+  // retry hit this webhook with the SAME call_id. Without dedup, every
+  // retry inserted a fresh `calls` row + a fresh "Missed call"
+  // notification.
+  const swCallId =
+    pick(callObj, ['call_id', 'id']) ??
+    pick(body, ['CallSid', 'call_id']) ??
+    null;
+
+  // Step 1: resolve the number (everything else needs brand_id/number_id).
   const { data: numberRow } = await supabase
     .from('numbers')
     .select('id, brand_id')
@@ -102,13 +113,39 @@ async function handle(req: NextRequest) {
     .maybeSingle();
   if (!numberRow) return swml(HANGUP_SWML);
 
-  const { data: route } = await supabase
-    .from('inbound_routes')
-    .select(
-      'strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting, last_rung_member_id',
-    )
-    .eq('number_id', numberRow.id)
-    .maybeSingle();
+  // Step 2: fan out the three independent reads — inbound route config,
+  // lead match (for popup + missed-call notification), and dedup probe
+  // (so retries collapse to a single calls row). Sequential fetches were
+  // pushing webhook latency past SignalWire's ~5s budget on cold-start
+  // lambdas, which then triggered the platform's retry storm and the
+  // "8 missed calls per 1 actual call" pattern users saw.
+  const [routeRes, leadRes, dedupRes] = await Promise.all([
+    supabase
+      .from('inbound_routes')
+      .select(
+        'strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting, last_rung_member_id',
+      )
+      .eq('number_id', numberRow.id)
+      .maybeSingle(),
+    fromNumber !== 'unknown'
+      ? supabase
+          .from('leads')
+          .select('id, first_name, last_name, owner_id')
+          .eq('brand_id', numberRow.brand_id)
+          .eq('phone', fromNumber)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    swCallId
+      ? supabase
+          .from('calls')
+          .select('id')
+          .eq('brand_id', numberRow.brand_id)
+          .eq('signalwire_call_id', swCallId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const route = routeRes.data;
+  const lead = leadRes.data;
 
   const strategy = (route?.strategy ?? 'simul') as 'simul' | 'round_robin' | 'single';
   const targetMemberIds = pickTargetsForStrategy(
@@ -117,6 +154,14 @@ async function handle(req: NextRequest) {
     route?.last_rung_member_id ?? null,
   );
 
+  const leadId: string | null = lead?.id ?? null;
+  const leadName = lead
+    ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null
+    : null;
+  const leadOwnerId: string | null = lead?.owner_id ?? null;
+
+  // Step 3: members lookup needs targetMemberIds, so it sequences after
+  // route resolution. Members table is small + indexed on id; one round-trip.
   const ringEmails: string[] = [];
   let nextRotationMemberId: string | null = null;
   if (targetMemberIds.length > 0) {
@@ -142,50 +187,13 @@ async function handle(req: NextRequest) {
       .eq('number_id', numberRow.id);
   }
 
-  // Lead match for attribution + popup data + missed-call notification.
-  let leadId: string | null = null;
-  let leadName: string | null = null;
-  let leadOwnerId: string | null = null;
-  if (fromNumber !== 'unknown') {
-    const { data: lead } = await supabase
-      .from('leads')
-      .select('id, first_name, last_name, owner_id')
-      .eq('brand_id', numberRow.brand_id)
-      .eq('phone', fromNumber)
-      .maybeSingle();
-    leadId = lead?.id ?? null;
-    if (lead) {
-      leadName = [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null;
-      leadOwnerId = lead.owner_id ?? null;
-    }
-  }
-
-  // SignalWire's call identifier. The same real call gets retried by
-  // the platform when our response is slow or transient 5xxs, and each
-  // retry hit this webhook with the SAME call_id. Without dedup, every
-  // retry inserted a fresh `calls` row + a fresh "Missed call"
-  // notification — that's how the Live Floor ended up showing 25
-  // phantom rows for a single real inbound.
-  const swCallId =
-    pick(callObj, ['call_id', 'id']) ??
-    pick(body, ['CallSid', 'call_id']) ??
-    null;
-
+  // Step 4: insert (or skip on retry). Idempotency via signalwire_call_id.
   let callId: string | null = null;
   let isRetry = false;
-  if (swCallId) {
-    const { data: existing } = await supabase
-      .from('calls')
-      .select('id')
-      .eq('brand_id', numberRow.brand_id)
-      .eq('signalwire_call_id', swCallId)
-      .maybeSingle();
-    if (existing?.id) {
-      callId = existing.id;
-      isRetry = true;
-    }
-  }
-  if (!callId) {
+  if (dedupRes.data?.id) {
+    callId = dedupRes.data.id;
+    isRetry = true;
+  } else {
     const { data: callRow } = await supabase
       .from('calls')
       .insert({
@@ -281,17 +289,43 @@ async function handle(req: NextRequest) {
   }
 
   if (ringEmails.length > 0) {
-    const lookups = await Promise.all(
-      ringEmails.map((email) => findSubscriberAudioAddress(email)),
-    );
+    // SignalWire auto-provisions a Subscriber for each email and names the
+    // resource after the email's local-part. When the local-part is already
+    // a safe resource name ([a-z0-9_-]+), we can dispatch to /private/<lp>
+    // directly without round-tripping the Fabric API — saves 200-500ms per
+    // webhook on cold starts, which is exactly the budget we were busting
+    // before (causing platform retries + the duplicate-notification storm).
+    // Only fall back to the API lookup for emails whose local-part contains
+    // characters SignalWire sanitizes on provision (dots, plus, etc.).
+    const SAFE_LOCAL_PART = /^[a-z0-9_-]+$/;
+    const directAddresses: (string | null)[] = ringEmails.map((email) => {
+      const lp = email.split('@')[0] ?? '';
+      return SAFE_LOCAL_PART.test(lp) ? `/private/${lp}` : null;
+    });
+    const needsLookup = directAddresses
+      .map((a, i) => (a ? -1 : i))
+      .filter((i) => i >= 0);
+    const lookups = needsLookup.length
+      ? await Promise.all(
+          needsLookup.map((i) => findSubscriberAudioAddress(ringEmails[i]!)),
+        )
+      : [];
     const addresses: string[] = [];
     ringEmails.forEach((email, i) => {
-      const addr = lookups[i];
-      if (addr) {
-        addresses.push(addr);
+      const direct = directAddresses[i];
+      if (direct) {
+        addresses.push(direct);
+        return;
+      }
+      const lookupIdx = needsLookup.indexOf(i);
+      const looked = lookupIdx >= 0 ? lookups[lookupIdx] : null;
+      if (looked) {
+        addresses.push(looked);
       } else {
-        const localPart = email.split('@')[0];
-        if (localPart) addresses.push(`/private/${localPart}`);
+        // Last-resort fallback: still try the local-part. Better to attempt
+        // a dispatch that may miss than to drop the call to voicemail.
+        const lp = email.split('@')[0];
+        if (lp) addresses.push(`/private/${lp}`);
       }
     });
     console.log('[inbound-swml] dispatching to', addresses);
