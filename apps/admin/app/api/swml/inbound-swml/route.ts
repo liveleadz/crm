@@ -80,29 +80,43 @@ async function handle(req: NextRequest) {
     url.searchParams.get('from');
 
   const e164 = toRaw ? toE164(toRaw) : null;
-  // Server-side log so SignalWire's exact request shape is visible in
-  // Vercel logs the first time a real call hits.
+  // Verbose log of every relevant field so we can see exactly what shape
+  // SignalWire is sending. Truncated to keep log lines small but covers
+  // call.* meta (parent_id / segment_id / state) we may need for dedup.
   console.log('[inbound-swml] hit', {
     ct: req.headers.get('content-type'),
     rawLen: raw.length,
-    body: raw.slice(0, 400),
+    body: raw.slice(0, 800),
     parsedTo: toRaw,
     parsedFrom: fromRaw,
     resolvedE164: e164,
+    callKeys: Object.keys(callObj),
+    bodyKeys: Object.keys(body),
+    state: pick(callObj, ['state', 'call_state']),
+    parentId: pick(callObj, ['parent_id', 'parent_call_id']),
+    segmentId: pick(callObj, ['segment_id']),
+    tag: pick(callObj, ['tag']),
   });
   if (!e164) return swml(HANGUP_SWML);
   const fromNumber = fromRaw ? toE164(fromRaw) ?? fromRaw : 'unknown';
 
   const supabase = createAdminClient();
 
-  // SignalWire's call identifier. The same real call gets retried by
-  // the platform when our response is slow or transient 5xxs, and each
-  // retry hit this webhook with the SAME call_id. Without dedup, every
-  // retry inserted a fresh `calls` row + a fresh "Missed call"
-  // notification.
+  // SignalWire's call identifiers. Observed in production: the platform
+  // invokes our SWML script multiple times for a single inbound PSTN
+  // call (one hit every ~2-3s for the duration of ringing), each with a
+  // BRAND-NEW call_id. So dedup on call_id alone is insufficient. We
+  // also check for a parent/segment identifier (stable across fan-in if
+  // the body exposes one) and fall back to a 30-second time-window
+  // dedup keyed on (brand_id, from_number) — collapsing the storm even
+  // when the platform gives us no stable ID.
   const swCallId =
     pick(callObj, ['call_id', 'id']) ??
     pick(body, ['CallSid', 'call_id']) ??
+    null;
+  const swParentId =
+    pick(callObj, ['parent_id', 'parent_call_id']) ??
+    pick(body, ['parent_call_sid']) ??
     null;
 
   // Step 1: resolve the number (everything else needs brand_id/number_id).
@@ -135,14 +149,47 @@ async function handle(req: NextRequest) {
           .eq('phone', fromNumber)
           .maybeSingle()
       : Promise.resolve({ data: null }),
-    swCallId
-      ? supabase
+    // Dedup probe: prefer the parent/segment ID if SignalWire exposed one,
+    // then exact call_id, then a 30-second time window keyed on the caller.
+    // The window catches the observed fan-in pattern (multiple webhook
+    // hits with new call_ids for a single real PSTN call) without
+    // accidentally swallowing legitimate quick callbacks (>30s apart).
+    (async () => {
+      if (swParentId) {
+        const r = await supabase
+          .from('calls')
+          .select('id')
+          .eq('brand_id', numberRow.brand_id)
+          .eq('signalwire_call_id', swParentId)
+          .maybeSingle();
+        if (r.data?.id) return r;
+      }
+      if (swCallId) {
+        const r = await supabase
           .from('calls')
           .select('id')
           .eq('brand_id', numberRow.brand_id)
           .eq('signalwire_call_id', swCallId)
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
+          .maybeSingle();
+        if (r.data?.id) return r;
+      }
+      if (fromNumber !== 'unknown') {
+        const cutoff = new Date(Date.now() - 30_000).toISOString();
+        const r = await supabase
+          .from('calls')
+          .select('id')
+          .eq('brand_id', numberRow.brand_id)
+          .eq('direction', 'inbound')
+          .eq('from_number', fromNumber)
+          .eq('to_number', e164)
+          .gte('started_at', cutoff)
+          .order('started_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        return r;
+      }
+      return { data: null } as { data: { id: string } | null };
+    })(),
   ]);
   const route = routeRes.data;
   const lead = leadRes.data;
