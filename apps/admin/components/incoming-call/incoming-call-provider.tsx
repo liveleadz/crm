@@ -119,7 +119,10 @@ export function IncomingCallProvider({
     (async () => {
       try {
         const tokenRes = await fetch('/api/signalwire/token', { method: 'POST' });
-        if (!tokenRes.ok) return; // not signed in or env not set — silently skip
+        if (!tokenRes.ok) {
+          console.warn('[incoming-call] SAT token request failed', tokenRes.status);
+          return; // not signed in or env not set — silently skip
+        }
         const { token } = (await tokenRes.json()) as { token?: string };
         if (!token || cancelled) return;
 
@@ -133,6 +136,11 @@ export function IncomingCallProvider({
         await client.online({
           incomingCallHandlers: {
             all: ((notification: unknown) => {
+              // Log every invite so DevTools shows what we receive even if
+              // the popup state machine has a bug. If you call your number
+              // and never see this line in console, the dispatch address
+              // in SWML doesn't match this subscriber's Fabric resource.
+              console.log('[incoming-call] invite received', notification);
               const inv = (notification as { invite?: LooseInvite })?.invite;
               if (!inv) return;
               const details = inv.details ?? {};
@@ -169,6 +177,7 @@ export function IncomingCallProvider({
             }) as never,
           },
         });
+        console.log('[incoming-call] subscriber online — ready to receive calls');
       } catch (e) {
         // Don't crash the app shell if the SDK fails to init — features
         // outside inbound calls keep working.

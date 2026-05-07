@@ -336,56 +336,35 @@ async function handle(req: NextRequest) {
   }
 
   if (ringEmails.length > 0) {
-    // SignalWire auto-provisions a Subscriber for each email and names the
-    // resource after the email's local-part. When the local-part is already
-    // a safe resource name ([a-z0-9_-]+), we can dispatch to /private/<lp>
-    // directly without round-tripping the Fabric API — saves 200-500ms per
-    // webhook on cold starts, which is exactly the budget we were busting
-    // before (causing platform retries + the duplicate-notification storm).
-    // Only fall back to the API lookup for emails whose local-part contains
-    // characters SignalWire sanitizes on provision (dots, plus, etc.).
-    // CRITICAL: every dispatch address MUST end with `?channel=audio`.
-    // SignalWire Fabric resources expose two channels (audio + video). Without
-    // an explicit channel hint, Fabric defaults to video routing — and our
-    // browser handler accepts audio-only (`audio: true, video: false`), so the
-    // invite never reaches the WS subscriber. Result: 20s of silence, no
-    // ringing popup, fallthrough to voicemail. The Fabric API returns the
-    // canonical form `/private/<name>?channel=audio` from
-    // findSubscriberAudioAddress; we mirror that here for the perf shortcut.
-    const SAFE_LOCAL_PART = /^[a-z0-9_-]+$/;
-    const directAddresses: (string | null)[] = ringEmails.map((email) => {
-      const lp = email.split('@')[0] ?? '';
-      return SAFE_LOCAL_PART.test(lp) ? `/private/${lp}?channel=audio` : null;
-    });
-    const needsLookup = directAddresses
-      .map((a, i) => (a ? -1 : i))
-      .filter((i) => i >= 0);
-    const lookups = needsLookup.length
-      ? await Promise.all(
-          needsLookup.map((i) => findSubscriberAudioAddress(ringEmails[i]!)),
-        )
-      : [];
+    // Resolve each member's canonical audio dispatch address from the
+    // Fabric API (cached in-process for 1h). The previous "name === local
+    // part" shortcut was unverified and silently misrouted the connect
+    // when the auto-provisioned resource name differed from `<lp>` —
+    // Fabric would then time out the bridge after ~20s and never
+    // deliver a verto.invite to the WS-online subscriber, which is what
+    // the user kept seeing as "rings silently then hangs up, no popup".
+    // Going through findSubscriberAudioAddress trades 200-500ms on a
+    // cold cache for correctness; warm cache hits are free.
+    const lookups = await Promise.all(
+      ringEmails.map((email) => findSubscriberAudioAddress(email)),
+    );
     const addresses: string[] = [];
     ringEmails.forEach((email, i) => {
-      const direct = directAddresses[i];
-      if (direct) {
-        addresses.push(direct);
+      const looked = lookups[i];
+      if (looked) {
+        // findSubscriberAudioAddress now always returns ?channel=audio,
+        // but be defensive in case Fabric ever returns the bare name.
+        addresses.push(looked.includes('channel=') ? looked : `${looked}?channel=audio`);
         return;
       }
-      const lookupIdx = needsLookup.indexOf(i);
-      const looked = lookupIdx >= 0 ? lookups[lookupIdx] : null;
-      if (looked) {
-        // findSubscriberAudioAddress already returns ?channel=audio, but be
-        // defensive in case the helper falls back to addr.name without it.
-        addresses.push(looked.includes('channel=') ? looked : `${looked}?channel=audio`);
-      } else {
-        // Last-resort fallback: still try the local-part. Better to attempt
-        // a dispatch that may miss than to drop the call to voicemail.
-        const lp = email.split('@')[0];
-        if (lp) addresses.push(`/private/${lp}?channel=audio`);
-      }
+      // Last-resort fallback: try the local-part. We KNOW this is
+      // unreliable (the whole reason for the lookup), but a guess is
+      // still better than dropping the call straight to voicemail when
+      // Fabric is briefly down.
+      const lp = email.split('@')[0];
+      if (lp) addresses.push(`/private/${lp}?channel=audio`);
     });
-    console.log('[inbound-swml] dispatching to', addresses);
+    console.log('[inbound-swml] dispatching to', { ringEmails, addresses });
     if (addresses.length > 0) {
       // Connect bridges the caller to the agent. record_call lives INSIDE
       // the connect so the recording only captures the bridge audio (no

@@ -118,19 +118,30 @@ export async function lookupCnam(e164: string): Promise<SwResult<CnamLookupResul
 
 /**
  * Look up the Call Fabric audio address for a Subscriber identified by its
- * email reference. Auto-provisioned subscribers get a resource address
- * whose `name` is the local-part of the email (everything before @), NOT
- * the full email — so a SWML connect.to for "/private/email@host" fails
- * silently. This helper hits the Fabric API, finds the matching
- * subscriber resource, and returns its canonical `/private/<name>` address.
+ * email reference. The canonical audio address (returned by the Fabric API
+ * as `addresses[].channels.audio`) is the only string that reliably routes
+ * a SWML connect.to to a WS-online subscriber — guessing the local-part is
+ * NOT reliable (auto-provisioned resource names don't always match what we
+ * assume). When dispatch goes to a wrong address, Fabric silently times
+ * out the connect (~15-20s) and the browser never sees an invite.
+ *
+ * Cached in-process so warm lambdas don't repay the 200-500ms lookup on
+ * every inbound webhook. Cache key is the lowercased email; TTL is 1h
+ * (long enough to amortize, short enough that a deleted/re-provisioned
+ * subscriber recovers without a redeploy).
  *
  * Returns null if no subscriber matches or the API call fails.
  */
+const audioAddressCache = new Map<string, { addr: string; expiresAt: number }>();
+const AUDIO_ADDRESS_TTL_MS = 60 * 60 * 1000;
+
 export async function findSubscriberAudioAddress(email: string): Promise<string | null> {
   const auth = basicAuth();
   const space = spaceUrl();
   if (!auth || !space) return null;
   const target = email.toLowerCase();
+  const cached = audioAddressCache.get(target);
+  if (cached && cached.expiresAt > Date.now()) return cached.addr;
   let url: string | null = `https://${space}/api/fabric/resources/subscribers?page_size=50`;
   while (url) {
     let res: Response;
@@ -169,12 +180,19 @@ export async function findSubscriberAudioAddress(email: string): Promise<string 
           | { data?: Array<{ name: string; channels?: { audio?: string } }> }
           | null;
         const addr = aJson?.data?.[0];
-        if (addr?.channels?.audio) return addr.channels.audio;
-        if (addr?.name) return `/private/${addr.name}`;
+        let resolved: string | null = null;
+        if (addr?.channels?.audio) resolved = addr.channels.audio;
+        else if (addr?.name) resolved = `/private/${addr.name}?channel=audio`;
+        if (resolved) {
+          audioAddressCache.set(target, {
+            addr: resolved,
+            expiresAt: Date.now() + AUDIO_ADDRESS_TTL_MS,
+          });
+        }
+        return resolved;
       } catch {
         return null;
       }
-      return null;
     }
     url = json.links?.next ?? null;
   }
