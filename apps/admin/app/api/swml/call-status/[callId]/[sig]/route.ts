@@ -74,14 +74,20 @@ export async function POST(
     sip_response?: number | null;
     hangup_cause?: string | null;
     stir_attestation?: 'A' | 'B' | 'C' | null;
+    ended_at?: string;
   } = {};
   if (sipResponse !== null) patch.sip_response = sipResponse;
   if (hangupCause) patch.hangup_cause = hangupCause;
   if (stir) patch.stir_attestation = stir;
+  // Always close the row when SignalWire pings the status webhook — it
+  // fires on call termination, so this is the canonical "call ended"
+  // signal. Without this the Live Floor would show "active" rows
+  // forever for any call that didn't bridge into a recording. The
+  // recording / voicemail webhooks may also set ended_at slightly
+  // earlier; their value is good enough either way (seconds apart).
+  patch.ended_at = new Date().toISOString();
 
-  if (Object.keys(patch).length > 0) {
-    await supabase.from('calls').update(patch).eq('id', callId);
-  }
+  await supabase.from('calls').update(patch).eq('id', callId);
 
   return NextResponse.json({ ok: true });
 }

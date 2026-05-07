@@ -20,7 +20,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { after } from 'next/server';
 import { createAdminClient } from '@leadpilot/db/admin';
-import { signRecordingPath, signVoicemailPath } from '@/lib/dial-token';
+import { signCallStatusPath, signRecordingPath, signVoicemailPath } from '@/lib/dial-token';
 import { getPublicAppUrl, toE164 } from '@/lib/dialer';
 import { runAutomations } from '@/lib/automation-engine';
 import { findSubscriberAudioAddress } from '@/lib/signalwire';
@@ -310,6 +310,15 @@ async function handle(req: NextRequest) {
     callId && recSig
       ? `${getPublicAppUrl()}/api/swml/recording/${callId}/${recSig}`
       : null;
+  // Per-call termination webhook. Without this, the connect leg ending
+  // (timeout, refused, completed) produces no signal and the calls row
+  // stays "active" forever — every aborted inbound used to pile up on
+  // the Live Floor. Outbound dial route already wires this up; mirror it.
+  const csSig = callId ? signCallStatusPath(callId) : null;
+  const callStatusUrl =
+    callId && csSig
+      ? `${getPublicAppUrl()}/api/swml/call-status/${callId}/${csSig}`
+      : null;
 
   // Shorter timeout than configured so callers don't sit in silence too
   // long when no agent is online — voicemail kicks in faster.
@@ -377,6 +386,7 @@ async function handle(req: NextRequest) {
         timeout: connectTimeout,
         from: fromNumber !== 'unknown' ? fromNumber : e164,
       };
+      if (callStatusUrl) connectInner.status_url = callStatusUrl;
       if (recStatusUrl) {
         connectInner.record_call = {
           format: 'mp3',
