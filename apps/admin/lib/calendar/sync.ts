@@ -44,7 +44,7 @@ async function loadCalendar(calendarId: string) {
   const { data } = await admin
     .from('calendars')
     .select(
-      'id, ext_provider, ext_calendar_id, owner_member_id, is_active',
+      'id, ext_provider, ext_calendar_id, owner_member_id, owner_account_id, is_active',
     )
     .eq('id', calendarId)
     .maybeSingle();
@@ -74,7 +74,10 @@ export async function pushAppointment(appointmentId: string): Promise<void> {
     return;
   }
 
-  if (cal.ext_provider !== 'google') {
+  if (cal.ext_provider !== 'google' || !cal.owner_account_id) {
+    // Either provider isn't supported, or the calendar's OAuth account
+    // got disconnected. Either way mark failed so the cron can retry
+    // (and surface the error once the owner re-binds).
     await setExt(appointmentId, { ext_status: 'failed' });
     return;
   }
@@ -83,7 +86,7 @@ export async function pushAppointment(appointmentId: string): Promise<void> {
     const event = asEventInput(appt);
     if (appt.ext_event_id) {
       const result = await google.patchEvent({
-        memberId: cal.owner_member_id,
+        accountId: cal.owner_account_id,
         extCalendarId: cal.ext_calendar_id,
         extEventId: appt.ext_event_id,
         event,
@@ -96,7 +99,7 @@ export async function pushAppointment(appointmentId: string): Promise<void> {
       });
     } else {
       const result = await google.pushEvent({
-        memberId: cal.owner_member_id,
+        accountId: cal.owner_account_id,
         extCalendarId: cal.ext_calendar_id,
         event,
       });
@@ -119,10 +122,17 @@ export async function deleteExternalEvent(input: {
 }): Promise<void> {
   if (!input.extEventId) return;
   const cal = await loadCalendar(input.calendarId);
-  if (!cal || cal.ext_provider !== 'google' || !cal.ext_calendar_id || !cal.owner_member_id) return;
+  if (
+    !cal ||
+    cal.ext_provider !== 'google' ||
+    !cal.ext_calendar_id ||
+    !cal.owner_account_id
+  ) {
+    return;
+  }
   try {
     await google.deleteEvent({
-      memberId: cal.owner_member_id,
+      accountId: cal.owner_account_id,
       extCalendarId: cal.ext_calendar_id,
       extEventId: input.extEventId,
     });
@@ -144,7 +154,8 @@ export async function pullCalendar(calendarId: string): Promise<{
     !cal.is_active ||
     cal.ext_provider !== 'google' ||
     !cal.ext_calendar_id ||
-    !cal.owner_member_id
+    !cal.owner_member_id ||
+    !cal.owner_account_id
   ) {
     return { upserts: 0, removes: 0 };
   }
@@ -163,7 +174,7 @@ export async function pullCalendar(calendarId: string): Promise<{
   let removes = 0;
 
   const { events, nextSyncToken } = await google.listDelta({
-    memberId: cal.owner_member_id,
+    accountId: cal.owner_account_id,
     extCalendarId: cal.ext_calendar_id,
     syncToken: tokRow?.ext_sync_token ?? null,
   });

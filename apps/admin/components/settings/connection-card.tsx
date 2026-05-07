@@ -1,7 +1,7 @@
 'use client';
 
 import { useTransition } from 'react';
-import { disconnectProvider } from '@/app/actions/integrations';
+import { disconnectOAuthAccount } from '@/app/actions/oauth-accounts';
 
 const LABELS = {
   google: 'Google',
@@ -9,31 +9,43 @@ const LABELS = {
 
 type Provider = keyof typeof LABELS;
 
+// Per-account connection card. When `accountId` is set, Disconnect targets
+// only that single OAuth account; when null (no account connected yet), the
+// whole card collapses to a single "Connect" button. The all-accounts nuke
+// path (disconnectProvider) is only used by the unconnected → confirm flow
+// is no longer surfaced — users disconnect accounts individually now.
 export function ConnectionCard({
   provider,
-  connected,
+  accountId,
   accountEmail,
   scopes,
+  isPrimary,
 }: {
   provider: Provider;
-  connected: boolean;
+  accountId: string | null;
   accountEmail: string | null;
   scopes: string[];
+  isPrimary?: boolean;
 }) {
   const [pending, start] = useTransition();
   const ret = encodeURIComponent('/settings/connections');
-  // Top-tier CRM default: a single Connect button always grants the full
-  // (calendar + email) scope set. 'Add email' shows up only when the user
-  // connected during Phase 1 with calendar-only and hasn't re-granted yet.
+  // Connect/Reconnect always asks for the email-superset scope; Google's
+  // consent screen lets the user untick scopes if they want calendar-only.
   const startUrl = `/api/oauth/${provider}/start?intent=email&return_to=${ret}`;
+  const connected = !!accountId;
   const hasEmail = scopes.includes('email');
 
   function disconnect() {
-    if (!window.confirm(`Disconnect ${LABELS[provider]}? Calendars and email owned by you will stop syncing.`)) {
+    if (!accountId) return;
+    if (
+      !window.confirm(
+        `Disconnect ${accountEmail ?? LABELS[provider]}? Calendars bound to this account will stop syncing.`,
+      )
+    ) {
       return;
     }
     start(async () => {
-      await disconnectProvider({ provider });
+      await disconnectOAuthAccount({ accountId });
     });
   }
 
@@ -51,7 +63,14 @@ export function ConnectionCard({
           </svg>
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold">{LABELS[provider]}</div>
+          <div className="flex items-center gap-2">
+            <div className="text-[13px] font-semibold">{LABELS[provider]}</div>
+            {isPrimary && connected && (
+              <span className="rounded-full border border-line px-1.5 py-0.5 text-[10px] font-medium text-txt-3">
+                primary
+              </span>
+            )}
+          </div>
           <div className="truncate text-[11.5px] text-txt-3">
             {connected
               ? accountEmail || 'Connected'
@@ -73,7 +92,7 @@ export function ConnectionCard({
         <div className="flex shrink-0 items-center gap-2">
           {connected ? (
             <>
-              {!hasEmail && (
+              {!hasEmail && isPrimary && (
                 <a
                   href={startUrl}
                   className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90"

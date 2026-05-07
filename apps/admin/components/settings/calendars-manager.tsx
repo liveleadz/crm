@@ -109,6 +109,8 @@ function AddCalendar({
         color,
         ownerMemberId: ownerMemberId || null,
         ownerName: owner?.fullName?.trim() || owner?.email || null,
+        ownerAccountId: null,
+        ownerAccountEmail: null,
         extProvider: null,
         extCalendarId: null,
         extLastSyncAt: null,
@@ -265,7 +267,13 @@ function CalendarItem({
     start(async () => {
       const res = await unbindCalendar({ calendarId: cal.id });
       if (!res.ok) onError(res.error);
-      else onChange({ extProvider: null, extCalendarId: null });
+      else
+        onChange({
+          extProvider: null,
+          extCalendarId: null,
+          ownerAccountId: null,
+          ownerAccountEmail: null,
+        });
     });
   }
 
@@ -359,6 +367,9 @@ function CalendarItem({
                 <span className="rounded-full bg-teal/10 px-2 py-0.5 text-[11px] font-medium text-teal">
                   {cal.extProvider} · {cal.extCalendarId?.slice(0, 24)}…
                 </span>
+                {cal.ownerAccountEmail && (
+                  <span className="text-[11px] text-txt-3">via {cal.ownerAccountEmail}</span>
+                )}
                 <button
                   type="button"
                   onClick={() => setShowBind(true)}
@@ -395,8 +406,13 @@ function CalendarItem({
             <BindPicker
               calendarId={cal.id}
               onClose={() => setShowBind(false)}
-              onBound={(provider, extCalendarId) => {
-                onChange({ extProvider: provider, extCalendarId });
+              onBound={(provider, extCalendarId, accountId, accountEmail) => {
+                onChange({
+                  extProvider: provider,
+                  extCalendarId,
+                  ownerAccountId: accountId,
+                  ownerAccountEmail: accountEmail,
+                });
                 setShowBind(false);
               }}
               onError={onError}
@@ -408,6 +424,12 @@ function CalendarItem({
   );
 }
 
+type AccountChoice = { id: string; accountEmail: string };
+type ExtCal = { id: string; name: string; primary: boolean };
+
+// Two-step bind picker. If the calendar's owner has multiple connected
+// Google accounts, step 1 is the account chooser. Step 2 is the calendar
+// list for the chosen account. With a single account we skip step 1.
 function BindPicker({
   calendarId,
   onClose,
@@ -416,10 +438,17 @@ function BindPicker({
 }: {
   calendarId: string;
   onClose: () => void;
-  onBound: (provider: 'google', extCalendarId: string) => void;
+  onBound: (
+    provider: 'google',
+    extCalendarId: string,
+    accountId: string,
+    accountEmail: string,
+  ) => void;
   onError: (msg: string) => void;
 }) {
-  const [items, setItems] = useState<{ id: string; name: string; primary: boolean }[] | null>(null);
+  const [accounts, setAccounts] = useState<AccountChoice[]>([]);
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [items, setItems] = useState<ExtCal[] | null>(null);
   const [provider, setProvider] = useState<'google' | null>(null);
   const [loading, setLoading] = useState(true);
   const [, start] = useTransition();
@@ -436,7 +465,12 @@ function BindPicker({
         return;
       }
       setProvider(res.provider);
-      setItems(res.items);
+      setAccounts(res.accounts);
+      if (res.items) {
+        // Single account → action returned calendars directly.
+        setAccountId(res.accounts[0]?.id ?? null);
+        setItems(res.items);
+      }
     })();
     return () => {
       cancelled = true;
@@ -444,22 +478,55 @@ function BindPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calendarId]);
 
+  async function chooseAccount(id: string) {
+    setLoading(true);
+    setAccountId(id);
+    const res = await listOwnerExternalCalendars({ calendarId, accountId: id });
+    setLoading(false);
+    if (!res.ok) {
+      onError(res.error);
+      return;
+    }
+    setItems(res.items ?? []);
+  }
+
   function pick(extCalendarId: string) {
-    if (!provider) return;
+    if (!provider || !accountId) return;
+    const account = accounts.find((a) => a.id === accountId);
+    if (!account) return;
     start(async () => {
-      const res = await bindCalendarToProvider({ calendarId, provider, extCalendarId });
+      const res = await bindCalendarToProvider({
+        calendarId,
+        provider,
+        extCalendarId,
+        accountId,
+      });
       if (!res.ok) {
         onError(res.error);
         return;
       }
-      onBound(provider, extCalendarId);
+      onBound(provider, extCalendarId, accountId, account.accountEmail);
     });
   }
 
   return (
     <div className="rounded-xl border border-line bg-canvas p-3">
       <div className="mb-2 flex items-center gap-2">
-        <span className="text-[12px] font-semibold">Pick a calendar</span>
+        <span className="text-[12px] font-semibold">
+          {items === null ? 'Pick an account' : 'Pick a calendar'}
+        </span>
+        {accountId && items !== null && accounts.length > 1 && (
+          <button
+            type="button"
+            onClick={() => {
+              setItems(null);
+              setAccountId(null);
+            }}
+            className="rounded-md px-2 py-0.5 text-[11px] text-txt-3 hover:bg-surface-2"
+          >
+            ← Change account
+          </button>
+        )}
         <button
           type="button"
           onClick={onClose}
@@ -468,8 +535,22 @@ function BindPicker({
           Cancel
         </button>
       </div>
-      {loading || !items ? (
+      {loading ? (
         <div className="text-[12px] text-txt-3">Loading…</div>
+      ) : items === null ? (
+        <ul className="space-y-1">
+          {accounts.map((a) => (
+            <li key={a.id}>
+              <button
+                type="button"
+                onClick={() => chooseAccount(a.id)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-surface-2"
+              >
+                <span className="truncate">{a.accountEmail}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
       ) : items.length === 0 ? (
         <div className="text-[12px] text-txt-3">No calendars available on this account.</div>
       ) : (

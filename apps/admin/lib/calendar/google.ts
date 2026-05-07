@@ -1,5 +1,5 @@
 import 'server-only';
-import { ensureFreshGoogleToken } from '@/lib/oauth/google';
+import { ensureFreshGoogleTokenForAccount } from '@/lib/oauth/google';
 
 const BASE = 'https://www.googleapis.com/calendar/v3';
 
@@ -40,9 +40,14 @@ async function authedFetch(token: string, url: string, init?: RequestInit) {
   });
 }
 
-export async function listMyCalendars(memberId: string): Promise<GoogleCalListItem[]> {
-  const token = await ensureFreshGoogleToken(memberId);
-  if (!token) throw new Error('No Google token for member');
+async function tokenForAccount(accountId: string): Promise<string> {
+  const token = await ensureFreshGoogleTokenForAccount(accountId);
+  if (!token) throw new Error(`No Google token for account ${accountId}`);
+  return token;
+}
+
+export async function listMyCalendars(accountId: string): Promise<GoogleCalListItem[]> {
+  const token = await tokenForAccount(accountId);
   const res = await authedFetch(token, `${BASE}/users/me/calendarList`);
   if (!res.ok) throw new Error(`google list calendars: ${res.status}`);
   const json = (await res.json()) as { items?: GoogleCalListItem[] };
@@ -60,12 +65,11 @@ function eventBody(e: GoogleEventInput) {
 }
 
 export async function pushEvent(input: {
-  memberId: string;
+  accountId: string;
   extCalendarId: string;
   event: GoogleEventInput;
 }): Promise<{ id: string; etag?: string }> {
-  const token = await ensureFreshGoogleToken(input.memberId);
-  if (!token) throw new Error('No Google token for member');
+  const token = await tokenForAccount(input.accountId);
   const res = await authedFetch(
     token,
     `${BASE}/calendars/${encodeURIComponent(input.extCalendarId)}/events`,
@@ -80,14 +84,13 @@ export async function pushEvent(input: {
 }
 
 export async function patchEvent(input: {
-  memberId: string;
+  accountId: string;
   extCalendarId: string;
   extEventId: string;
   event: GoogleEventInput;
   etag?: string | null;
 }): Promise<{ id: string; etag?: string }> {
-  const token = await ensureFreshGoogleToken(input.memberId);
-  if (!token) throw new Error('No Google token for member');
+  const token = await tokenForAccount(input.accountId);
   const res = await authedFetch(
     token,
     `${BASE}/calendars/${encodeURIComponent(input.extCalendarId)}/events/${encodeURIComponent(input.extEventId)}`,
@@ -106,12 +109,11 @@ export async function patchEvent(input: {
 }
 
 export async function deleteEvent(input: {
-  memberId: string;
+  accountId: string;
   extCalendarId: string;
   extEventId: string;
 }): Promise<void> {
-  const token = await ensureFreshGoogleToken(input.memberId);
-  if (!token) throw new Error('No Google token for member');
+  const token = await tokenForAccount(input.accountId);
   const res = await authedFetch(
     token,
     `${BASE}/calendars/${encodeURIComponent(input.extCalendarId)}/events/${encodeURIComponent(input.extEventId)}`,
@@ -129,12 +131,11 @@ export async function deleteEvent(input: {
 // timeMin or syncToken. The look-back ensures appointments earlier on
 // the same day (or recently) are imported, not just future events.
 export async function listDelta(input: {
-  memberId: string;
+  accountId: string;
   extCalendarId: string;
   syncToken: string | null;
 }): Promise<{ events: GoogleEvent[]; nextSyncToken: string | null }> {
-  const token = await ensureFreshGoogleToken(input.memberId);
-  if (!token) throw new Error('No Google token for member');
+  const token = await tokenForAccount(input.accountId);
 
   const events: GoogleEvent[] = [];
   let pageToken: string | undefined;

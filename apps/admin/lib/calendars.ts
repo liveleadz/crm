@@ -8,6 +8,8 @@ export type CalendarRow = {
   color: string | null;
   ownerMemberId: string | null;
   ownerName: string | null;
+  ownerAccountId: string | null;
+  ownerAccountEmail: string | null;
   extProvider: 'google' | null;
   extCalendarId: string | null;
   extLastSyncAt: string | null;
@@ -30,12 +32,32 @@ type RawCal = {
   name: string;
   color: string | null;
   owner_member_id: string | null;
+  owner_account_id: string | null;
   ext_provider: string | null;
   ext_calendar_id: string | null;
   ext_last_sync_at: string | null;
   default_duration_min: number;
   is_active: boolean;
 };
+
+const CAL_SELECT =
+  'id, brand_id, name, color, owner_member_id, owner_account_id, ext_provider, ext_calendar_id, ext_last_sync_at, default_duration_min, is_active';
+
+async function loadAccountEmails(
+  accountIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (accountIds.length === 0) return out;
+  const supabase = await createServerClient();
+  const { data } = await supabase
+    .from('member_oauth_accounts')
+    .select('id, account_email')
+    .in('id', accountIds);
+  for (const r of data ?? []) {
+    if (r.account_email) out.set(r.id, r.account_email);
+  }
+  return out;
+}
 
 async function hydrateMembers(
   calendarIds: string[],
@@ -76,6 +98,7 @@ async function hydrateMembers(
 function shapeCalendar(
   raw: RawCal,
   ownerName: string | null,
+  ownerAccountEmail: string | null,
   members: CalendarMemberRow[],
 ): CalendarRow {
   return {
@@ -85,6 +108,8 @@ function shapeCalendar(
     color: raw.color,
     ownerMemberId: raw.owner_member_id,
     ownerName,
+    ownerAccountId: raw.owner_account_id,
+    ownerAccountEmail,
     extProvider: raw.ext_provider === 'google' ? 'google' : null,
     extCalendarId: raw.ext_calendar_id,
     extLastSyncAt: raw.ext_last_sync_at,
@@ -98,9 +123,7 @@ export async function loadBrandCalendars(brandId: string): Promise<CalendarRow[]
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('calendars')
-    .select(
-      'id, brand_id, name, color, owner_member_id, ext_provider, ext_calendar_id, ext_last_sync_at, default_duration_min, is_active',
-    )
+    .select(CAL_SELECT)
     .eq('brand_id', brandId)
     .order('name', { ascending: true });
   const rows = (data ?? []) as RawCal[];
@@ -119,9 +142,18 @@ export async function loadBrandCalendars(brandId: string): Promise<CalendarRow[]
       ownerNames.set(m.id, m.full_name?.trim() || m.email || 'Unknown');
     }
   }
+  const accountIds = Array.from(
+    new Set(rows.map((r) => r.owner_account_id).filter((a): a is string => !!a)),
+  );
+  const accountEmails = await loadAccountEmails(accountIds);
   const memberMap = await hydrateMembers(rows.map((r) => r.id));
   return rows.map((r) =>
-    shapeCalendar(r, r.owner_member_id ? ownerNames.get(r.owner_member_id) ?? null : null, memberMap.get(r.id) ?? []),
+    shapeCalendar(
+      r,
+      r.owner_member_id ? ownerNames.get(r.owner_member_id) ?? null : null,
+      r.owner_account_id ? accountEmails.get(r.owner_account_id) ?? null : null,
+      memberMap.get(r.id) ?? [],
+    ),
   );
 }
 
@@ -140,9 +172,7 @@ export async function loadAssignedCalendars(
   if (ids.length === 0) return [];
   const { data } = await supabase
     .from('calendars')
-    .select(
-      'id, brand_id, name, color, owner_member_id, ext_provider, ext_calendar_id, ext_last_sync_at, default_duration_min, is_active',
-    )
+    .select(CAL_SELECT)
     .eq('brand_id', brandId)
     .eq('is_active', true)
     .in('id', ids)
@@ -162,10 +192,15 @@ export async function loadAssignedCalendars(
       ownerNames.set(m.id, m.full_name?.trim() || m.email || 'Unknown');
     }
   }
+  const accountIds = Array.from(
+    new Set(rows.map((r) => r.owner_account_id).filter((a): a is string => !!a)),
+  );
+  const accountEmails = await loadAccountEmails(accountIds);
   return rows.map((r) =>
     shapeCalendar(
       r,
       r.owner_member_id ? ownerNames.get(r.owner_member_id) ?? null : null,
+      r.owner_account_id ? accountEmails.get(r.owner_account_id) ?? null : null,
       [],
     ),
   );
@@ -178,9 +213,7 @@ export async function loadCalendarById(
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('calendars')
-    .select(
-      'id, brand_id, name, color, owner_member_id, ext_provider, ext_calendar_id, ext_last_sync_at, default_duration_min, is_active',
-    )
+    .select(CAL_SELECT)
     .eq('brand_id', brandId)
     .eq('id', id)
     .maybeSingle();
@@ -195,8 +228,14 @@ export async function loadCalendarById(
       .maybeSingle();
     ownerName = m ? (m.full_name?.trim() || m.email || 'Unknown') : null;
   }
+  const accountEmails = await loadAccountEmails(raw.owner_account_id ? [raw.owner_account_id] : []);
   const memberMap = await hydrateMembers([raw.id]);
-  return shapeCalendar(raw, ownerName, memberMap.get(raw.id) ?? []);
+  return shapeCalendar(
+    raw,
+    ownerName,
+    raw.owner_account_id ? accountEmails.get(raw.owner_account_id) ?? null : null,
+    memberMap.get(raw.id) ?? [],
+  );
 }
 
 export async function memberCanBookCalendar(

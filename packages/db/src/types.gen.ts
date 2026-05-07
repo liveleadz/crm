@@ -442,6 +442,7 @@ export type Database = {
           id: string
           is_active: boolean
           name: string
+          owner_account_id: string | null
           owner_member_id: string | null
           updated_at: string
         }
@@ -457,6 +458,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           name: string
+          owner_account_id?: string | null
           owner_member_id?: string | null
           updated_at?: string
         }
@@ -472,6 +474,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           name?: string
+          owner_account_id?: string | null
           owner_member_id?: string | null
           updated_at?: string
         }
@@ -481,6 +484,13 @@ export type Database = {
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "calendars_owner_account_id_fkey"
+            columns: ["owner_account_id"]
+            isOneToOne: false
+            referencedRelation: "member_oauth_accounts"
             referencedColumns: ["id"]
           },
           {
@@ -1489,6 +1499,47 @@ export type Database = {
             columns: ["stage_id"]
             isOneToOne: false
             referencedRelation: "stages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      member_oauth_accounts: {
+        Row: {
+          account_email: string
+          created_at: string
+          id: string
+          member_id: string
+          oauth: Json
+          provider: string
+          scopes: string[]
+          updated_at: string
+        }
+        Insert: {
+          account_email: string
+          created_at?: string
+          id?: string
+          member_id: string
+          oauth: Json
+          provider: string
+          scopes?: string[]
+          updated_at?: string
+        }
+        Update: {
+          account_email?: string
+          created_at?: string
+          id?: string
+          member_id?: string
+          oauth?: Json
+          provider?: string
+          scopes?: string[]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "member_oauth_accounts_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
             referencedColumns: ["id"]
           },
         ]

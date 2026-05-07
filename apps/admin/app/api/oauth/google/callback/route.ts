@@ -37,36 +37,80 @@ export async function GET(request: Request) {
     return errorRedirect(request, (e as Error).message.slice(0, 120));
   }
 
-  // Use admin client to write the OAuth blob — members.email_oauth is
-  // protected by RLS for self-update in theory, but service-role keeps
-  // the path simple and avoids a per-environment RLS audit.
   // Project the granted scope string back to our internal scope tokens.
   // Source of truth is what Google actually granted, not what we asked for —
   // a user can untick a scope on the consent screen.
   const granted = intentsFromGrantedScope(tokens.scope);
+  const accountEmail = (tokens.account_email ?? '').toLowerCase();
+  if (!accountEmail) {
+    return errorRedirect(request, 'no_account_email');
+  }
+
   const admin = createAdminClient();
-  const { data: existing } = await admin
+
+  // 1. Upsert into member_oauth_accounts. Merge granted scopes with the
+  //    row's existing scopes so re-granting calendar doesn't drop email
+  //    (or vice-versa) when the same Google account is reconnected.
+  const { data: existingAccount } = await admin
+    .from('member_oauth_accounts')
+    .select('id, scopes')
+    .eq('member_id', state.memberId)
+    .eq('provider', 'google')
+    .eq('account_email', accountEmail)
+    .maybeSingle();
+  const accountScopes = new Set(existingAccount?.scopes ?? []);
+  for (const s of granted) accountScopes.add(s);
+
+  await admin.from('member_oauth_accounts').upsert(
+    {
+      member_id: state.memberId,
+      provider: 'google',
+      account_email: accountEmail,
+      oauth: tokens as unknown as never,
+      scopes: Array.from(accountScopes),
+    },
+    { onConflict: 'member_id,provider,account_email' },
+  );
+
+  // 2. Decide whether to mirror this grant into legacy members.email_oauth.
+  //    Email-send + email-pull still read that single blob, so we keep it
+  //    in sync with the "primary" account. Mirror when:
+  //      - This is the member's only account row, OR
+  //      - It matches the account already mirrored in members.email_oauth.
+  //    Adding a second distinct account leaves the primary untouched.
+  const { data: allAccounts } = await admin
+    .from('member_oauth_accounts')
+    .select('account_email')
+    .eq('member_id', state.memberId)
+    .eq('provider', 'google');
+  const accountEmails = (allAccounts ?? [])
+    .map((r) => (r.account_email ?? '').toLowerCase())
+    .filter(Boolean);
+  const isOnlyAccount = accountEmails.length <= 1;
+
+  const { data: memberRow } = await admin
     .from('members')
-    .select('oauth_scopes')
+    .select('email_oauth, oauth_scopes')
     .eq('id', state.memberId)
     .maybeSingle();
-  // Re-grants override prior scope state for this provider — if the user
-  // re-runs Connect and unchecks email, we drop 'email' from the set.
-  // We still preserve any non-google internal scopes (none today, but
-  // safe for future providers).
-  const prior = new Set(existing?.oauth_scopes ?? []);
-  prior.delete('calendar');
-  prior.delete('email');
-  for (const s of granted) prior.add(s);
+  const mirroredEmail =
+    ((memberRow?.email_oauth as { account_email?: string | null } | null)?.account_email ?? '').toLowerCase();
+  const matchesPrimary = mirroredEmail !== '' && mirroredEmail === accountEmail;
 
-  await admin
-    .from('members')
-    .update({
-      email_provider: 'google',
-      email_oauth: tokens as unknown as never,
-      oauth_scopes: Array.from(prior),
-    })
-    .eq('id', state.memberId);
+  if (isOnlyAccount || matchesPrimary) {
+    const prior = new Set(memberRow?.oauth_scopes ?? []);
+    prior.delete('calendar');
+    prior.delete('email');
+    for (const s of granted) prior.add(s);
+    await admin
+      .from('members')
+      .update({
+        email_provider: 'google',
+        email_oauth: tokens as unknown as never,
+        oauth_scopes: Array.from(prior),
+      })
+      .eq('id', state.memberId);
+  }
 
   const ret = new URL(state.returnTo, request.url);
   ret.searchParams.set('connected', 'google');

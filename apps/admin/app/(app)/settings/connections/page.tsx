@@ -4,27 +4,47 @@ import { PageHeader } from '@/components/page-header';
 import { ConnectionCard } from '@/components/settings/connection-card';
 import { SignatureEditor } from '@/components/settings/signature-editor';
 
-type ConnectedShape = {
-  provider: 'google' | null;
-  accountEmail: string | null;
+type AccountRow = {
+  id: string;
+  accountEmail: string;
   scopes: string[];
-  signature: string;
 };
 
-async function loadConnection(memberId: string): Promise<ConnectedShape> {
+async function loadAccounts(memberId: string): Promise<{
+  accounts: AccountRow[];
+  primaryEmail: string | null;
+  signature: string;
+  legacyScopes: string[];
+}> {
   const admin = createAdminClient();
-  const { data } = await admin
-    .from('members')
-    .select('email_provider, email_oauth, oauth_scopes, email_signature')
-    .eq('id', memberId)
-    .maybeSingle();
-  const provider = data?.email_provider === 'google' ? 'google' : null;
-  const oauth = (data?.email_oauth ?? null) as { account_email?: string } | null;
+  const [{ data: rows }, { data: member }] = await Promise.all([
+    admin
+      .from('member_oauth_accounts')
+      .select('id, account_email, scopes')
+      .eq('member_id', memberId)
+      .eq('provider', 'google')
+      .order('created_at', { ascending: true }),
+    admin
+      .from('members')
+      .select('email_oauth, email_signature, oauth_scopes')
+      .eq('id', memberId)
+      .maybeSingle(),
+  ]);
+  const accounts: AccountRow[] = (rows ?? [])
+    .filter((r) => r.account_email)
+    .map((r) => ({
+      id: r.id,
+      accountEmail: r.account_email!,
+      scopes: r.scopes ?? [],
+    }));
+  const primaryEmail =
+    ((member?.email_oauth as { account_email?: string | null } | null)?.account_email ?? null)?.toLowerCase() ??
+    null;
   return {
-    provider,
-    accountEmail: oauth?.account_email ?? null,
-    scopes: data?.oauth_scopes ?? [],
-    signature: data?.email_signature ?? '',
+    accounts,
+    primaryEmail,
+    signature: member?.email_signature ?? '',
+    legacyScopes: member?.oauth_scopes ?? [],
   };
 }
 
@@ -39,13 +59,15 @@ export default async function ConnectionsPage({
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
-  const conn = await loadConnection(user.id);
+  const { accounts, primaryEmail, signature, legacyScopes } = await loadAccounts(user.id);
+  const ret = encodeURIComponent('/settings/connections');
+  const addUrl = `/api/oauth/google/start?intent=email&return_to=${ret}`;
 
   return (
     <>
       <PageHeader
         title="Connections"
-        subtitle="Connect your Google account to send email and sync calendars"
+        subtitle="Connect your Google accounts to send email and sync calendars"
       />
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-2xl space-y-4">
@@ -59,19 +81,46 @@ export default async function ConnectionsPage({
               {sp.error}
             </div>
           )}
-          <ConnectionCard
-            provider="google"
-            connected={conn.provider === 'google'}
-            accountEmail={conn.provider === 'google' ? conn.accountEmail : null}
-            scopes={conn.provider === 'google' ? conn.scopes : []}
-          />
-          <p className="text-[11.5px] text-txt-3">
-            Connect grants calendar + email scopes. Email is used to send and
-            read replies on behalf of you from the lead detail composer.
-          </p>
-          {conn.scopes.includes('email') && (
+          {accounts.length === 0 ? (
+            <ConnectionCard
+              provider="google"
+              accountId={null}
+              accountEmail={null}
+              scopes={[]}
+            />
+          ) : (
             <>
-              <SignatureEditor initial={conn.signature} />
+              {accounts.map((a) => (
+                <ConnectionCard
+                  key={a.id}
+                  provider="google"
+                  accountId={a.id}
+                  accountEmail={a.accountEmail}
+                  scopes={a.scopes}
+                  isPrimary={
+                    primaryEmail !== null &&
+                    primaryEmail === a.accountEmail.toLowerCase()
+                  }
+                />
+              ))}
+              <div className="flex justify-end">
+                <a
+                  href={addUrl}
+                  className="rounded-lg border border-line bg-canvas px-3 py-1.5 text-[12px] font-medium hover:bg-surface-2"
+                >
+                  + Connect another Google account
+                </a>
+              </div>
+            </>
+          )}
+          <p className="text-[11.5px] text-txt-3">
+            Each account can be bound to its own LeadPilot calendar in
+            Settings → Calendars. The first account you connect is the
+            primary one used for email sending.
+          </p>
+          {legacyScopes.includes('email') && (
+            <>
+              <SignatureEditor initial={signature} />
               <div className="rounded-2xl border border-line bg-surface p-5 text-[12px] leading-relaxed text-txt-2">
                 <h4 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-txt-3">
                   Improving deliverability

@@ -156,6 +156,11 @@ async function fetchUserEmail(accessToken: string): Promise<string | null> {
 // Returns a fresh access token for `memberId`, refreshing in place when
 // the stored token is within 60s of expiry. Persists the refreshed token
 // back to members.email_oauth so concurrent callers don't all re-refresh.
+//
+// Reads the legacy single-blob OAuth on `members`. Used by the
+// email-send / email-pull paths which haven't been migrated to the
+// per-account model yet. Calendar code uses
+// `ensureFreshGoogleTokenForAccount` instead.
 export async function ensureFreshGoogleToken(memberId: string): Promise<string | null> {
   const supabase = createAdminClient();
   const { data: m } = await supabase
@@ -176,5 +181,34 @@ export async function ensureFreshGoogleToken(memberId: string): Promise<string |
     ...fresh,
   };
   await supabase.from('members').update({ email_oauth: merged }).eq('id', memberId);
+  return fresh.access_token;
+}
+
+// Per-account variant: returns a fresh access token for a specific
+// member_oauth_accounts row. Calendar sync uses this so each LeadPilot
+// calendar can be backed by an independent Google account regardless
+// of which one is mirrored into the legacy members.email_oauth blob.
+export async function ensureFreshGoogleTokenForAccount(
+  accountId: string,
+): Promise<string | null> {
+  const supabase = createAdminClient();
+  const { data: row } = await supabase
+    .from('member_oauth_accounts')
+    .select('id, oauth')
+    .eq('id', accountId)
+    .maybeSingle();
+  if (!row) return null;
+  const oauth = row.oauth as unknown as GoogleTokenSet | null;
+  if (!oauth?.access_token) return null;
+  if (oauth.expires_at && oauth.expires_at - Date.now() > 60_000) {
+    return oauth.access_token;
+  }
+  if (!oauth.refresh_token) return null;
+  const fresh = await refresh(oauth.refresh_token);
+  const merged: GoogleTokenSet = { ...oauth, ...fresh };
+  await supabase
+    .from('member_oauth_accounts')
+    .update({ oauth: merged as unknown as never })
+    .eq('id', accountId);
   return fresh.access_token;
 }

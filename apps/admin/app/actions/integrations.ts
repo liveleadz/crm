@@ -32,8 +32,18 @@ export async function disconnectProvider(input: { provider: 'google' }) {
     })
     .eq('id', user.id);
 
-  // Mark any in-flight pushed appointments on this member's owned calendars
-  // as failed so the cron retries (which will now error out and surface).
+  // Drop every per-account OAuth row for this provider. disconnectProvider
+  // is the "nuke all accounts of provider X" path; per-account disconnect
+  // lives in disconnectOAuthAccount.
+  await admin
+    .from('member_oauth_accounts')
+    .delete()
+    .eq('member_id', user.id)
+    .eq('provider', input.provider);
+
+  // Unbind any calendars this member owned tokens for, and mark in-flight
+  // pushed appointments as failed so the cron retries (and surfaces the
+  // error since the grant is gone).
   const { data: cals } = await admin
     .from('calendars')
     .select('id')
@@ -41,6 +51,16 @@ export async function disconnectProvider(input: { provider: 'google' }) {
     .not('ext_provider', 'is', null);
   const calendarIds = (cals ?? []).map((c) => c.id);
   if (calendarIds.length > 0) {
+    await admin
+      .from('calendars')
+      .update({
+        ext_provider: null,
+        ext_calendar_id: null,
+        owner_account_id: null,
+        ext_sync_token: null,
+        ext_last_sync_at: null,
+      })
+      .in('id', calendarIds);
     await admin
       .from('appointments')
       .update({ ext_status: 'failed' })
