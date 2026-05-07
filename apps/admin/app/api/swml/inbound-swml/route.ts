@@ -160,27 +160,56 @@ async function handle(req: NextRequest) {
     }
   }
 
-  const { data: callRow } = await supabase
-    .from('calls')
-    .insert({
-      brand_id: numberRow.brand_id,
-      number_id: numberRow.id,
-      lead_id: leadId,
-      direction: 'inbound',
-      from_number: fromNumber,
-      to_number: e164,
-      started_at: new Date().toISOString(),
-    })
-    .select('id')
-    .single();
-  const callId = callRow?.id ?? null;
+  // SignalWire's call identifier. The same real call gets retried by
+  // the platform when our response is slow or transient 5xxs, and each
+  // retry hit this webhook with the SAME call_id. Without dedup, every
+  // retry inserted a fresh `calls` row + a fresh "Missed call"
+  // notification — that's how the Live Floor ended up showing 25
+  // phantom rows for a single real inbound.
+  const swCallId =
+    pick(callObj, ['call_id', 'id']) ??
+    pick(body, ['CallSid', 'call_id']) ??
+    null;
+
+  let callId: string | null = null;
+  let isRetry = false;
+  if (swCallId) {
+    const { data: existing } = await supabase
+      .from('calls')
+      .select('id')
+      .eq('brand_id', numberRow.brand_id)
+      .eq('signalwire_call_id', swCallId)
+      .maybeSingle();
+    if (existing?.id) {
+      callId = existing.id;
+      isRetry = true;
+    }
+  }
+  if (!callId) {
+    const { data: callRow } = await supabase
+      .from('calls')
+      .insert({
+        brand_id: numberRow.brand_id,
+        number_id: numberRow.id,
+        lead_id: leadId,
+        direction: 'inbound',
+        from_number: fromNumber,
+        to_number: e164,
+        started_at: new Date().toISOString(),
+        signalwire_call_id: swCallId,
+      })
+      .select('id')
+      .single();
+    callId = callRow?.id ?? null;
+  }
 
   // Insert a "Missed call" notification up-front for the assigned
   // members (and the lead owner if matched). claimRecentInboundCall
   // marks these as READ when the agent picks up — so the bell only ever
   // shows truly missed calls. Voicemail webhook updates the title
-  // afterwards if a recording was left.
-  if (callId) {
+  // afterwards if a recording was left. Skipped on retries: the
+  // first hit already inserted them.
+  if (callId && !isRetry) {
     void notifyMissedCall({
       brandId: numberRow.brand_id,
       callId,

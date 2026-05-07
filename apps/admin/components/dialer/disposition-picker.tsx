@@ -47,6 +47,10 @@ type Props = {
   // Optional cancel — only used when this picker is shown retroactively
   // for a past call (in /calls list). Hidden in the live dialer flow.
   onCancel?: () => void;
+  // Pre-filled note. The outgoing-call popup lets the rep jot a note
+  // mid-call; that draft seeds the disposition note field at wrap-up so
+  // typing is never lost.
+  initialNote?: string;
 };
 
 // Local edit state for each follow-up channel. Pre-filled from the
@@ -95,10 +99,11 @@ export function DispositionPicker({
   campaignId = null,
   onSaved,
   onCancel,
+  initialNote,
 }: Props) {
   const [code, setCode] = useState<string | null>(null);
   const [dispositionId, setDispositionId] = useState<string | null>(null);
-  const [note, setNote] = useState('');
+  const [note, setNote] = useState(initialNote ?? '');
   const [callbackAt, setCallbackAt] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();

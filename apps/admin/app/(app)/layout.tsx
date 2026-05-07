@@ -4,6 +4,8 @@ import { Sidebar } from '@/components/sidebar';
 import { Topbar } from '@/components/topbar';
 import { IncomingCallProvider } from '@/components/incoming-call/incoming-call-provider';
 import { IncomingCallPopup } from '@/components/incoming-call/incoming-call-popup';
+import { OutgoingCallProvider } from '@/components/outgoing-call/outgoing-call-provider';
+import { OutgoingCallPopup } from '@/components/outgoing-call/outgoing-call-popup';
 import { PresenceProvider } from '@/components/presence/presence-provider';
 import { getActiveBrand, getMembershipBrands } from '@/lib/active-brand';
 import { getCurrentBrandRole } from '@/lib/team';
@@ -47,14 +49,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <IncomingCallProvider
         dispositions={dispositions.map((d) => ({ id: d.id, code: d.code, label: d.label, tone: d.tone }))}
       >
-        <div className="flex h-screen flex-col">
-          <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />
-          <div className="flex min-h-0 flex-1">
-            <Sidebar role={role} brandId={active.id} />
-            <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">{children}</main>
+        <OutgoingCallProvider
+          dispositions={dispositions.map((d) => ({ id: d.id, code: d.code, label: d.label, tone: d.tone }))}
+        >
+          <div className="flex h-screen flex-col">
+            <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />
+            <div className="flex min-h-0 flex-1">
+              <Sidebar role={role} brandId={active.id} />
+              <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">{children}</main>
+            </div>
           </div>
-        </div>
-        <IncomingCallPopup />
+          <IncomingCallPopup />
+          <OutgoingCallPopup />
+        </OutgoingCallProvider>
       </IncomingCallProvider>
     </PresenceProvider>
   );

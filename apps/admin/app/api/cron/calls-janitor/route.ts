@@ -1,15 +1,18 @@
 // Calls janitor — every 5 minutes, close any call row whose
-// `started_at` is older than 2 hours and whose `ended_at` is still
-// null. These are orphans: dropped Twilio webhooks, crashed dialer
+// `started_at` is older than 30 minutes and whose `ended_at` is still
+// null. These are orphans: dropped SignalWire webhooks, crashed dialer
 // legs, or seed rows. Left alone they:
 //   - flood the Live Floor active-calls grid with phantom calls,
 //   - hold member presence in `on_call`,
 //   - skew today's call duration totals.
-// Closing them stamps `ended_at = started_at + 2h` (the same horizon
+// Closing them stamps `ended_at = started_at + 30m` (the same horizon
 // the Live Floor uses to treat a row as in-progress), and computes a
 // duration_sec so reports stay sane.
 //
-// The 2h cap matches `ACTIVE_CALL_MAX_AGE_MS` in lib/live-floor.ts.
+// The 30-min cap matches `ACTIVE_CALL_MAX_AGE_MS` in lib/live-floor.ts.
+// We dropped from 2h to 30m so a single bad inbound webhook burst (no
+// idempotency on the SWML route) clears off the floor within minutes
+// instead of sitting for two hours and faking 25 active calls.
 
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@leadpilot/db/admin';
@@ -17,7 +20,7 @@ import { createAdminClient } from '@leadpilot/db/admin';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const STALE_AFTER_MS = 2 * 60 * 60 * 1000;
+const STALE_AFTER_MS = 30 * 60 * 1000;
 const STALE_DURATION_SEC = STALE_AFTER_MS / 1000;
 
 export async function GET(request: Request) {

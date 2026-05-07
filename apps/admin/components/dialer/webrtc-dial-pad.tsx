@@ -1,20 +1,17 @@
 'use client';
 
-// WebRTC dialer. Initializes a SignalWire Call Fabric client with a SAT
-// token fetched from /api/signalwire/token, then dials our private
-// `leadpilot-dialer` resource which bridges to the lead with the brand's
-// caller-ID. Audio is captured from the laptop mic and rendered through
-// the SDK's internal <audio> element — no phone bridge.
+// Keypad UI for ad-hoc outbound dials. The actual SignalWire client +
+// in-call lifecycle live in OutgoingCallProvider (mounted at the app
+// layout level), so the floating popup persists across navigation and
+// every page in the app can trigger a dial via useOutgoingCall().start.
+//
+// This component is a thin keypad: collect a number, hand it to the
+// provider, and disable the Call button while a call is already
+// in flight. Brand name + caller-ID are passed through so the popup
+// header can render "BrandName · +1…" without a server round-trip.
 
-import { useEffect, useRef, useState, useTransition } from 'react';
-import { SignalWire, type SignalWireClient, type FabricRoomSession } from '@signalwire/js';
-import { attachSignalwireCallId, markCallEnded, prepareCall } from '@/app/actions/dialer';
-import {
-  DispositionPicker,
-  type DispositionChoice,
-} from '@/components/dialer/disposition-picker';
-import { LeadContextPanel } from '@/components/dialer/lead-context-panel';
-import { usePresence } from '@/components/presence/presence-provider';
+import { useState } from 'react';
+import { useOutgoingCall } from '@/components/outgoing-call/outgoing-call-provider';
 
 const KEYS: { value: string; sub?: string }[] = [
   { value: '1' },
@@ -36,95 +33,20 @@ type Props = {
   fromE164: string | null;
   initialNumber?: string | null;
   initialLeadId?: string | null;
-  dispositions: DispositionChoice[];
+  // dispositions kept on the props for backwards-compat with the page
+  // route — the provider already owns them, so the keypad ignores it.
+  dispositions: unknown;
 };
-
-type Status =
-  | { kind: 'idle' }
-  | { kind: 'connecting' }
-  | { kind: 'in_call'; startedAt: number }
-  | { kind: 'wrap_up'; callId: string }
-  | { kind: 'error'; message: string };
 
 export function WebRTCDialPad({
   brandName,
   fromE164,
   initialNumber,
   initialLeadId,
-  dispositions,
 }: Props) {
   const [number, setNumber] = useState(initialNumber ?? '');
-  const leadIdRef = useRef<string | null>(initialLeadId ?? null);
-  const [status, setStatus] = useState<Status>({ kind: 'idle' });
-  const { setOnCall } = usePresence();
-
-  // Pin presence to on_call while connecting/in_call/wrap_up. Same shape
-  // as the power dialer.
-  useEffect(() => {
-    const onCall =
-      status.kind === 'connecting' ||
-      status.kind === 'in_call' ||
-      status.kind === 'wrap_up';
-    setOnCall(onCall);
-  }, [status.kind, setOnCall]);
-  useEffect(() => () => setOnCall(false), [setOnCall]);
-  const [muted, setMuted] = useState(false);
-  const [, startTransition] = useTransition();
-  const [elapsed, setElapsed] = useState(0);
-  const clientRef = useRef<SignalWireClient | null>(null);
-  // Wall-clock the cached client was minted at. SATs default to 2h; we
-  // proactively rotate before that to avoid `authblock_is_expired` mid-dial.
-  const clientMintedAtRef = useRef<number>(0);
-  const sessionRef = useRef<FabricRoomSession | null>(null);
-  const callIdRef = useRef<string | null>(null);
-  // Mirror of the in_call startedAt so finishCall can read it from the
-  // SDK 'destroy' callback, whose closure captures stale status.
-  const startedAtRef = useRef<number | null>(null);
-
-  // Tick the duration display once per second while in a call.
-  useEffect(() => {
-    if (status.kind !== 'in_call') {
-      setElapsed(0);
-      return;
-    }
-    const t = window.setInterval(() => {
-      setElapsed(Math.floor((Date.now() - status.startedAt) / 1000));
-    }, 1000);
-    return () => window.clearInterval(t);
-  }, [status]);
-
-  // Tear down the SignalWire client on unmount.
-  useEffect(() => {
-    return () => {
-      void sessionRef.current?.hangup?.().catch(() => undefined);
-      void clientRef.current?.disconnect?.().catch(() => undefined);
-    };
-  }, []);
-
-  // Keyboard shortcuts during a live call: M=mute toggle, Esc=hangup.
-  // Disabled while focus is in an input (so dialing the keypad via the
-  // tel <input> isn't hijacked).
-  useEffect(() => {
-    if (status.kind !== 'in_call') return;
-    function onKey(e: KeyboardEvent) {
-      const tgt = e.target as HTMLElement | null;
-      if (tgt) {
-        const tag = tgt.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tgt.isContentEditable) return;
-      }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        void hangup();
-      } else if (e.key.toLowerCase() === 'm') {
-        e.preventDefault();
-        void toggleMute();
-      }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status.kind]);
+  const { status, start } = useOutgoingCall();
+  const busy = status.kind !== 'idle';
 
   function press(k: string) {
     setNumber((n) => (n + k).slice(0, 20));
@@ -133,184 +55,17 @@ export function WebRTCDialPad({
     setNumber((n) => n.slice(0, -1));
   }
 
-  // Cap the cached client at 30 minutes — well under the SAT's 2h TTL.
-  // This single-handedly removes the most common source of
-  // `authblock_is_expired`: a tab that's been idle for hours.
-  const CLIENT_MAX_AGE_MS = 30 * 60 * 1000;
-
-  async function getClient(force = false): Promise<SignalWireClient> {
-    const aged = Date.now() - clientMintedAtRef.current > CLIENT_MAX_AGE_MS;
-    const needsFresh = force || aged || !clientRef.current;
-    if (clientRef.current && !needsFresh) return clientRef.current;
-    if (clientRef.current) {
-      try {
-        await clientRef.current.disconnect();
-      } catch {
-        /* ignore */
-      }
-      clientRef.current = null;
-    }
-    const tokenRes = await fetch('/api/signalwire/token', {
-      method: 'POST',
-      cache: 'no-store',
-    });
-    if (!tokenRes.ok) {
-      throw new Error(`Token fetch failed (${tokenRes.status})`);
-    }
-    const { token } = (await tokenRes.json()) as { token: string };
-    const client = await SignalWire({ token });
-    clientRef.current = client;
-    clientMintedAtRef.current = Date.now();
-    return client;
-  }
-
-  // The cached SAT can expire (~2h); on `authblock_is_expired` we drop
-  // the client, mint a fresh token, and retry the dial once.
-  function isAuthExpiredError(err: unknown): boolean {
-    const msg = err instanceof Error ? err.message : String(err ?? '');
-    return /authblock_is_expired|authblock has passed|UnprocessableEntity/i.test(msg);
-  }
-
   async function placeCall() {
-    if (!number.trim() || status.kind !== 'idle') return;
-    setStatus({ kind: 'connecting' });
-    try {
-      const prep = await prepareCall({ toNumber: number, leadId: leadIdRef.current });
-      if (!prep.ok) {
-        setStatus({ kind: 'error', message: prep.error });
-        return;
-      }
-      callIdRef.current = prep.callId;
-
-      // dial() builds the session locally; start() is the call that
-      // actually validates the auth block against Fabric. We must wrap
-      // BOTH together — an expired SAT often slips past dial and only
-      // surfaces inside start as a 422 authblock_is_expired.
-      const dialAndStart = async (): Promise<FabricRoomSession> => {
-        const client = await getClient();
-        const session = await client.dial({
-          to: prep.fabricAddress,
-          audio: true,
-          video: false,
-          negotiateVideo: false,
-          // Primary channel for passing our signed dial token to the SWML
-          // webhook. Forwarded in the webhook request body as
-          // call.user_variables.t. URL query string is a fallback.
-          userVariables: { t: prep.dialToken },
-        });
-        // Attach the destroy listener BEFORE start so an immediate
-        // teardown (auth retry path) still cleans up locally.
-        session.on?.('destroy', () => {
-          finishCall();
-        });
-        await session.start();
-        return session;
-      };
-
-      let session: FabricRoomSession;
-      try {
-        session = await dialAndStart();
-      } catch (err) {
-        if (!isAuthExpiredError(err)) throw err;
-        // Log the raw error so we can spot any new auth-failure shapes
-        // that don't match the regex.
-        console.warn('[dialer] auth expired, refreshing token and retrying', err);
-        // Drop the half-built session if dial succeeded but start didn't.
-        try {
-          await sessionRef.current?.hangup?.();
-        } catch {
-          /* ignore */
-        }
-        sessionRef.current = null;
-        await getClient(true);
-        session = await dialAndStart();
-      }
-      sessionRef.current = session;
-
-      // Persist the SignalWire-side identifier so status callbacks can
-      // map back to our row.
-      const swCallId = (session as unknown as { id?: string }).id;
-      if (swCallId) {
-        startTransition(() => {
-          void attachSignalwireCallId({
-            callId: prep.callId,
-            signalwireCallId: swCallId,
-          });
-        });
-      }
-
-      const startedAt = Date.now();
-      startedAtRef.current = startedAt;
-      setStatus({ kind: 'in_call', startedAt });
-    } catch (e) {
-      // Surface raw errors to the console — the toast truncates and the
-      // SignalWire SDK occasionally wraps multi-line JSON.
-      console.error('[dialer] placeCall failed', e);
-      setStatus({ kind: 'error', message: (e as Error).message ?? 'Call failed.' });
-    }
+    if (!number.trim() || busy) return;
+    await start({
+      toNumber: number,
+      leadId: initialLeadId ?? null,
+      brandName,
+      fromE164,
+    });
   }
 
-  async function hangup() {
-    const session = sessionRef.current;
-    if (!session) return;
-    try {
-      await session.hangup();
-    } catch {
-      // ignore — we still want to finish the call locally
-    }
-    finishCall();
-  }
-
-  function finishCall() {
-    const cid = callIdRef.current;
-    const startedAt = startedAtRef.current;
-    sessionRef.current = null;
-    callIdRef.current = null;
-    startedAtRef.current = null;
-    if (cid) {
-      const duration = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : undefined;
-      startTransition(() => {
-        void markCallEnded({ callId: cid, durationSec: duration });
-      });
-      // Force the agent to set a disposition before the dialer is reusable.
-      setStatus({ kind: 'wrap_up', callId: cid });
-    } else {
-      setStatus({ kind: 'idle' });
-    }
-    setMuted(false);
-  }
-
-  async function toggleMute() {
-    const session = sessionRef.current;
-    if (!session) return;
-    if (muted) {
-      await session.audioUnmute();
-      setMuted(false);
-    } else {
-      await session.audioMute();
-      setMuted(true);
-    }
-  }
-
-  const inCall = status.kind === 'in_call';
-  const callDisabled =
-    !number.trim() || status.kind === 'connecting' || status.kind === 'in_call' || !fromE164;
-
-  if (status.kind === 'wrap_up') {
-    return (
-      <div className="mx-auto w-full max-w-sm rounded-2xl border border-line bg-surface p-5">
-        <div className="mb-3 flex items-center justify-between rounded-lg border border-teal/40 bg-teal/10 px-3 py-2 text-[11.5px] text-teal">
-          <span>Call ended — set disposition to continue.</span>
-        </div>
-        {leadIdRef.current && <LeadContextPanel leadId={leadIdRef.current} />}
-        <DispositionPicker
-          callId={status.callId}
-          choices={dispositions}
-          onSaved={() => setStatus({ kind: 'idle' })}
-        />
-      </div>
-    );
-  }
+  const callDisabled = !number.trim() || busy || !fromE164;
 
   return (
     <div className="mx-auto w-full max-w-sm rounded-2xl border border-line bg-surface p-5">
@@ -331,9 +86,9 @@ export function WebRTCDialPad({
           value={number}
           onChange={(e) => setNumber(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !inCall) void placeCall();
+            if (e.key === 'Enter' && !busy) void placeCall();
           }}
-          disabled={inCall}
+          disabled={busy}
           placeholder="Enter phone number"
           className="w-full rounded-xl border border-line bg-canvas px-4 py-3 text-center font-mono text-[18px] tracking-wide outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20 disabled:opacity-60"
         />
@@ -345,7 +100,7 @@ export function WebRTCDialPad({
             key={k.value}
             type="button"
             onClick={() => press(k.value)}
-            disabled={inCall}
+            disabled={busy}
             className="grid h-14 place-items-center rounded-xl border border-line bg-canvas hover:bg-surface-2 active:scale-95 disabled:opacity-50"
           >
             <span className="font-mono text-[18px] font-medium">{k.value}</span>
@@ -355,91 +110,26 @@ export function WebRTCDialPad({
       </div>
 
       <div className="mt-4 flex items-center gap-2">
-        {!inCall ? (
-          <>
-            <button
-              type="button"
-              onClick={backspace}
-              disabled={!number || status.kind === 'connecting'}
-              className="grid h-12 w-12 place-items-center rounded-xl border border-line text-txt-3 hover:bg-canvas disabled:opacity-30"
-              aria-label="Backspace"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 4H8l-7 8 7 8h13a2 2 0 002-2V6a2 2 0 00-2-2zM18 9l-6 6M12 9l6 6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={() => void placeCall()}
-              disabled={callDisabled}
-              className="flex-1 rounded-xl bg-teal py-3 text-[13px] font-semibold text-white hover:bg-teal/90 disabled:opacity-50"
-            >
-              {status.kind === 'connecting' ? 'Connecting…' : 'Call'}
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => void toggleMute()}
-              className={`grid h-12 w-12 place-items-center rounded-xl border ${
-                muted ? 'border-hp/40 bg-hp/10 text-hp' : 'border-line text-txt-3 hover:bg-canvas'
-              }`}
-              aria-label={muted ? 'Unmute' : 'Mute'}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                {muted ? (
-                  <>
-                    <path d="M1 1l22 22" strokeLinecap="round" />
-                    <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
-                    <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" />
-                  </>
-                ) : (
-                  <>
-                    <rect x="9" y="2" width="6" height="12" rx="3" />
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                    <line x1="12" y1="19" x2="12" y2="23" />
-                  </>
-                )}
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={() => void hangup()}
-              className="flex-1 rounded-xl bg-hp py-3 text-[13px] font-semibold text-white hover:bg-hp/90"
-            >
-              Hang up · {formatDuration(elapsed)}
-            </button>
-          </>
-        )}
+        <button
+          type="button"
+          onClick={backspace}
+          disabled={!number || busy}
+          className="grid h-12 w-12 place-items-center rounded-xl border border-line text-txt-3 hover:bg-canvas disabled:opacity-30"
+          aria-label="Backspace"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 4H8l-7 8 7 8h13a2 2 0 002-2V6a2 2 0 00-2-2zM18 9l-6 6M12 9l6 6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => void placeCall()}
+          disabled={callDisabled}
+          className="flex-1 rounded-xl bg-teal py-3 text-[13px] font-semibold text-white hover:bg-teal/90 disabled:opacity-50"
+        >
+          {busy ? 'Call in progress…' : 'Call'}
+        </button>
       </div>
-
-      {status.kind === 'connecting' && (
-        <div className="mt-3 rounded-lg border border-line bg-canvas px-3 py-2 text-[11.5px] leading-snug text-txt-3">
-          Connecting…
-        </div>
-      )}
-      {status.kind === 'in_call' && (
-        <div className="mt-3 rounded-lg border border-teal/40 bg-teal/10 px-3 py-2 text-[11.5px] leading-snug text-teal">
-          Connected — talking through your laptop mic.
-        </div>
-      )}
-      {status.kind === 'in_call' && leadIdRef.current && (
-        <div className="mt-3">
-          <LeadContextPanel leadId={leadIdRef.current} />
-        </div>
-      )}
-      {status.kind === 'error' && (
-        <div className="mt-3 rounded-lg border border-hp/40 bg-hp/10 px-3 py-2 text-[11.5px] leading-snug text-hp">
-          {status.message}
-        </div>
-      )}
     </div>
   );
-}
-
-function formatDuration(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
 }

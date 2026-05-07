@@ -39,7 +39,14 @@ export type ActiveCall = {
 // would otherwise sit on the floor forever — and its elapsed timer
 // would tick into the thousands of hours. Anything older than this
 // window is presumed dead and excluded.
-const ACTIVE_CALL_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+//
+// 30 min is well past the duration of a normal sales call. The Live
+// Floor cleared up materially when this dropped from 2h to 30m: phantom
+// rows (webhook retries with no idempotency, dropped status callbacks)
+// stop crowding the grid for an hour-plus. The janitor cron uses the
+// same horizon so durations on the closed phantoms match what the floor
+// considered "expired".
+const ACTIVE_CALL_MAX_AGE_MS = 30 * 60 * 1000;
 
 export async function loadActiveCalls(brandId: string): Promise<ActiveCall[]> {
   const supabase = await createServerClient();
