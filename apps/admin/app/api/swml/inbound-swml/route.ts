@@ -398,12 +398,16 @@ async function handle(req: NextRequest) {
         };
       }
       if (voicemailActions.length > 0) {
-        const failureBranch = { execute: voicemailActions };
+        // SWML switches over `return_value` (set to "connected" or
+        // "failed" by the connect action) and expects a BARE action
+        // array per case, not { execute: [...] }. The previous shape
+        // was malformed — SignalWire rejected it, the script
+        // erroring out before the connect attempt could stabilize
+        // (which is why the user heard 20s of silence and the browser
+        // never rang). Verified against
+        // https://signalwire.com/docs/swml/reference/switch.
         connectInner.result = {
-          no_answer: failureBranch,
-          failed: failureBranch,
-          busy: failureBranch,
-          canceled: failureBranch,
+          failed: voicemailActions,
         };
       }
       sections.push({ connect: connectInner });
