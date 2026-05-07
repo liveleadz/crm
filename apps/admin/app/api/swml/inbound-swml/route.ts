@@ -344,10 +344,18 @@ async function handle(req: NextRequest) {
     // before (causing platform retries + the duplicate-notification storm).
     // Only fall back to the API lookup for emails whose local-part contains
     // characters SignalWire sanitizes on provision (dots, plus, etc.).
+    // CRITICAL: every dispatch address MUST end with `?channel=audio`.
+    // SignalWire Fabric resources expose two channels (audio + video). Without
+    // an explicit channel hint, Fabric defaults to video routing — and our
+    // browser handler accepts audio-only (`audio: true, video: false`), so the
+    // invite never reaches the WS subscriber. Result: 20s of silence, no
+    // ringing popup, fallthrough to voicemail. The Fabric API returns the
+    // canonical form `/private/<name>?channel=audio` from
+    // findSubscriberAudioAddress; we mirror that here for the perf shortcut.
     const SAFE_LOCAL_PART = /^[a-z0-9_-]+$/;
     const directAddresses: (string | null)[] = ringEmails.map((email) => {
       const lp = email.split('@')[0] ?? '';
-      return SAFE_LOCAL_PART.test(lp) ? `/private/${lp}` : null;
+      return SAFE_LOCAL_PART.test(lp) ? `/private/${lp}?channel=audio` : null;
     });
     const needsLookup = directAddresses
       .map((a, i) => (a ? -1 : i))
@@ -367,12 +375,14 @@ async function handle(req: NextRequest) {
       const lookupIdx = needsLookup.indexOf(i);
       const looked = lookupIdx >= 0 ? lookups[lookupIdx] : null;
       if (looked) {
-        addresses.push(looked);
+        // findSubscriberAudioAddress already returns ?channel=audio, but be
+        // defensive in case the helper falls back to addr.name without it.
+        addresses.push(looked.includes('channel=') ? looked : `${looked}?channel=audio`);
       } else {
         // Last-resort fallback: still try the local-part. Better to attempt
         // a dispatch that may miss than to drop the call to voicemail.
         const lp = email.split('@')[0];
-        if (lp) addresses.push(`/private/${lp}`);
+        if (lp) addresses.push(`/private/${lp}?channel=audio`);
       }
     });
     console.log('[inbound-swml] dispatching to', addresses);
