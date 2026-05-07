@@ -136,7 +136,14 @@ export async function connectInboundNumber(input: {
     sid = lookup.data;
   }
 
-  const voiceUrl = `${getPublicAppUrl()}/api/swml/inbound/${encodeURIComponent(num.e164)}`;
+  // Point at the SWML endpoint, not the legacy LaML route. The SWML
+  // handler is the only path that dispatches to the agent's browser via
+  // <Connect to="/private/<email>"> — the LaML route returns voicemail
+  // XML and never rings the subscriber, so inbound calls "fail silently"
+  // (caller hears greeting + record beep, agent's popup never appears).
+  // SignalWire's IncomingPhoneNumber.voice_url accepts either pipeline;
+  // it switches on the response content-type (JSON → SWML, XML → LaML).
+  const voiceUrl = `${getPublicAppUrl()}/api/swml/inbound-swml`;
   const update = await setIncomingPhoneNumberVoiceUrl({ sid, voiceUrl });
   if (!update.ok) return { ok: false, error: update.error };
 
