@@ -513,6 +513,67 @@ export async function sendSignalWireSms(input: {
   return { ok: true, data: { sid: json.sid ?? '' } };
 }
 
+/**
+ * Redirect an in-progress call to a new SWML/LaML script via the LaML
+ * Modify Call API.
+ *
+ * Used by Transfer Call: while the agent + lead are bridged, we POST the
+ * new transfer SWML URL to /Calls/{Sid}.json with `Url=<new>` to replace
+ * the running script. SignalWire tears down the current connect leg
+ * cleanly and runs the new script on the same call.
+ *
+ * `signalwireCallId` here is the parent CallSid we stored on the
+ * `calls` row (set from the WebRTC FabricRoomSession.id at dial time, or
+ * from the inbound LaML CallSid for accepted inbound calls).
+ */
+export async function redirectInProgressCall(input: {
+  signalwireCallId: string;
+  newUrl: string;
+  method?: 'POST' | 'GET';
+}): Promise<SwResult<{ sid: string }>> {
+  const auth = basicAuth();
+  const space = spaceUrl();
+  const projectId = process.env.SIGNALWIRE_PROJECT_ID;
+  if (!auth || !space || !projectId) {
+    return {
+      ok: false,
+      error:
+        'SignalWire credentials missing. Set SIGNALWIRE_PROJECT_ID, SIGNALWIRE_TOKEN, SIGNALWIRE_SPACE_URL.',
+    };
+  }
+  const url = `https://${space}/api/laml/2010-04-01/Accounts/${projectId}/Calls/${encodeURIComponent(input.signalwireCallId)}.json`;
+  const form = new URLSearchParams({
+    Url: input.newUrl,
+    Method: input.method ?? 'POST',
+  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: form.toString(),
+      signal: AbortSignal.timeout(15_000),
+      cache: 'no-store',
+    });
+  } catch (e) {
+    return { ok: false, error: `Network error: ${(e as Error).message}` };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    return {
+      ok: false,
+      status: res.status,
+      error: body ? `${res.status} ${body.slice(0, 240)}` : `HTTP ${res.status}`,
+    };
+  }
+  const json = (await res.json().catch(() => ({}))) as { sid?: string };
+  return { ok: true, data: { sid: json.sid ?? input.signalwireCallId } };
+}
+
 type SwListPage = {
   data: SignalWirePhoneNumber[];
   links?: { next: string | null };

@@ -10,9 +10,10 @@
 
 import { revalidatePath } from 'next/cache';
 import { getActiveBrand } from '@/lib/active-brand';
-import { getMyProfile, toE164 } from '@/lib/dialer';
+import { getMyProfile, getPublicAppUrl, toE164 } from '@/lib/dialer';
 import { pickOutboundNumber } from '@/lib/phone-pools';
-import { signDialToken } from '@/lib/dial-token';
+import { signDialToken, signTransferPath } from '@/lib/dial-token';
+import { redirectInProgressCall } from '@/lib/signalwire';
 import { runAutomations } from '@/lib/automation-engine';
 import {
   enqueueFollowups,
@@ -271,6 +272,65 @@ export async function attachSignalwireCallId(input: {
     .update({ signalwire_call_id: input.signalwireCallId })
     .eq('id', input.callId);
   if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+// Blind transfer of an in-flight call. Replaces the running SWML on the
+// parent CallSid with a `connect` to the typed target — the lead leg
+// drops, then the brand caller-ID re-bridges to the transfer target.
+// Agent's WebRTC leg ends as the parent script exits.
+//
+// Honest behavior: this is a blind transfer (not warm). The agent does
+// NOT introduce the new party. We log a `lead_events` row so the
+// timeline shows who initiated the transfer.
+export async function transferCall(input: {
+  callId: string;
+  targetE164: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const target = toE164(input.targetE164);
+  if (!target) return { ok: false, error: 'Enter a valid phone number.' };
+
+  const profile = await getMyProfile();
+  if (!profile) return { ok: false, error: 'Not authenticated.' };
+
+  const supabase = await createServerClient();
+  // RLS ensures the agent can only transfer their own (or manager-visible)
+  // calls. We need the SignalWire CallSid to issue the redirect.
+  const { data: call, error } = await supabase
+    .from('calls')
+    .select('id, brand_id, lead_id, signalwire_call_id, member_id')
+    .eq('id', input.callId)
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!call) return { ok: false, error: 'Call not found.' };
+  if (!call.signalwire_call_id) {
+    return { ok: false, error: 'Call is not connected yet.' };
+  }
+
+  const sig = signTransferPath(call.id, target);
+  const newUrl = `${getPublicAppUrl()}/api/swml/transfer/${call.id}/${sig}?to=${encodeURIComponent(target)}`;
+  const res = await redirectInProgressCall({
+    signalwireCallId: call.signalwire_call_id,
+    newUrl,
+    method: 'POST',
+  });
+  if (!res.ok) return { ok: false, error: res.error };
+
+  // Best-effort timeline note. RLS on lead_events permits self-inserts;
+  // failing here must not break the transfer.
+  if (call.lead_id) {
+    await supabase
+      .from('lead_events')
+      .insert({
+        brand_id: call.brand_id,
+        lead_id: call.lead_id,
+        member_id: profile.id,
+        type: 'call_transferred',
+        payload: { call_id: call.id, to: target },
+      })
+      .then(() => undefined, () => undefined);
+  }
+
   return { ok: true };
 }
 

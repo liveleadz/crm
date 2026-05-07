@@ -13,7 +13,11 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { SignalWire, type SignalWireClient } from '@signalwire/js';
-import { claimRecentInboundCall } from '@/app/actions/dialer';
+import {
+  attachSignalwireCallId,
+  claimRecentInboundCall,
+  transferCall,
+} from '@/app/actions/dialer';
 import type { DispositionChoice } from '@/components/dialer/disposition-picker';
 
 export type IncomingCall = {
@@ -33,10 +37,14 @@ type Status =
 type Ctx = {
   pending: IncomingCall | null;
   status: Status;
+  muted: boolean;
   dispositions: DispositionChoice[];
   answer: () => Promise<void>;
   reject: () => Promise<void>;
   hangup: () => Promise<void>;
+  toggleMute: () => Promise<void>;
+  sendDigit: (digit: string) => Promise<void>;
+  transfer: (targetE164: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   closeWrapUp: () => void;
 };
 
@@ -67,8 +75,12 @@ type LooseInvite = {
 };
 
 type ActiveSession = {
+  id?: string;
   on?: (event: string, cb: () => void) => void;
   hangup?: () => Promise<unknown>;
+  audioMute?: () => Promise<unknown>;
+  audioUnmute?: () => Promise<unknown>;
+  sendDigits?: (s: string) => Promise<unknown>;
 };
 
 // SignalWire occasionally hands us garbage caller-id strings — most
@@ -106,6 +118,7 @@ export function IncomingCallProvider({
 }) {
   const [pending, setPending] = useState<IncomingCall | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [muted, setMuted] = useState(false);
   const clientRef = useRef<SignalWireClient | null>(null);
   const inviteRef = useRef<LooseInvite | null>(null);
   const sessionRef = useRef<ActiveSession | null>(null);
@@ -215,10 +228,19 @@ export function IncomingCallProvider({
       })) as ActiveSession;
       sessionRef.current = session;
       // Map this SDK invite to our internal call row so disposition can be
-      // saved against the right call when the agent hangs up.
+      // saved against the right call when the agent hangs up. Also persist
+      // the SignalWire CallSid (FabricRoomSession.id) so blind transfer
+      // can issue a LaML Modify Call against this leg.
+      const swCallId = session.id;
       void claimRecentInboundCall().then((res) => {
         if (res.ok) {
           callIdRef.current = res.callId;
+          if (swCallId) {
+            void attachSignalwireCallId({
+              callId: res.callId,
+              signalwireCallId: swCallId,
+            });
+          }
           setPending((prev) =>
             prev
               ? {
@@ -273,12 +295,64 @@ export function IncomingCallProvider({
 
   const closeWrapUp = useCallback(() => {
     callIdRef.current = null;
+    setMuted(false);
     setStatus({ kind: 'idle' });
+  }, []);
+
+  const toggleMute = useCallback(async () => {
+    const session = sessionRef.current;
+    if (!session) return;
+    try {
+      if (muted) {
+        await session.audioUnmute?.();
+        setMuted(false);
+      } else {
+        await session.audioMute?.();
+        setMuted(true);
+      }
+    } catch (e) {
+      console.warn('[incoming-call] mute toggle failed', e);
+    }
+  }, [muted]);
+
+  // DTMF for IVR navigation while on an inbound call (e.g. agent forwarded
+  // into a third-party tree). Soft no-op if the SDK build doesn't expose
+  // sendDigits on the active session.
+  const sendDigit = useCallback(async (digit: string) => {
+    const session = sessionRef.current;
+    if (!session?.sendDigits) return;
+    try {
+      await session.sendDigits(digit);
+    } catch (e) {
+      console.warn('[incoming-call] sendDigits failed', e);
+    }
+  }, []);
+
+  // Blind transfer: server replaces the SWML on the parent CallSid we
+  // attached on answer; the SDK fires 'destroy' shortly after, taking us
+  // into wrap_up just like a hangup. The agent can still set a
+  // disposition.
+  const transfer = useCallback(async (targetE164: string) => {
+    const cid = callIdRef.current;
+    if (!cid) return { ok: false as const, error: 'No active call.' };
+    return transferCall({ callId: cid, targetE164 });
   }, []);
 
   return (
     <IncomingCallContext.Provider
-      value={{ pending, status, dispositions, answer, reject, hangup, closeWrapUp }}
+      value={{
+        pending,
+        status,
+        muted,
+        dispositions,
+        answer,
+        reject,
+        hangup,
+        toggleMute,
+        sendDigit,
+        transfer,
+        closeWrapUp,
+      }}
     >
       {children}
     </IncomingCallContext.Provider>

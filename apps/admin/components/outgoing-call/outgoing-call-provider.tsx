@@ -24,6 +24,7 @@ import {
   attachSignalwireCallId,
   markCallEnded,
   prepareCall,
+  transferCall,
 } from '@/app/actions/dialer';
 import type { DispositionChoice } from '@/components/dialer/disposition-picker';
 import { usePresence } from '@/components/presence/presence-provider';
@@ -58,6 +59,7 @@ type Ctx = {
   toggleMute: () => Promise<void>;
   toggleHold: () => Promise<void>;
   sendDigit: (digit: string) => Promise<void>;
+  transfer: (targetE164: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   closeWrapUp: () => void;
   dismissError: () => void;
 };
@@ -311,6 +313,21 @@ export function OutgoingCallProvider({
     }
   }, []);
 
+  // Blind transfer the in-flight call to a typed number. Server action
+  // does the SignalWire LaML Modify Call; on success the SDK fires
+  // 'destroy' on the parent session because the SWML script gets
+  // replaced, which routes us through finishCall → wrap_up like a
+  // normal hangup. The agent can still set a disposition.
+  const transfer = useCallback(
+    async (targetE164: string) => {
+      const callId = callIdRef.current;
+      if (!callId) return { ok: false as const, error: 'No active call.' };
+      const res = await transferCall({ callId, targetE164 });
+      return res;
+    },
+    [],
+  );
+
   const closeWrapUp = useCallback(() => {
     setStatus({ kind: 'idle' });
   }, []);
@@ -331,6 +348,7 @@ export function OutgoingCallProvider({
         toggleMute,
         toggleHold,
         sendDigit,
+        transfer,
         closeWrapUp,
         dismissError,
       }}

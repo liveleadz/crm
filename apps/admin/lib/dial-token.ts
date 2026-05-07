@@ -107,6 +107,30 @@ export function verifyCallStatusPath(callId: string, sig: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+// Mid-call transfer SWML callback — namespaced "tx:" so a leaked recording
+// or status sig can't be replayed onto the transfer endpoint (which would
+// let an attacker connect an in-flight call to an arbitrary number). The
+// transfer route validates the target separately as well.
+export function signTransferPath(callId: string, targetE164: string): string {
+  return createHmac('sha256', getSecret())
+    .update(`tx:${callId}:${targetE164}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+export function verifyTransferPath(
+  callId: string,
+  targetE164: string,
+  sig: string,
+): boolean {
+  if (!callId || !targetE164 || !sig || sig.length !== 16) return false;
+  const expected = signTransferPath(callId, targetE164);
+  const a = Buffer.from(expected);
+  const b = Buffer.from(sig);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 // Voicemail recording callback — separate namespace again so a status-sig
 // leak can't be replayed onto the voicemail callback (different DB writes).
 export function signVoicemailPath(callId: string): string {

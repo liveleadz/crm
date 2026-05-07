@@ -5,7 +5,7 @@
 // Visual reference: GoHighLevel-style softphone — header strip with a
 // drag handle + pin + minimize, an "Outgoing Call" headline with brand
 // name + caller-id, local-time row, big avatar, contact name + number,
-// status line ("Dialing…" / "0:42"), an 8-button action grid, and a
+// status line ("Dialing…" / "0:42"), a 5-button action grid, and a
 // big red "End Call".
 //
 // Behavior:
@@ -13,15 +13,14 @@
 //   - Minimize collapses to a slim header bar (still draggable).
 //   - Persists across in-app navigation because the provider lives at
 //     the app-layout level, not on the /dialer page.
-//   - All buttons are wired:
-//       Mute        → session.audioMute / audioUnmute
-//       Hold        → audioMute on local mic (no carrier MOH on browser)
-//       Dial        → opens DTMF keypad → session.sendDigits
-//       Notes       → inline textarea, saved to call.note via disposition
-//       Scripts     → links to /scripts (read-only nudge for now)
-//       Message     → links to /inbox/<lead> if lead known, else disabled
-//       Blind/Warm  → disabled with a "coming soon" hint until SWML supports it
-//       End call    → session.hangup → wrap_up
+//   - All five buttons are wired:
+//       Mute          → session.audioMute / audioUnmute
+//       Notes         → inline textarea, saved with disposition
+//       Script        → links to /scripts (read-only nudge for now)
+//       Dial          → opens DTMF keypad → session.sendDigits
+//       Transfer Call → blind transfer to typed number via SignalWire
+//                       LaML Modify Call (server action transferCall)
+//       End call      → session.hangup → wrap_up
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -35,12 +34,11 @@ export function OutgoingCallPopup() {
   const {
     status,
     muted,
-    onHold,
     dispositions,
     hangup,
     toggleMute,
-    toggleHold,
     sendDigit,
+    transfer,
     closeWrapUp,
     dismissError,
   } = useOutgoingCall();
@@ -53,9 +51,17 @@ export function OutgoingCallPopup() {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [pinned, setPinned] = useState(false);
   const [minimized, setMinimized] = useState(false);
-  const [activePanel, setActivePanel] = useState<null | 'notes' | 'dial'>(null);
+  const [activePanel, setActivePanel] = useState<null | 'notes' | 'dial' | 'transfer'>(
+    null,
+  );
   const [noteDraft, setNoteDraft] = useState('');
   const [dtmfBuffer, setDtmfBuffer] = useState('');
+  const [transferTarget, setTransferTarget] = useState('');
+  const [transferState, setTransferState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'pending' }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
 
   // Default position: top-right corner with a small inset.
   useEffect(() => {
@@ -70,6 +76,8 @@ export function OutgoingCallPopup() {
       setActivePanel(null);
       setNoteDraft('');
       setDtmfBuffer('');
+      setTransferTarget('');
+      setTransferState({ kind: 'idle' });
       setMinimized(false);
     }
   }, [visible, pos]);
@@ -225,19 +233,14 @@ export function OutgoingCallPopup() {
               </div>
             </div>
 
-            {/* Action grid */}
+            {/* Action grid — 5 buttons, only enabled while connected */}
             {(status.kind === 'in_call' || status.kind === 'connecting') && (
-              <div className="grid grid-cols-4 gap-y-3 px-4 pb-2">
+              <div className="grid grid-cols-5 gap-x-1 gap-y-3 px-4 pb-2">
                 <ActionButton
-                  label="Message"
-                  href={
-                    target.leadId
-                      ? (`/leads?lead=${target.leadId}` as unknown as import('next').Route)
-                      : undefined
-                  }
-                  disabled={!target.leadId}
-                  hint={target.leadId ? 'Open lead profile' : 'Lead not linked'}
-                  icon={<MessageIcon />}
+                  label="Mute"
+                  active={muted}
+                  onClick={() => void toggleMute()}
+                  icon={<MuteIcon muted={muted} />}
                 />
                 <ActionButton
                   label="Notes"
@@ -248,31 +251,7 @@ export function OutgoingCallPopup() {
                   icon={<NotesIcon />}
                 />
                 <ActionButton
-                  label="Blind Transfer"
-                  disabled
-                  hint="Coming soon"
-                  icon={<TransferIcon variant="blind" />}
-                />
-                <ActionButton
-                  label="Warm Transfer"
-                  disabled
-                  hint="Coming soon"
-                  icon={<TransferIcon variant="warm" />}
-                />
-                <ActionButton
-                  label="Hold"
-                  active={onHold}
-                  onClick={() => void toggleHold()}
-                  icon={<HoldIcon />}
-                />
-                <ActionButton
-                  label="Mute"
-                  active={muted}
-                  onClick={() => void toggleMute()}
-                  icon={<MuteIcon muted={muted} />}
-                />
-                <ActionButton
-                  label="Scripts"
+                  label="Script"
                   href={'/scripts' as const}
                   icon={<ScriptsIcon />}
                 />
@@ -283,6 +262,14 @@ export function OutgoingCallPopup() {
                     setActivePanel((p) => (p === 'dial' ? null : 'dial'))
                   }
                   icon={<DialPadIcon />}
+                />
+                <ActionButton
+                  label="Transfer"
+                  active={activePanel === 'transfer'}
+                  onClick={() =>
+                    setActivePanel((p) => (p === 'transfer' ? null : 'transfer'))
+                  }
+                  icon={<TransferIcon variant="blind" />}
                 />
               </div>
             )}
@@ -336,6 +323,57 @@ export function OutgoingCallPopup() {
                     ),
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* Transfer inline panel */}
+            {activePanel === 'transfer' && status.kind === 'in_call' && (
+              <div className="px-4 pb-3">
+                <div className="mb-1.5 text-[11.5px] text-txt-3">
+                  Blind transfer — current call ends and the lead is reconnected
+                  to the typed number.
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="tel"
+                    value={transferTarget}
+                    onChange={(e) => {
+                      setTransferTarget(e.target.value);
+                      if (transferState.kind === 'error') {
+                        setTransferState({ kind: 'idle' });
+                      }
+                    }}
+                    placeholder="+1 555 123 4567"
+                    inputMode="tel"
+                    autoComplete="off"
+                    className="flex-1 rounded-md border border-line bg-canvas px-2 py-1.5 font-mono text-[12.5px] text-txt-1 outline-none focus:border-teal/60"
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      transferState.kind === 'pending' || !transferTarget.trim()
+                    }
+                    onClick={async () => {
+                      setTransferState({ kind: 'pending' });
+                      const res = await transfer(transferTarget.trim());
+                      if (!res.ok) {
+                        setTransferState({ kind: 'error', message: res.error });
+                      } else {
+                        // Server-side LaML Modify Call succeeded; the SDK
+                        // will fire 'destroy' shortly, taking us into
+                        // wrap_up. Close the panel optimistically.
+                        setTransferState({ kind: 'idle' });
+                        setActivePanel(null);
+                      }
+                    }}
+                    className="rounded-md border border-teal bg-teal px-3 py-1.5 text-[12px] font-semibold text-white transition active:translate-y-[1px] hover:bg-teal/90 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {transferState.kind === 'pending' ? 'Transferring…' : 'Transfer'}
+                  </button>
+                </div>
+                {transferState.kind === 'error' && (
+                  <div className="mt-1 text-[11px] text-hp">{transferState.message}</div>
+                )}
               </div>
             )}
 
@@ -563,13 +601,6 @@ function ContactSmallIcon() {
     </svg>
   );
 }
-function MessageIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15a3 3 0 0 1-3 3H8l-5 4V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3z" />
-    </svg>
-  );
-}
 function NotesIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -579,19 +610,14 @@ function NotesIcon() {
     </svg>
   );
 }
-function TransferIcon({ variant }: { variant: 'blind' | 'warm' }) {
+function TransferIcon({ variant }: { variant: 'blind' }) {
+  // Phone icon with a small jump arrow. Only the "blind" variant is used
+  // now; warm transfer is deferred until SignalWire supports it cleanly.
+  void variant;
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 16.92V20a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2 4.18 2 2 0 0 1 4 2h3.09a1 1 0 0 1 1 .75c.13.96.36 1.9.7 2.81a1 1 0 0 1-.27 1.05L7.21 8a16 16 0 0 0 6 6l1.39-1.31a1 1 0 0 1 1.05-.27c.91.34 1.85.57 2.81.7a1 1 0 0 1 .75 1z" />
-      {variant === 'warm' ? <path d="M19 4l3 3-3 3" /> : <path d="M16 7l5-3-1 5" />}
-    </svg>
-  );
-}
-function HoldIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="6" y="5" width="4" height="14" rx="1" />
-      <rect x="14" y="5" width="4" height="14" rx="1" />
+      <path d="M16 7l5-3-1 5" />
     </svg>
   );
 }
