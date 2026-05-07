@@ -72,6 +72,9 @@ export function WebRTCDialPad({
   const [, startTransition] = useTransition();
   const [elapsed, setElapsed] = useState(0);
   const clientRef = useRef<SignalWireClient | null>(null);
+  // Wall-clock the cached client was minted at. SATs default to 2h; we
+  // proactively rotate before that to avoid `authblock_is_expired` mid-dial.
+  const clientMintedAtRef = useRef<number>(0);
   const sessionRef = useRef<FabricRoomSession | null>(null);
   const callIdRef = useRef<string | null>(null);
   // Mirror of the in_call startedAt so finishCall can read it from the
@@ -130,9 +133,16 @@ export function WebRTCDialPad({
     setNumber((n) => n.slice(0, -1));
   }
 
+  // Cap the cached client at 30 minutes — well under the SAT's 2h TTL.
+  // This single-handedly removes the most common source of
+  // `authblock_is_expired`: a tab that's been idle for hours.
+  const CLIENT_MAX_AGE_MS = 30 * 60 * 1000;
+
   async function getClient(force = false): Promise<SignalWireClient> {
-    if (clientRef.current && !force) return clientRef.current;
-    if (force && clientRef.current) {
+    const aged = Date.now() - clientMintedAtRef.current > CLIENT_MAX_AGE_MS;
+    const needsFresh = force || aged || !clientRef.current;
+    if (clientRef.current && !needsFresh) return clientRef.current;
+    if (clientRef.current) {
       try {
         await clientRef.current.disconnect();
       } catch {
@@ -140,13 +150,17 @@ export function WebRTCDialPad({
       }
       clientRef.current = null;
     }
-    const tokenRes = await fetch('/api/signalwire/token', { method: 'POST' });
+    const tokenRes = await fetch('/api/signalwire/token', {
+      method: 'POST',
+      cache: 'no-store',
+    });
     if (!tokenRes.ok) {
       throw new Error(`Token fetch failed (${tokenRes.status})`);
     }
     const { token } = (await tokenRes.json()) as { token: string };
     const client = await SignalWire({ token });
     clientRef.current = client;
+    clientMintedAtRef.current = Date.now();
     return client;
   }
 
@@ -168,9 +182,13 @@ export function WebRTCDialPad({
       }
       callIdRef.current = prep.callId;
 
-      const dialOnce = async () => {
+      // dial() builds the session locally; start() is the call that
+      // actually validates the auth block against Fabric. We must wrap
+      // BOTH together — an expired SAT often slips past dial and only
+      // surfaces inside start as a 422 authblock_is_expired.
+      const dialAndStart = async (): Promise<FabricRoomSession> => {
         const client = await getClient();
-        return client.dial({
+        const session = await client.dial({
           to: prep.fabricAddress,
           audio: true,
           video: false,
@@ -180,14 +198,32 @@ export function WebRTCDialPad({
           // call.user_variables.t. URL query string is a fallback.
           userVariables: { t: prep.dialToken },
         });
+        // Attach the destroy listener BEFORE start so an immediate
+        // teardown (auth retry path) still cleans up locally.
+        session.on?.('destroy', () => {
+          finishCall();
+        });
+        await session.start();
+        return session;
       };
+
       let session: FabricRoomSession;
       try {
-        session = await dialOnce();
+        session = await dialAndStart();
       } catch (err) {
         if (!isAuthExpiredError(err)) throw err;
+        // Log the raw error so we can spot any new auth-failure shapes
+        // that don't match the regex.
+        console.warn('[dialer] auth expired, refreshing token and retrying', err);
+        // Drop the half-built session if dial succeeded but start didn't.
+        try {
+          await sessionRef.current?.hangup?.();
+        } catch {
+          /* ignore */
+        }
+        sessionRef.current = null;
         await getClient(true);
-        session = await dialOnce();
+        session = await dialAndStart();
       }
       sessionRef.current = session;
 
@@ -203,15 +239,13 @@ export function WebRTCDialPad({
         });
       }
 
-      session.on?.('destroy', () => {
-        finishCall();
-      });
-
-      await session.start();
       const startedAt = Date.now();
       startedAtRef.current = startedAt;
       setStatus({ kind: 'in_call', startedAt });
     } catch (e) {
+      // Surface raw errors to the console — the toast truncates and the
+      // SignalWire SDK occasionally wraps multi-line JSON.
+      console.error('[dialer] placeCall failed', e);
       setStatus({ kind: 'error', message: (e as Error).message ?? 'Call failed.' });
     }
   }

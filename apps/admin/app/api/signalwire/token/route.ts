@@ -10,6 +10,11 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@leadpilot/db/server';
 
+// Never cache: stale SATs cause `authblock_is_expired` 422s when the
+// browser dials Fabric. Each POST must hit SignalWire fresh.
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function POST() {
   const projectId = process.env.SIGNALWIRE_PROJECT_ID;
   const apiToken = process.env.SIGNALWIRE_TOKEN;
@@ -34,6 +39,7 @@ export async function POST() {
 
   const res = await fetch(endpoint, {
     method: 'POST',
+    cache: 'no-store',
     headers: {
       Authorization: `Basic ${Buffer.from(`${projectId}:${apiToken}`).toString('base64')}`,
       'content-type': 'application/json',
@@ -61,8 +67,16 @@ export async function POST() {
     return NextResponse.json({ error: 'SignalWire returned no token.' }, { status: 502 });
   }
 
-  return NextResponse.json({
-    token: json.token,
-    subscriberId: json.subscriber_id ?? null,
-  });
+  return NextResponse.json(
+    {
+      token: json.token,
+      subscriberId: json.subscriber_id ?? null,
+    },
+    {
+      headers: {
+        'Cache-Control': 'no-store, max-age=0, must-revalidate',
+        Pragma: 'no-cache',
+      },
+    },
+  );
 }
