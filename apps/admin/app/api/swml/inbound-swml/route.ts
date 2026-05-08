@@ -120,9 +120,12 @@ async function handle(req: NextRequest) {
     null;
 
   // Step 1: resolve the number (everything else needs brand_id/number_id).
+  // assigned_member_id powers the highest-priority smart-routing tier:
+  // when a manager assigns a number to an agent in /numbers, calls to
+  // that number ring that agent regardless of any historical lead owner.
   const { data: numberRow } = await supabase
     .from('numbers')
-    .select('id, brand_id')
+    .select('id, brand_id, assigned_member_id')
     .eq('e164', e164)
     .maybeSingle();
   if (!numberRow) return swml(HANGUP_SWML);
@@ -206,19 +209,38 @@ async function handle(req: NextRequest) {
   const leadOwnerId: string | null = lead?.owner_id ?? null;
 
   // Smart routing (always rings exactly one Subscriber):
-  //   1. Lead matched + has an owner → ring that owner.
-  //   2. Number's inbound route has a configured default_recipient
-  //      (set in /numbers admin UI) → ring that member.
-  //   3. Last-resort fallback → hello@liveleadz.com. Stays hard-coded so
+  //   1. Number is assigned to a member (numbers.assigned_member_id from
+  //      the /numbers UI) → ring that member. Highest priority because
+  //      "this is X's line" beats stale lead-owner state from past
+  //      auto-claims.
+  //   2. Lead matched + has an owner → ring that owner.
+  //   3. Number's inbound route has a configured default_recipient
+  //      (set in the inbound routing modal) → ring that member.
+  //   4. Last-resort fallback → hello@liveleadz.com. Stays hard-coded so
   //      a brand without any routing configured still rings somebody
   //      instead of dropping straight to voicemail.
-  // Auto-claim attaches the first ring target as the lead's owner so
-  // subsequent calls from the same number ring the same agent per #1.
+  // Auto-claim attaches the first ring target as the lead's owner.
+  // Combined with rule 1 above this means: an assigned number always
+  // rings its owner, AND that agent becomes the lead's owner so any
+  // un-assigned number they later use also rings them per rule 2.
   const FALLBACK_EMAIL = 'hello@liveleadz.com';
   const ringEmails: string[] = [];
   const targetMemberIds: string[] = [];
 
-  if (leadOwnerId) {
+  // Step 1: number-level assignment (highest priority).
+  if (numberRow.assigned_member_id) {
+    const { data: assigned } = await supabase
+      .from('members')
+      .select('id, email')
+      .eq('id', numberRow.assigned_member_id)
+      .maybeSingle();
+    if (assigned?.email) {
+      ringEmails.push(assigned.email.toLowerCase());
+      targetMemberIds.push(assigned.id);
+    }
+  }
+  // Step 2: lead owner.
+  if (ringEmails.length === 0 && leadOwnerId) {
     const { data: owner } = await supabase
       .from('members')
       .select('id, email')
@@ -229,7 +251,7 @@ async function handle(req: NextRequest) {
       targetMemberIds.push(owner.id);
     }
   }
-  // Step 2: number-level default recipient.
+  // Step 3: inbound-route default recipient.
   if (ringEmails.length === 0 && route?.default_recipient_member_id) {
     const { data: defaultRecipient } = await supabase
       .from('members')
