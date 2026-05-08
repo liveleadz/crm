@@ -10,7 +10,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { getActiveBrand } from '@/lib/active-brand';
-import { getMyProfile, getPublicAppUrl, toE164 } from '@/lib/dialer';
+import { findBrandLeadByPhone, getMyProfile, getPublicAppUrl, toE164 } from '@/lib/dialer';
 import { pickOutboundNumber } from '@/lib/phone-pools';
 import { signDialToken, signTransferPath } from '@/lib/dial-token';
 import { redirectInProgressCall } from '@/lib/signalwire';
@@ -164,12 +164,25 @@ export async function prepareCall(input: {
   const profile = await getMyProfile();
   if (!profile) return { ok: false, error: 'Not authenticated.' };
 
+  // If the caller didn't pass an explicit leadId (keypad dial, dialer
+  // entry from a non-lead surface, etc.), try to attribute the call to a
+  // lead in this brand by phone. Without this the call row goes in with
+  // lead_id=null and the disposition_set automations that depend on a
+  // lead — most importantly the seeded "Sale → move to Won" rule — have
+  // nothing to operate on (executeAction short-circuits leadBound
+  // actions when ctx.leadId is null).
+  let resolvedLeadId = input.leadId ?? null;
+  if (!resolvedLeadId) {
+    const match = await findBrandLeadByPhone(active.id, to);
+    if (match) resolvedLeadId = match.id;
+  }
+
   const supabase = await createServerClient();
   const { data: inserted, error: insertErr } = await supabase
     .from('calls')
     .insert({
       brand_id: active.id,
-      lead_id: input.leadId ?? null,
+      lead_id: resolvedLeadId,
       member_id: profile.id,
       number_id: fromNumber.id,
       direction: 'outbound',

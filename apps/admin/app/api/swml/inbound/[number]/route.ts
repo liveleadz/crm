@@ -13,7 +13,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { signVoicemailPath } from '@/lib/dial-token';
-import { getPublicAppUrl, toE164 } from '@/lib/dialer';
+import { findBrandLeadByPhone, getPublicAppUrl, toE164 } from '@/lib/dialer';
 import { runAutomations } from '@/lib/automation-engine';
 
 export const runtime = 'nodejs';
@@ -140,20 +140,28 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
   }
 
   // Try to attribute the call to a known lead (by phone). Brand-scoped.
+  // findBrandLeadByPhone tolerates the common stored variants (E.164, the
+  // same minus +, and bare 10-digit national) so calls don't slip through
+  // unattributed when a CSV import landed a lead with an unnormalized
+  // phone. Hydrate name/owner with a second targeted read once we have
+  // the id so the broader query still benefits from the helper's
+  // fallbacks.
   let leadId: string | null = null;
   let leadName: string | null = null;
   let leadOwnerId: string | null = null;
   if (fromNumber !== 'unknown') {
-    const { data: lead } = await supabase
-      .from('leads')
-      .select('id, first_name, last_name, owner_id')
-      .eq('brand_id', numberRow.brand_id)
-      .eq('phone', fromNumber)
-      .maybeSingle();
-    leadId = lead?.id ?? null;
-    if (lead) {
-      leadName = [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null;
-      leadOwnerId = lead.owner_id ?? null;
+    const match = await findBrandLeadByPhone(numberRow.brand_id, fromNumber);
+    if (match) {
+      leadId = match.id;
+      const { data: lead } = await supabase
+        .from('leads')
+        .select('first_name, last_name, owner_id')
+        .eq('id', match.id)
+        .maybeSingle();
+      if (lead) {
+        leadName = [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null;
+        leadOwnerId = lead.owner_id ?? null;
+      }
     }
   }
 

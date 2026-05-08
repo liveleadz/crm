@@ -1,5 +1,6 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
+import { createAdminClient } from '@leadpilot/db/admin';
 import { buildVars, renderTemplate } from './automation-templates';
 
 export type DispositionFollowup = {
@@ -137,19 +138,27 @@ export async function enqueueFollowups(input: {
   const tpl = await loadFollowupForDisposition(input.brandId, input.campaignId, input.dispositionId);
   if (!tpl) return {};
 
-  const supabase = await createServerClient();
+  // Admin client. Callers (sendDispositionFollowups) have already verified
+  // the agent's access to the parent call via RLS; from there the system
+  // needs to mutate lead state regardless of who owns the lead. Without
+  // this the stage move + tag add silently no-op for any non-owner agent
+  // because of the role-scoped RLS introduced in migration 0040.
+  const supabase = createAdminClient();
 
   const [{ data: lead }, { data: brand }, { data: disp }] = await Promise.all([
     supabase
       .from('leads')
-      .select('id, first_name, last_name, email, phone, do_not_call, do_not_email, stage_id, stages(name)')
+      .select('id, brand_id, first_name, last_name, email, phone, do_not_call, do_not_email, stage_id, stages(name)')
       .eq('id', input.leadId)
       .maybeSingle(),
     supabase.from('brands').select('id, name').eq('id', input.brandId).maybeSingle(),
     supabase.from('dispositions').select('code').eq('id', input.dispositionId).maybeSingle(),
   ]);
 
-  if (!lead) return {};
+  // Reject lead/brand mismatch so a forged callId can't trick the engine
+  // into mutating a lead in a different brand. Belt-and-suspenders since
+  // the caller resolves leadId from the call row in the first place.
+  if (!lead || lead.brand_id !== input.brandId) return {};
 
   const stageName =
     lead.stages && typeof lead.stages === 'object' && 'name' in lead.stages
