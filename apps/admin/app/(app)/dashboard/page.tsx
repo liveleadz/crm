@@ -50,14 +50,15 @@ export default async function DashboardPage() {
 
         {myCampaigns.length > 0 && <MyCampaigns campaigns={myCampaigns} />}
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {/* `items-start` keeps the pipeline card hugging its content
+            instead of stretching to match the inbound rail's height —
+            otherwise the shorter pipeline grid renders a big empty
+            space inside its card on dashboards with many missed calls. */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:items-start">
           <div className="lg:col-span-2">
             <PipelineByStage pipeline={pipeline} />
           </div>
-          <div className="space-y-4">
-            <InboundCard brandId={active.id} />
-            <RecentCalls calls={recentCalls} />
-          </div>
+          <InboundCard brandId={active.id} />
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -66,7 +67,15 @@ export default async function DashboardPage() {
           <TopTags tags={topTags} />
         </div>
 
-        <TodaysAppointments appointments={todayAppointments} />
+        {/* RecentCalls used to live in the right rail above the bottom
+            row, which made the rail tower over the pipeline. It pairs
+            naturally with the appointments timeline at the bottom. */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:items-start">
+          <RecentCalls calls={recentCalls} />
+          <div className="lg:col-span-2">
+            <TodaysAppointments appointments={todayAppointments} />
+          </div>
+        </div>
       </div>
     </>
   );
