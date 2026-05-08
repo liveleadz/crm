@@ -23,9 +23,9 @@
 //       End call      → session.hangup → wrap_up
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { useOutgoingCall } from './outgoing-call-provider';
 import { DispositionPicker } from '@/components/dialer/disposition-picker';
+import { InCallScripts } from '@/components/dialer/in-call-scripts';
 
 const DEFAULT_W = 360;
 const HEADER_PADDING = 24; // soft viewport inset so we never park off-screen
@@ -51,9 +51,9 @@ export function OutgoingCallPopup() {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [pinned, setPinned] = useState(false);
   const [minimized, setMinimized] = useState(false);
-  const [activePanel, setActivePanel] = useState<null | 'notes' | 'dial' | 'transfer'>(
-    null,
-  );
+  const [activePanel, setActivePanel] = useState<
+    null | 'notes' | 'dial' | 'transfer' | 'script'
+  >(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [dtmfBuffer, setDtmfBuffer] = useState('');
   const [transferTarget, setTransferTarget] = useState('');
@@ -252,7 +252,10 @@ export function OutgoingCallPopup() {
                 />
                 <ActionButton
                   label="Script"
-                  href={'/scripts' as const}
+                  active={activePanel === 'script'}
+                  onClick={() =>
+                    setActivePanel((p) => (p === 'script' ? null : 'script'))
+                  }
                   icon={<ScriptsIcon />}
                 />
                 <ActionButton
@@ -288,6 +291,19 @@ export function OutgoingCallPopup() {
                 </div>
               </div>
             )}
+
+            {/* Script inline panel */}
+            {activePanel === 'script' &&
+              (status.kind === 'in_call' || status.kind === 'connecting') && (
+                <div className="max-h-72 overflow-y-auto px-4 pb-3">
+                  <InCallScripts
+                    lead={{
+                      leadName: target.leadName ?? null,
+                      phone: target.toNumber,
+                    }}
+                  />
+                </div>
+              )}
 
             {/* DTMF inline keypad */}
             {activePanel === 'dial' && status.kind === 'in_call' && (
@@ -428,7 +444,6 @@ function ActionButton(props: {
   label: string;
   icon: React.ReactNode;
   onClick?: () => void;
-  href?: import('next').Route;
   disabled?: boolean;
   active?: boolean;
   hint?: string;
@@ -443,19 +458,6 @@ function ActionButton(props: {
   const ringDisabled = 'cursor-not-allowed border-line bg-canvas text-txt-3 opacity-50';
   const ring = `${ringBase} ${props.disabled ? ringDisabled : ringActive}`;
 
-  const inner = (
-    <>
-      <span className={ring}>{props.icon}</span>
-      <span className={props.disabled ? 'text-txt-3' : ''}>{props.label}</span>
-    </>
-  );
-  if (props.href && !props.disabled) {
-    return (
-      <Link href={props.href} title={props.hint} className={base}>
-        {inner}
-      </Link>
-    );
-  }
   return (
     <button
       type="button"
@@ -464,7 +466,8 @@ function ActionButton(props: {
       title={props.hint}
       className={base}
     >
-      {inner}
+      <span className={ring}>{props.icon}</span>
+      <span className={props.disabled ? 'text-txt-3' : ''}>{props.label}</span>
     </button>
   );
 }

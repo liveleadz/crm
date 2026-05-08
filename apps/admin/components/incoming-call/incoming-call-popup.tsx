@@ -9,9 +9,9 @@
 // shadow + 1px ring, not glow.
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useIncomingCall } from './incoming-call-provider';
 import { DispositionPicker } from '@/components/dialer/disposition-picker';
+import { InCallScripts } from '@/components/dialer/in-call-scripts';
 
 export function IncomingCallPopup() {
   const {
@@ -52,6 +52,8 @@ export function IncomingCallPopup() {
           <InCall
             startedAt={status.startedAt}
             muted={muted}
+            leadName={pending?.leadName ?? null}
+            fromNumber={pending?.fromNumber ?? null}
             onHangup={hangup}
             onToggleMute={toggleMute}
             onSendDigit={sendDigit}
@@ -156,6 +158,8 @@ function PreAnswer({
 function InCall({
   startedAt,
   muted,
+  leadName,
+  fromNumber,
   onHangup,
   onToggleMute,
   onSendDigit,
@@ -163,15 +167,17 @@ function InCall({
 }: {
   startedAt: number;
   muted: boolean;
+  leadName: string | null;
+  fromNumber: string | null;
   onHangup: () => void;
   onToggleMute: () => Promise<void>;
   onSendDigit: (d: string) => Promise<void>;
   onTransfer: (target: string) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startedAt) / 1000));
-  const [activePanel, setActivePanel] = useState<null | 'notes' | 'dial' | 'transfer'>(
-    null,
-  );
+  const [activePanel, setActivePanel] = useState<
+    null | 'notes' | 'dial' | 'transfer' | 'script'
+  >(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [dtmfBuffer, setDtmfBuffer] = useState('');
   const [transferTarget, setTransferTarget] = useState('');
@@ -219,7 +225,12 @@ function InCall({
           onClick={() => setActivePanel((p) => (p === 'notes' ? null : 'notes'))}
           icon={<NotesIcon />}
         />
-        <ActionMiniLink label="Script" href="/scripts" icon={<ScriptsIcon />} />
+        <ActionMini
+          label="Script"
+          active={activePanel === 'script'}
+          onClick={() => setActivePanel((p) => (p === 'script' ? null : 'script'))}
+          icon={<ScriptsIcon />}
+        />
         <ActionMini
           label="Dial"
           active={activePanel === 'dial'}
@@ -245,6 +256,12 @@ function InCall({
           <div className="mt-1 text-[10.5px] text-txt-3">
             Note attaches to this call when you set a disposition after hangup.
           </div>
+        </div>
+      )}
+
+      {activePanel === 'script' && (
+        <div className="max-h-72 overflow-y-auto px-4 pt-3">
+          <InCallScripts lead={{ leadName, phone: fromNumber }} />
         </div>
       )}
 
@@ -362,20 +379,6 @@ function ActionMini(props: {
       </span>
       <span>{props.label}</span>
     </button>
-  );
-}
-
-function ActionMiniLink(props: { label: string; icon: React.ReactNode; href: string }) {
-  return (
-    <Link
-      href={props.href as never}
-      className="group flex flex-col items-center justify-center gap-1.5 text-[10.5px] text-txt-2"
-    >
-      <span className="grid h-10 w-10 place-items-center rounded-full border border-line bg-canvas text-txt-2 transition hover:bg-surface-2 active:scale-95">
-        {props.icon}
-      </span>
-      <span>{props.label}</span>
-    </Link>
   );
 }
 

@@ -261,20 +261,40 @@ export function OutgoingCallProvider({
     // finishCall is invoked by the SDK destroy listener; no-op here.
   }, []);
 
+  // Mute the local microphone. SignalWire's `audioMute()` is a
+  // conference/room-level mute that does not reliably disable the
+  // outbound WebRTC audio track on 1:1 PSTN calls — the remote party
+  // could still hear us. We disable the MediaStreamTrack directly
+  // (WebRTC spec guarantees zero outbound audio when `track.enabled`
+  // is false) and best-effort call the SDK API so its UI state stays
+  // in sync.
   const toggleMute = useCallback(async () => {
-    const session = sessionRef.current;
+    const session = sessionRef.current as unknown as {
+      localStream?: MediaStream;
+      localAudioTrack?: MediaStreamTrack | null;
+      audioMute?: () => Promise<unknown>;
+      audioUnmute?: () => Promise<unknown>;
+    } | null;
     if (!session) return;
-    try {
-      if (muted) {
-        await session.audioUnmute();
-        setMuted(false);
-      } else {
-        await session.audioMute();
-        setMuted(true);
-      }
-    } catch (e) {
-      console.warn('[outgoing-call] mute toggle failed', e);
+    const next = !muted;
+    const tracks: MediaStreamTrack[] = [];
+    if (session.localAudioTrack) tracks.push(session.localAudioTrack);
+    for (const t of session.localStream?.getAudioTracks?.() ?? []) {
+      if (!tracks.includes(t)) tracks.push(t);
     }
+    if (tracks.length === 0) {
+      console.warn('[outgoing-call] no local audio track found for mute toggle');
+    }
+    for (const t of tracks) t.enabled = !next;
+    try {
+      if (next) await session.audioMute?.();
+      else await session.audioUnmute?.();
+    } catch (e) {
+      // Track-level mute already took effect; SDK API mismatch is
+      // non-fatal but worth logging in case the build needs work.
+      console.warn('[outgoing-call] SDK audioMute reported error', e);
+    }
+    setMuted(next);
   }, [muted]);
 
   // Hold = silence both directions. Browser SDKs don't have a true PSTN

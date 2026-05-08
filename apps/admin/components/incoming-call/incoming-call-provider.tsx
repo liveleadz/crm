@@ -81,6 +81,8 @@ type ActiveSession = {
   audioMute?: () => Promise<unknown>;
   audioUnmute?: () => Promise<unknown>;
   sendDigits?: (s: string) => Promise<unknown>;
+  localStream?: MediaStream;
+  localAudioTrack?: MediaStreamTrack | null;
 };
 
 // SignalWire occasionally hands us garbage caller-id strings — most
@@ -299,20 +301,32 @@ export function IncomingCallProvider({
     setStatus({ kind: 'idle' });
   }, []);
 
+  // Mute the local microphone. SignalWire's `audioMute()` is a
+  // conference/room-level mute that does not reliably disable the
+  // outbound WebRTC audio track on 1:1 PSTN calls. We disable the
+  // MediaStreamTrack directly (WebRTC spec guarantees zero outbound
+  // audio when `track.enabled` is false) and best-effort call the
+  // SDK API so its UI state stays in sync.
   const toggleMute = useCallback(async () => {
     const session = sessionRef.current;
     if (!session) return;
-    try {
-      if (muted) {
-        await session.audioUnmute?.();
-        setMuted(false);
-      } else {
-        await session.audioMute?.();
-        setMuted(true);
-      }
-    } catch (e) {
-      console.warn('[incoming-call] mute toggle failed', e);
+    const next = !muted;
+    const tracks: MediaStreamTrack[] = [];
+    if (session.localAudioTrack) tracks.push(session.localAudioTrack);
+    for (const t of session.localStream?.getAudioTracks?.() ?? []) {
+      if (!tracks.includes(t)) tracks.push(t);
     }
+    if (tracks.length === 0) {
+      console.warn('[incoming-call] no local audio track found for mute toggle');
+    }
+    for (const t of tracks) t.enabled = !next;
+    try {
+      if (next) await session.audioMute?.();
+      else await session.audioUnmute?.();
+    } catch (e) {
+      console.warn('[incoming-call] SDK audioMute reported error', e);
+    }
+    setMuted(next);
   }, [muted]);
 
   // DTMF for IVR navigation while on an inbound call (e.g. agent forwarded
