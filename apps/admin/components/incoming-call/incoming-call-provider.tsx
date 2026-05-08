@@ -252,36 +252,53 @@ export function IncomingCallProvider({
       // saved against the right call when the agent hangs up. Also persist
       // the SignalWire CallSid (FabricRoomSession.id) so blind transfer
       // can issue a LaML Modify Call against this leg.
+      //
+      // Await the claim BEFORE attaching destroy + flipping to in_call,
+      // so callIdRef is guaranteed set when the caller hangs up. Without
+      // this, a fast hangup races the claim and the destroy handler
+      // falls through to `idle` — the disposition picker never appears.
       const swCallId = session.id;
-      void claimRecentInboundCall().then((res) => {
-        if (res.ok) {
-          callIdRef.current = res.callId;
-          if (swCallId) {
-            void attachSignalwireCallId({
-              callId: res.callId,
-              signalwireCallId: swCallId,
-            });
-          }
-          setPending((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  fromNumber: res.fromNumber || prev.fromNumber,
-                  toNumber: res.toNumber || prev.toNumber,
-                  leadName: res.leadName || prev.leadName,
-                }
-              : prev,
-          );
+      const claimRes = await claimRecentInboundCall();
+      if (claimRes.ok) {
+        callIdRef.current = claimRes.callId;
+        if (swCallId) {
+          void attachSignalwireCallId({
+            callId: claimRes.callId,
+            signalwireCallId: swCallId,
+          });
         }
-      });
+        setPending((prev) =>
+          prev
+            ? {
+                ...prev,
+                fromNumber: claimRes.fromNumber || prev.fromNumber,
+                toNumber: claimRes.toNumber || prev.toNumber,
+                leadName: claimRes.leadName || prev.leadName,
+              }
+            : prev,
+        );
+      }
       session.on?.('destroy', () => {
-        const cid = callIdRef.current;
-        if (cid) {
-          setStatus({ kind: 'wrap_up', callId: cid });
-        } else {
-          setStatus({ kind: 'idle' });
-        }
-        sessionRef.current = null;
+        const finish = async () => {
+          let cid = callIdRef.current;
+          if (!cid) {
+            // Belt-and-suspenders: the webhook may have written the
+            // calls row after our initial claim. One more attempt before
+            // we give up on showing the disposition picker.
+            const retry = await claimRecentInboundCall();
+            if (retry.ok) {
+              cid = retry.callId;
+              callIdRef.current = retry.callId;
+            }
+          }
+          if (cid) {
+            setStatus({ kind: 'wrap_up', callId: cid });
+          } else {
+            setStatus({ kind: 'idle' });
+          }
+          sessionRef.current = null;
+        };
+        void finish();
       });
       setStatus({ kind: 'in_call', startedAt: Date.now() });
       setPending(null);
@@ -305,8 +322,18 @@ export function IncomingCallProvider({
   }, []);
 
   const hangup = useCallback(async () => {
-    const cid = callIdRef.current;
+    let cid = callIdRef.current;
     await cleanup();
+    if (!cid) {
+      // Same belt-and-suspenders as the destroy handler: try once more
+      // to claim the inbound calls row so the disposition picker still
+      // appears for fast-hangup edge cases.
+      const retry = await claimRecentInboundCall();
+      if (retry.ok) {
+        cid = retry.callId;
+        callIdRef.current = retry.callId;
+      }
+    }
     if (cid) {
       setStatus({ kind: 'wrap_up', callId: cid });
     } else {

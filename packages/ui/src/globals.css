@@ -43,6 +43,27 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* WebKit/Blink renders the native datetime/date/time picker indicator
+ * as a near-black glyph, which is invisible on the dark canvas. Invert
+ * it so the calendar/clock icon is legible in dark mode (e.g. callback
+ * disposition's "Callback when?" field). */
+[data-theme='dark'] input[type='datetime-local']::-webkit-calendar-picker-indicator,
+[data-theme='dark'] input[type='date']::-webkit-calendar-picker-indicator,
+[data-theme='dark'] input[type='time']::-webkit-calendar-picker-indicator,
+[data-theme='dark'] input[type='month']::-webkit-calendar-picker-indicator,
+[data-theme='dark'] input[type='week']::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.15);
+  opacity: 0.85;
+  cursor: pointer;
+}
+[data-theme='dark'] input[type='datetime-local']::-webkit-calendar-picker-indicator:hover,
+[data-theme='dark'] input[type='date']::-webkit-calendar-picker-indicator:hover,
+[data-theme='dark'] input[type='time']::-webkit-calendar-picker-indicator:hover,
+[data-theme='dark'] input[type='month']::-webkit-calendar-picker-indicator:hover,
+[data-theme='dark'] input[type='week']::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
 /* Workflow canvas: thin connecting line that reads as continuous but flows
  * with a subtle motion. The long dash + tiny gap pattern makes only the
  * narrow gap move, so the line itself looks smooth and solid.
