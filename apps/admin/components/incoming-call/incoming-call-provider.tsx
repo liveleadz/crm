@@ -127,13 +127,28 @@ export function IncomingCallProvider({
   const callIdRef = useRef<string | null>(null);
 
   // Boot a long-lived SignalWire client and register for incoming calls.
+  // Re-establishes the client every CLIENT_REFRESH_MS so the underlying
+  // SAT never goes stale. SignalWire's authblock TTL is 2h by default;
+  // a tab left open for hours otherwise hits `authblock_is_expired` on
+  // the next dial, and inbound invites silently stop arriving.
   useEffect(() => {
     let cancelled = false;
-    let client: SignalWireClient | null = null;
+    let activeClient: SignalWireClient | null = null;
+    // Refresh well under the 2h SAT TTL. Same cap the OutgoingCallProvider
+    // uses for its own client.
+    const CLIENT_REFRESH_MS = 30 * 60 * 1000;
 
-    (async () => {
+    const boot = async () => {
+      // If we have a session in flight (an invite popup or active call),
+      // skip this rotation tick — we'll catch the next one. Tearing down
+      // mid-call would drop the user.
+      if (inviteRef.current || sessionRef.current) return;
+
       try {
-        const tokenRes = await fetch('/api/signalwire/token', { method: 'POST' });
+        const tokenRes = await fetch('/api/signalwire/token', {
+          method: 'POST',
+          cache: 'no-store',
+        });
         if (!tokenRes.ok) {
           console.warn('[incoming-call] SAT token request failed', tokenRes.status);
           return; // not signed in or env not set — silently skip
@@ -141,29 +156,26 @@ export function IncomingCallProvider({
         const { token } = (await tokenRes.json()) as { token?: string };
         if (!token || cancelled) return;
 
-        client = await SignalWire({ token });
+        const next = await SignalWire({ token });
         if (cancelled) {
-          await client.disconnect().catch(() => undefined);
+          await next.disconnect().catch(() => undefined);
           return;
         }
-        clientRef.current = client;
 
-        await client.online({
+        // Tear down the previous client AFTER the new one is built so
+        // there's never a window with no online subscriber.
+        const prev = activeClient;
+        activeClient = next;
+        clientRef.current = next;
+
+        await next.online({
           incomingCallHandlers: {
             all: ((notification: unknown) => {
-              // Log every invite so DevTools shows what we receive even if
-              // the popup state machine has a bug. If you call your number
-              // and never see this line in console, the dispatch address
-              // in SWML doesn't match this subscriber's Fabric resource.
               console.log('[incoming-call] invite received', notification);
               const inv = (notification as { invite?: LooseInvite })?.invite;
               if (!inv) return;
               const details = inv.details ?? {};
               inviteRef.current = inv;
-              // Auto-dismiss the popup if the caller hangs up before the
-              // agent answers. SignalWire fires 'destroy' on the invite
-              // when it's canceled by the far side; if the SDK doesn't
-              // expose events we fall back to a 60s safety timer below.
               const onCancelled = () => {
                 if (inviteRef.current === inv) {
                   inviteRef.current = null;
@@ -176,9 +188,6 @@ export function IncomingCallProvider({
               } catch {
                 /* no-op */
               }
-              // Hard fallback in case the SDK doesn't fire the event:
-              // ringing popup auto-clears after 60s. Real connect timeout
-              // is shorter (15s in SWML), so this is just a safety net.
               window.setTimeout(() => {
                 if (inviteRef.current === inv) onCancelled();
               }, 60_000);
@@ -193,16 +202,26 @@ export function IncomingCallProvider({
           },
         });
         console.log('[incoming-call] subscriber online — ready to receive calls');
+
+        if (prev) {
+          await prev.disconnect().catch(() => undefined);
+        }
       } catch (e) {
         // Don't crash the app shell if the SDK fails to init — features
         // outside inbound calls keep working.
         console.error('[incoming-call] init failed', (e as Error).message);
       }
-    })();
+    };
+
+    void boot();
+    const interval = window.setInterval(() => {
+      void boot();
+    }, CLIENT_REFRESH_MS);
 
     return () => {
       cancelled = true;
-      void client?.disconnect().catch(() => undefined);
+      window.clearInterval(interval);
+      void activeClient?.disconnect().catch(() => undefined);
     };
   }, []);
 

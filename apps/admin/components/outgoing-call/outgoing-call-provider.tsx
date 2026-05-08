@@ -240,11 +240,15 @@ export function OutgoingCallProvider({
         setStatus({ kind: 'in_call', target, startedAt, callId: prep.callId });
       } catch (e) {
         console.error('[outgoing-call] start failed', e);
-        setStatus({
-          kind: 'error',
-          target,
-          message: (e as Error).message ?? 'Call failed.',
-        });
+        // After a token-refresh retry, if SignalWire still rejects with
+        // an expired authblock, the SDK's in-page state is stuck. The
+        // only reliable recovery is a hard page reload — the raw 422
+        // JSON is useless to the agent, so swap it for an actionable
+        // hint.
+        const msg = isAuthExpiredError(e)
+          ? 'Call session expired. Please reload the page and try again.'
+          : ((e as Error).message ?? 'Call failed.');
+        setStatus({ kind: 'error', target, message: msg });
       }
     },
     [getClient, finishCall, status.kind],
