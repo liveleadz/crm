@@ -2,6 +2,7 @@ import { createServerClient } from '@leadpilot/db/server';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadBrandThreads } from '@/lib/email/threads';
+import { getCurrentBrandRole } from '@/lib/team';
 import { PageHeader } from '@/components/page-header';
 import { ConversationsView } from '@/components/conversations/conversations-view';
 
@@ -22,7 +23,12 @@ export default async function ConversationsPage({
     data: { user },
   } = await supabase.auth.getUser();
 
-  const mineOnly = sp.scope !== 'all';
+  // Agents/viewers are pinned to "mine" — ?scope=all is silently ignored
+  // for them so a colleague's id in the URL can't be used to peek at the
+  // brand inbox. Manager+ keeps the existing toggle.
+  const role = active ? await getCurrentBrandRole(active.id) : null;
+  const forceMine = role === 'agent' || role === 'viewer';
+  const mineOnly = forceMine || sp.scope !== 'all';
   const threads = await loadBrandThreads(active.id, {
     mineMemberId: mineOnly && user ? user.id : null,
   });
