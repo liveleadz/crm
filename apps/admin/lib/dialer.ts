@@ -11,10 +11,15 @@ export type OutboundFromNumber = {
 
 // First active number for the given brand. The MVP uses a single outbound
 // caller ID per brand; we pick the oldest active one deterministically.
+//
+// Uses the admin client because `numbers` reads are now manager+ only
+// (migration 0043). Agents legitimately need to know their outbound
+// caller ID to dial — but they should not be able to enumerate the
+// numbers table directly. This server-only helper bridges that gap.
 export async function getOutboundFromNumber(
   brandId: string,
 ): Promise<OutboundFromNumber | null> {
-  const supabase = await createServerClient();
+  const supabase = createAdminClient();
   const { data, error } = await supabase
     .from('numbers')
     .select('id, e164, label')

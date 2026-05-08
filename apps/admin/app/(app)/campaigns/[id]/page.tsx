@@ -6,8 +6,8 @@ import { loadCampaign } from '@/lib/campaigns';
 import { loadFollowupsForBrand } from '@/lib/disposition-followups';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadKanban } from '@/lib/leads';
-import { loadLists } from '@/lib/lists';
-import { loadPools } from '@/lib/phone-pools';
+import { loadCampaignLists, loadLists } from '@/lib/lists';
+import { loadPools, type PhonePool } from '@/lib/phone-pools';
 import { loadBrandTagsWithCounts } from '@/lib/tags';
 import { getCurrentBrandRole } from '@/lib/team';
 import { getMyProfile } from '@/lib/dialer';
@@ -116,6 +116,15 @@ export default async function CampaignDetailPage({
     if (!profile || !campaign.agentIds.includes(profile.id)) notFound();
   }
 
+  // Layer-3 read scoping for agents:
+  //  - scripts / calendars: row-level RLS (migration 0043) already
+  //    filters these to "campaign-attached" / "assigned + bookable"
+  //    for non-managers, so we keep calling the same loaders.
+  //  - lists: lead_lists is brand-wide-readable for agents (so they
+  //    can filter their own leads UI) — we explicitly slim the
+  //    campaign editor's view here to "lists this campaign uses".
+  //  - pools: numbers/phone_pools are manager+ reads (0043) and the
+  //    loader returns [] for agents under RLS; bypass the call.
   const [
     scripts,
     calendars,
@@ -132,12 +141,12 @@ export default async function CampaignDetailPage({
     loadCallScripts(active.id),
     loadCalendars(active.id),
     loadMembers(active.id),
-    loadLists(active.id),
+    canManage ? loadLists(active.id) : loadCampaignLists(active.id, id),
     loadDispositions(active.id),
     loadFollowupsForBrand(active.id, id),
     loadRecentCalls(id),
     loadRecentAppointments(id),
-    loadPools(active.id),
+    canManage ? loadPools(active.id) : Promise.resolve<PhonePool[]>([]),
     loadKanban(active.id),
     loadBrandTagsWithCounts(active.id),
   ]);

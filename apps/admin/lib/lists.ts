@@ -76,6 +76,52 @@ export async function loadLists(brandId: string): Promise<LeadList[]> {
   }));
 }
 
+// Subset of loadLists() returning only the lists attached to the given
+// campaign. Used to slim the campaign editor's read-only view for
+// agents — they shouldn't see the full brand list library, only the
+// lists the campaign they're assigned to actually pulls from.
+export async function loadCampaignLists(
+  brandId: string,
+  campaignId: string,
+): Promise<LeadList[]> {
+  const supabase = await createServerClient();
+  const { data: cl } = await supabase
+    .from('campaign_lists')
+    .select('list_id')
+    .eq('campaign_id', campaignId);
+  const ids = Array.from(new Set((cl ?? []).map((r) => r.list_id)));
+  if (ids.length === 0) return [];
+
+  const [listsRes, countsRes] = await Promise.all([
+    supabase
+      .from('lead_lists')
+      .select('id, name, source, criteria, created_at')
+      .eq('brand_id', brandId)
+      .in('id', ids)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('leads')
+      .select('list_id')
+      .eq('brand_id', brandId)
+      .in('list_id', ids),
+  ]);
+
+  const counts = new Map<string, number>();
+  for (const row of countsRes.data ?? []) {
+    if (!row.list_id) continue;
+    counts.set(row.list_id, (counts.get(row.list_id) ?? 0) + 1);
+  }
+
+  return (listsRes.data ?? []).map((l) => ({
+    id: l.id,
+    name: l.name,
+    source: l.source,
+    criteria: l.source === 'filter' ? parseCriteria(l.criteria) : null,
+    createdAt: l.created_at,
+    count: l.source === 'filter' ? 0 : counts.get(l.id) ?? 0,
+  }));
+}
+
 export async function loadCustomFields(brandId: string): Promise<CustomField[]> {
   const supabase = await createServerClient();
   const { data } = await supabase
