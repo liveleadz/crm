@@ -136,9 +136,7 @@ async function handle(req: NextRequest) {
   const [routeRes, leadRes, dedupRes] = await Promise.all([
     supabase
       .from('inbound_routes')
-      .select(
-        'strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting, last_rung_member_id',
-      )
+      .select('ring_timeout_sec, voicemail_enabled, voicemail_greeting')
       .eq('number_id', numberRow.id)
       .maybeSingle(),
     fromNumber !== 'unknown'
@@ -194,44 +192,62 @@ async function handle(req: NextRequest) {
   const route = routeRes.data;
   const lead = leadRes.data;
 
-  const strategy = (route?.strategy ?? 'simul') as 'simul' | 'round_robin' | 'single';
-  const targetMemberIds = pickTargetsForStrategy(
-    strategy,
-    route?.member_ids ?? [],
-    route?.last_rung_member_id ?? null,
-  );
-
   const leadId: string | null = lead?.id ?? null;
   const leadName = lead
     ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null
     : null;
   const leadOwnerId: string | null = lead?.owner_id ?? null;
 
-  // Step 3: members lookup needs targetMemberIds, so it sequences after
-  // route resolution. Members table is small + indexed on id; one round-trip.
+  // Smart routing (always rings exactly one Subscriber):
+  //   1. Lead matched + has an owner → ring that owner (the agent who
+  //      last touched the lead — manual claim, prior outbound, or prior
+  //      inbound auto-claim below).
+  //   2. Otherwise → ring the brand's default fallback recipient
+  //      (hello@liveleadz.com). Auto-claim immediately attaches that
+  //      member as owner, so subsequent calls from the same number ring
+  //      them directly per rule 1.
+  //
+  // The legacy inbound_routes.strategy / member_ids fan-out is bypassed
+  // here. We still read the row for voicemail config below, but the
+  // ring path no longer respects it. A future inbound-routing admin UI
+  // will replace this hard-coded fallback with a brand-configurable
+  // default recipient.
+  const FALLBACK_EMAIL = 'hello@liveleadz.com';
   const ringEmails: string[] = [];
-  let nextRotationMemberId: string | null = null;
-  if (targetMemberIds.length > 0) {
-    const { data: members } = await supabase
+  const targetMemberIds: string[] = [];
+
+  if (leadOwnerId) {
+    const { data: owner } = await supabase
       .from('members')
       .select('id, email')
-      .in('id', targetMemberIds);
-    const byId = new Map((members ?? []).map((m) => [m.id, m] as const));
-    for (const id of targetMemberIds) {
-      const m = byId.get(id);
-      if (m?.email) {
-        ringEmails.push(m.email.toLowerCase());
-        if (strategy === 'round_robin' && !nextRotationMemberId) {
-          nextRotationMemberId = id;
-        }
-      }
+      .eq('id', leadOwnerId)
+      .maybeSingle();
+    if (owner?.email) {
+      ringEmails.push(owner.email.toLowerCase());
+      targetMemberIds.push(owner.id);
     }
   }
-  if (strategy === 'round_robin' && nextRotationMemberId) {
-    void supabase
-      .from('inbound_routes')
-      .update({ last_rung_member_id: nextRotationMemberId })
-      .eq('number_id', numberRow.id);
+  if (ringEmails.length === 0) {
+    // Fallback: brand-default recipient. Resolve to a member row, then
+    // verify that member belongs to this brand via brand_members so the
+    // notification + auto-claim only attach when the recipient is
+    // actually a member of the brand. (Subscribers themselves are
+    // SignalWire-account-wide so the connect dispatch always works.)
+    ringEmails.push(FALLBACK_EMAIL);
+    const { data: fallbackMember } = await supabase
+      .from('members')
+      .select('id')
+      .eq('email', FALLBACK_EMAIL)
+      .maybeSingle();
+    if (fallbackMember?.id) {
+      const { data: bm } = await supabase
+        .from('brand_members')
+        .select('member_id')
+        .eq('brand_id', numberRow.brand_id)
+        .eq('member_id', fallbackMember.id)
+        .maybeSingle();
+      if (bm?.member_id) targetMemberIds.push(fallbackMember.id);
+    }
   }
 
   // Step 4: insert (or skip on retry). Idempotency via signalwire_call_id.
@@ -258,22 +274,13 @@ async function handle(req: NextRequest) {
     callId = callRow?.id ?? null;
   }
 
-  // Auto-claim ownership: if the matched lead has no owner and the
-  // inbound is being dispatched to a single deterministic agent
-  // (`single` strategy, or the round-robin slot that just got picked),
-  // assign that agent as owner. Mirrors the outbound `ensureLeadForCall`
-  // behavior so an agent who handles a callback also owns the lead in
-  // their pipeline. Idempotent — `.is('owner_id', null)` guarantees we
-  // never overwrite an existing owner. Skipped for `simul` (multiple
-  // ringers, no deterministic claimant until pickup) and on retries
-  // (the first hit already claimed it).
-  if (
-    !isRetry &&
-    leadId &&
-    !leadOwnerId &&
-    (strategy === 'single' || strategy === 'round_robin') &&
-    targetMemberIds.length > 0
-  ) {
+  // Auto-claim ownership: if the matched lead has no owner, attach the
+  // member who's about to ring as the owner. Together with the smart
+  // routing rule above this gives us "next time this number calls, the
+  // same agent rings" — the lead is now owned by the fallback recipient
+  // (or whoever picked up first, if we ever extend to fan-out). Idempotent:
+  // `.is('owner_id', null)` guarantees we never overwrite an existing owner.
+  if (!isRetry && leadId && !leadOwnerId && targetMemberIds.length > 0) {
     const claimMemberId = targetMemberIds[0];
     void supabase
       .from('leads')
@@ -463,19 +470,6 @@ function pick(o: Record<string, unknown>, keys: string[]): string | null {
     if (typeof v === 'string' && v.trim().length > 0) return v.trim();
   }
   return null;
-}
-
-function pickTargetsForStrategy(
-  strategy: 'simul' | 'round_robin' | 'single',
-  memberIds: string[],
-  lastRung: string | null,
-): string[] {
-  if (memberIds.length === 0) return [];
-  if (strategy === 'simul') return memberIds;
-  if (strategy === 'single') return [memberIds[0]!];
-  const lastIdx = lastRung ? memberIds.indexOf(lastRung) : -1;
-  const start = lastIdx >= 0 ? (lastIdx + 1) % memberIds.length : 0;
-  return [memberIds[start]!];
 }
 
 // Insert "Missed call" notifications for the routed members + lead owner.
