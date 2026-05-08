@@ -138,6 +138,22 @@ export async function ensureLeadForCall(callId: string): Promise<string | null> 
   const existing = await findBrandLeadByPhone(call.brand_id, e164);
   if (existing) {
     await sb.from('calls').update({ lead_id: existing.id }).eq('id', callId);
+    // Claim ownership for the calling agent if the lead is currently
+    // unowned. Without this, the agent who actually worked the lead
+    // can't see it in their pipeline — leads_select RLS only lets agents
+    // see leads where owner_id = their uid (or that they're assigned to
+    // via campaign_agents). Manager+ already saw it through the
+    // is_manager_or_above branch, which is why the brand owner had it
+    // on their kanban while the responsible agent didn't. We never
+    // overwrite an existing owner_id so we don't yank a lead away from
+    // a different agent who's already working it.
+    if (call.member_id) {
+      await sb
+        .from('leads')
+        .update({ owner_id: call.member_id })
+        .eq('id', existing.id)
+        .is('owner_id', null);
+    }
     return existing.id;
   }
 
