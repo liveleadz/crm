@@ -900,6 +900,12 @@ export type Database = {
           code: string
           cooldown_minutes: number | null
           created_at: string
+          escalation_enabled: boolean
+          escalation_match_category: boolean
+          escalation_stage_ids: string[]
+          escalation_terminal_set_dnc: boolean
+          escalation_terminal_stage_id: string | null
+          escalation_terminal_tag_id: string | null
           id: string
           is_archived: boolean
           label: string
@@ -913,6 +919,12 @@ export type Database = {
           code: string
           cooldown_minutes?: number | null
           created_at?: string
+          escalation_enabled?: boolean
+          escalation_match_category?: boolean
+          escalation_stage_ids?: string[]
+          escalation_terminal_set_dnc?: boolean
+          escalation_terminal_stage_id?: string | null
+          escalation_terminal_tag_id?: string | null
           id?: string
           is_archived?: boolean
           label: string
@@ -926,6 +938,12 @@ export type Database = {
           code?: string
           cooldown_minutes?: number | null
           created_at?: string
+          escalation_enabled?: boolean
+          escalation_match_category?: boolean
+          escalation_stage_ids?: string[]
+          escalation_terminal_set_dnc?: boolean
+          escalation_terminal_stage_id?: string | null
+          escalation_terminal_tag_id?: string | null
           id?: string
           is_archived?: boolean
           label?: string
@@ -939,6 +957,20 @@ export type Database = {
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dispositions_escalation_terminal_stage_id_fkey"
+            columns: ["escalation_terminal_stage_id"]
+            isOneToOne: false
+            referencedRelation: "stages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dispositions_escalation_terminal_tag_id_fkey"
+            columns: ["escalation_terminal_tag_id"]
+            isOneToOne: false
+            referencedRelation: "tags"
             referencedColumns: ["id"]
           },
         ]
@@ -2503,11 +2535,16 @@ export type Database = {
         Args: { b: string }
         Returns: Database["public"]["Enums"]["member_role"]
       }
+      current_member_campaign_ids: { Args: never; Returns: string[] }
+      current_member_visible_calendar_ids: { Args: never; Returns: string[] }
+      current_member_visible_list_ids: { Args: never; Returns: string[] }
+      current_member_visible_script_ids: { Args: never; Returns: string[] }
       grant_founder_brand_access: {
         Args: { p_email: string; p_member_id: string }
         Returns: undefined
       }
       is_brand_member: { Args: { b: string }; Returns: boolean }
+      is_manager_or_above: { Args: { b: string }; Returns: boolean }
       seed_automations_for_brand: {
         Args: { p_brand_id: string }
         Returns: undefined

@@ -143,6 +143,82 @@ export async function setDispositionCooldown(input: {
   return { ok: true };
 }
 
+// Per-disposition consecutive-streak escalation ladder. Manager
+// configures an ordered list of stage ids the lead steps through on
+// repeated calls, plus a terminal action when the ladder is exceeded.
+// See migration 0044 + lib/disposition-followups.ts:applyEscalation.
+export async function setDispositionEscalation(input: {
+  id: string;
+  enabled: boolean;
+  stageIds: string[];
+  terminalStageId: string | null;
+  terminalTagId: string | null;
+  terminalSetDnc: boolean;
+  matchCategory: boolean;
+}): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
+
+  // Defensive cap so a malformed client can't push thousands of ids.
+  if (input.stageIds.length > 20) {
+    return { ok: false, error: 'Ladder is limited to 20 rungs.' };
+  }
+  for (const id of input.stageIds) {
+    if (typeof id !== 'string' || !id) {
+      return { ok: false, error: 'Invalid stage id in ladder.' };
+    }
+  }
+
+  const supabase = await createServerClient();
+
+  // Verify referenced stages and tag belong to the caller's brand. RLS
+  // would silently drop a cross-brand id; an explicit check produces a
+  // clean error and closes the door on a forged stage_id targeting
+  // another brand's stage.
+  const stageIdsToCheck = [...input.stageIds];
+  if (input.terminalStageId) stageIdsToCheck.push(input.terminalStageId);
+  if (stageIdsToCheck.length > 0) {
+    const { data: stages, error: sErr } = await supabase
+      .from('stages')
+      .select('id')
+      .eq('brand_id', guard.brandId)
+      .in('id', stageIdsToCheck);
+    if (sErr) return { ok: false, error: sErr.message };
+    const have = new Set((stages ?? []).map((s) => s.id));
+    for (const id of stageIdsToCheck) {
+      if (!have.has(id)) {
+        return { ok: false, error: 'Stage not found in this brand.' };
+      }
+    }
+  }
+  if (input.terminalTagId) {
+    const { data: tag, error: tErr } = await supabase
+      .from('tags')
+      .select('id')
+      .eq('brand_id', guard.brandId)
+      .eq('id', input.terminalTagId)
+      .maybeSingle();
+    if (tErr) return { ok: false, error: tErr.message };
+    if (!tag) return { ok: false, error: 'Tag not found in this brand.' };
+  }
+
+  const { error } = await supabase
+    .from('dispositions')
+    .update({
+      escalation_enabled: input.enabled,
+      escalation_stage_ids: input.stageIds,
+      escalation_terminal_stage_id: input.terminalStageId,
+      escalation_terminal_tag_id: input.terminalTagId,
+      escalation_terminal_set_dnc: input.terminalSetDnc,
+      escalation_match_category: input.matchCategory,
+    })
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/(app)/settings', 'page');
+  return { ok: true };
+}
+
 // Soft-delete: archive instead of removing so historical calls keep
 // their disposition label resolvable.
 export async function archiveDisposition(input: { id: string }): Promise<Result> {

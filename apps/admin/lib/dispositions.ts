@@ -27,7 +27,9 @@ export async function loadDispositions(brandId: string): Promise<Disposition[]> 
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('dispositions')
-    .select('id, code, label, tone, category, sort_order, cooldown_minutes')
+    .select(
+      'id,code,label,tone,category,sort_order,cooldown_minutes,escalation_enabled,escalation_stage_ids,escalation_terminal_stage_id,escalation_terminal_tag_id,escalation_terminal_set_dnc,escalation_match_category',
+    )
     .eq('brand_id', brandId)
     .eq('is_archived', false)
     .order('sort_order', { ascending: true });
@@ -40,6 +42,14 @@ export async function loadDispositions(brandId: string): Promise<Disposition[]> 
     category: normalizeDispositionCategory(d.category),
     sortOrder: d.sort_order,
     cooldownMinutes: d.cooldown_minutes ?? null,
+    escalation: {
+      enabled: d.escalation_enabled ?? false,
+      stageIds: d.escalation_stage_ids ?? [],
+      terminalStageId: d.escalation_terminal_stage_id ?? null,
+      terminalTagId: d.escalation_terminal_tag_id ?? null,
+      terminalSetDnc: d.escalation_terminal_set_dnc ?? false,
+      matchCategory: d.escalation_match_category ?? true,
+    },
   }));
 }
 

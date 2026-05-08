@@ -55,6 +55,20 @@ export const CONNECTED_CATEGORIES: ReadonlySet<DispositionCategory> = new Set<Di
   'not_interested',
 ]);
 
+export type DispositionEscalation = {
+  enabled: boolean;
+  // Ordered ladder of stage ids. stageIds[0] applies on streak=1,
+  // [1] on streak=2, etc. Once streak > stageIds.length the terminal
+  // action fires.
+  stageIds: string[];
+  terminalStageId: string | null;
+  terminalTagId: string | null;
+  terminalSetDnc: boolean;
+  // When true, ANY disposition in the same category contributes to the
+  // streak (so 'busy' counts toward the 'no_answer' ladder).
+  matchCategory: boolean;
+};
+
 export type Disposition = {
   id: string;
   code: string;
@@ -65,6 +79,8 @@ export type Disposition = {
   // After a call resolves with this disposition, suppress this lead from
   // queue / manual dial for N minutes. NULL/0 = no cooldown.
   cooldownMinutes: number | null;
+  // Per-disposition consecutive-streak ladder. See migration 0044.
+  escalation: DispositionEscalation;
 };
 
 export function normalizeDispositionCategory(raw: unknown): DispositionCategory {

@@ -22,6 +22,7 @@ import { signDialToken, signTransferPath } from '@/lib/dial-token';
 import { redirectInProgressCall } from '@/lib/signalwire';
 import { runAutomations } from '@/lib/automation-engine';
 import {
+  applyEscalation,
   enqueueFollowups,
   loadFollowupForDisposition,
   type DispositionFollowup,
@@ -446,12 +447,47 @@ export async function setDisposition(input: {
       disposition: input.disposition,
       callbackAt,
     });
+
+    // Disposition escalation ladder. Independent of automations and of
+    // disposition_followups templates: the seeded no_answer ladder has
+    // no template, so we always run it whenever a lead is attached.
+    if (resolvedLeadId) {
+      const dispId = await resolveDispositionId(row.brand_id, input.disposition);
+      if (dispId) {
+        await applyEscalation({
+          brandId: row.brand_id,
+          leadId: resolvedLeadId,
+          campaignId: row.campaign_id ?? null,
+          dispositionId: dispId,
+          memberId: row.member_id,
+        }).catch(() => undefined);
+      }
+    }
   }
 
   revalidatePath('/calls');
   revalidatePath('/leads');
   revalidatePath('/tasks');
   return { ok: true };
+}
+
+// Resolve a disposition row's UUID from its (brand, code) pair. Used
+// by setDisposition / bulkSetDispositions which carry the code string
+// over the wire but applyEscalation reads from the dispositions row by
+// id. Admin client because escalation runs after RLS handoff and we
+// don't want a stale agent JWT to silently drop the lookup.
+async function resolveDispositionId(
+  brandId: string,
+  code: string,
+): Promise<string | null> {
+  const supabase = await createServerClient();
+  const { data } = await supabase
+    .from('dispositions')
+    .select('id')
+    .eq('brand_id', brandId)
+    .eq('code', code)
+    .maybeSingle();
+  return data?.id ?? null;
 }
 
 // Fetch the resolved follow-up template for the disposition picker.
@@ -564,7 +600,7 @@ export async function bulkSetDispositions(input: {
       needs_disposition: false,
     })
     .in('id', input.callIds)
-    .select('id, brand_id, lead_id, member_id');
+    .select('id, brand_id, lead_id, member_id, campaign_id');
   if (error) return { ok: false, error: error.message };
   const updated = rows?.length ?? 0;
 
@@ -576,7 +612,7 @@ export async function bulkSetDispositions(input: {
     await Promise.all(
       rows.map(async (r) => {
         const resolvedLeadId = r.lead_id ?? (await ensureLeadForCall(r.id));
-        return runAutomations({
+        await runAutomations({
           trigger: 'disposition_set',
           brandId: r.brand_id,
           callId: r.id,
@@ -584,6 +620,18 @@ export async function bulkSetDispositions(input: {
           memberId: r.member_id,
           disposition: input.disposition,
           callbackAt: null,
+        }).catch(() => undefined);
+        if (!resolvedLeadId) return;
+        const dispId = await resolveDispositionId(r.brand_id, input.disposition);
+        if (!dispId) return;
+        // Streaks are campaign-scoped — use the row's existing campaign
+        // attribution. bulk-update doesn't change campaign_id.
+        await applyEscalation({
+          brandId: r.brand_id,
+          leadId: resolvedLeadId,
+          campaignId: r.campaign_id ?? null,
+          dispositionId: dispId,
+          memberId: r.member_id,
         }).catch(() => undefined);
       }),
     );

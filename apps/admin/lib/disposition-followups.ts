@@ -3,6 +3,11 @@ import { createServerClient } from '@leadpilot/db/server';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { buildVars, renderTemplate } from './automation-templates';
 
+// How far back into the (lead, campaign) call history we walk when
+// counting a streak. Far above any sane ladder length, but bounded so
+// a misconfigured ladder can't produce an unbounded scan.
+const STREAK_LOOKBACK_LIMIT = 20;
+
 export type DispositionFollowup = {
   id: string;
   brandId: string;
@@ -306,4 +311,216 @@ export async function enqueueFollowups(input: {
   }
 
   return out;
+}
+
+// ---------------------------------------------------------------------
+// Disposition escalation ladder.
+//
+// When a disposition has escalation_enabled=true, walking the lead's
+// recent calls (newest first, scoped to the same campaign) gives us a
+// "consecutive matches" streak. The streak indexes into
+// escalation_stage_ids; once the streak exceeds the ladder length we
+// fire the terminal action (move to escalation_terminal_stage_id,
+// optionally attach a tag, optionally flip do_not_call).
+//
+// Independent of enqueueFollowups so it fires unconditionally on every
+// disposition save - the seeded no_answer ladder has no follow-up
+// template, so a template-gated path would never run.
+// ---------------------------------------------------------------------
+
+export type EscalationResult = {
+  applied: boolean;
+  streak: number;
+  stageId: string | null;
+  terminal: boolean;
+};
+
+type EscalationConfigRow = {
+  id: string;
+  brand_id: string;
+  code: string;
+  category: string | null;
+  escalation_enabled: boolean;
+  escalation_stage_ids: string[] | null;
+  escalation_terminal_stage_id: string | null;
+  escalation_terminal_tag_id: string | null;
+  escalation_terminal_set_dnc: boolean;
+  escalation_match_category: boolean;
+};
+
+// Walk calls newest-first for this (lead, campaign) pair and count
+// leading rows whose disposition matches. matchCodes is the set of
+// disposition codes that "continue" the streak. Stops at the first
+// non-match.
+async function computeStreak(input: {
+  leadId: string;
+  campaignId: string | null;
+  matchCodes: Set<string>;
+}): Promise<number> {
+  const supabase = createAdminClient();
+  let q = supabase
+    .from('calls')
+    .select('disposition, started_at, campaign_id')
+    .eq('lead_id', input.leadId)
+    .order('started_at', { ascending: false })
+    .limit(STREAK_LOOKBACK_LIMIT);
+  if (input.campaignId) q = q.eq('campaign_id', input.campaignId);
+  else q = q.is('campaign_id', null);
+  const { data: calls } = await q;
+  if (!calls?.length) return 0;
+  let streak = 0;
+  for (const c of calls) {
+    if (c.disposition && input.matchCodes.has(c.disposition)) streak += 1;
+    else break;
+  }
+  return streak;
+}
+
+// Resolve "what disposition codes continue this streak?". When
+// match_category is true we expand to every code with the same
+// category (so 'busy' contributes to the 'no_answer' ladder).
+async function resolveMatchCodes(
+  config: EscalationConfigRow,
+): Promise<Set<string>> {
+  if (!config.escalation_match_category || !config.category) {
+    return new Set([config.code]);
+  }
+  const supabase = createAdminClient();
+  const { data: peers } = await supabase
+    .from('dispositions')
+    .select('code')
+    .eq('brand_id', config.brand_id)
+    .eq('category', config.category);
+  return new Set((peers ?? []).map((p) => p.code));
+}
+
+// Apply the escalation ladder for the just-saved disposition. Returns
+// whether anything fired and what the streak was so the caller can
+// log/audit at a higher level if desired. Best-effort: any failure
+// is swallowed so the disposition save itself is never rejected.
+export async function applyEscalation(input: {
+  brandId: string;
+  leadId: string;
+  campaignId: string | null;
+  dispositionId: string;
+  memberId: string | null;
+}): Promise<EscalationResult> {
+  const empty: EscalationResult = {
+    applied: false,
+    streak: 0,
+    stageId: null,
+    terminal: false,
+  };
+
+  const supabase = createAdminClient();
+  const { data: cfg } = await supabase
+    .from('dispositions')
+    .select(
+      'id, brand_id, code, category, escalation_enabled, escalation_stage_ids, ' +
+        'escalation_terminal_stage_id, escalation_terminal_tag_id, ' +
+        'escalation_terminal_set_dnc, escalation_match_category',
+    )
+    .eq('id', input.dispositionId)
+    .maybeSingle<EscalationConfigRow>();
+  if (!cfg || !cfg.escalation_enabled) return empty;
+  if (cfg.brand_id !== input.brandId) return empty;
+
+  const ladder: string[] = cfg.escalation_stage_ids ?? [];
+  const matchCodes = await resolveMatchCodes(cfg);
+  const streak = await computeStreak({
+    leadId: input.leadId,
+    campaignId: input.campaignId,
+    matchCodes,
+  });
+  if (streak === 0) return empty;
+
+  // Pick the rung. streak=1 -> ladder[0], streak=2 -> ladder[1], ...
+  // Once streak exceeds ladder length, terminal stage applies.
+  let targetStageId: string | null = null;
+  let terminal = false;
+  if (streak <= ladder.length) {
+    targetStageId = ladder[streak - 1] ?? null;
+  } else {
+    targetStageId = cfg.escalation_terminal_stage_id;
+    terminal = true;
+  }
+
+  // Read current lead state for audit + delta detection.
+  const { data: lead } = await supabase
+    .from('leads')
+    .select('stage_id, do_not_call')
+    .eq('id', input.leadId)
+    .maybeSingle();
+  if (!lead) return empty;
+
+  // Stage move (skip if already on target so we don't spam events).
+  if (targetStageId && lead.stage_id !== targetStageId) {
+    const { error: stageErr } = await supabase
+      .from('leads')
+      .update({ stage_id: targetStageId })
+      .eq('id', input.leadId);
+    if (!stageErr) {
+      await supabase.from('lead_events').insert({
+        brand_id: input.brandId,
+        lead_id: input.leadId,
+        member_id: input.memberId,
+        type: 'stage_change',
+        payload: {
+          from: lead.stage_id,
+          to: targetStageId,
+          via: 'disposition_escalation',
+          disposition: cfg.code,
+          streak,
+          terminal,
+        },
+      });
+    }
+  }
+
+  // Terminal-only side effects.
+  if (terminal) {
+    if (cfg.escalation_terminal_tag_id) {
+      const { data: existing } = await supabase
+        .from('lead_tags')
+        .select('tag_id')
+        .eq('lead_id', input.leadId)
+        .eq('tag_id', cfg.escalation_terminal_tag_id)
+        .maybeSingle();
+      if (!existing) {
+        const { error: tagErr } = await supabase
+          .from('lead_tags')
+          .insert({ lead_id: input.leadId, tag_id: cfg.escalation_terminal_tag_id });
+        if (!tagErr) {
+          await supabase.from('lead_events').insert({
+            brand_id: input.brandId,
+            lead_id: input.leadId,
+            member_id: input.memberId,
+            type: 'tag_add',
+            payload: {
+              tag_ids: [cfg.escalation_terminal_tag_id],
+              via: 'disposition_escalation',
+              disposition: cfg.code,
+            },
+          });
+        }
+      }
+    }
+    if (cfg.escalation_terminal_set_dnc && !lead.do_not_call) {
+      const { error: dncErr } = await supabase
+        .from('leads')
+        .update({ do_not_call: true })
+        .eq('id', input.leadId);
+      if (!dncErr) {
+        await supabase.from('lead_events').insert({
+          brand_id: input.brandId,
+          lead_id: input.leadId,
+          member_id: input.memberId,
+          type: 'dnc_set',
+          payload: { via: 'disposition_escalation', disposition: cfg.code },
+        });
+      }
+    }
+  }
+
+  return { applied: true, streak, stageId: targetStageId, terminal };
 }

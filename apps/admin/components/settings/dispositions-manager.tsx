@@ -11,6 +11,7 @@ import {
   reorderDispositions,
   setDispositionCategory,
   setDispositionCooldown,
+  setDispositionEscalation,
   updateDisposition,
 } from '@/app/actions/dispositions';
 import {
@@ -18,8 +19,12 @@ import {
   DISPOSITION_CATEGORY_LABELS,
   type Disposition,
   type DispositionCategory,
+  type DispositionEscalation,
   type DispositionTone,
 } from '@/lib/dispositions-shared';
+
+type StageOption = { id: string; name: string };
+type TagOption = { id: string; name: string; color: string | null };
 
 const TONE_DOT: Record<DispositionTone, string> = {
   good: 'bg-teal',
@@ -36,9 +41,20 @@ const TONE_OPTIONS: { value: DispositionTone; label: string }[] = [
 const CATEGORY_OPTIONS: { value: DispositionCategory; label: string }[] =
   DISPOSITION_CATEGORIES.map((c) => ({ value: c, label: DISPOSITION_CATEGORY_LABELS[c] }));
 
-export function DispositionsManager({ initial }: { initial: Disposition[] }) {
+export function DispositionsManager({
+  initial,
+  stages,
+  tags,
+}: {
+  initial: Disposition[];
+  stages: StageOption[];
+  tags: TagOption[];
+}) {
   const [items, setItems] = useState<Disposition[]>(initial);
   const [error, setError] = useState<string | null>(null);
+  // Track which row's escalation panel is expanded. Single-open keeps
+  // the page scrollable instead of letting every row expand at once.
+  const [openEscalationId, setOpenEscalationId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   function patch(id: string, p: Partial<Disposition>) {
@@ -108,6 +124,23 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
     });
   }
 
+  function saveEscalation(id: string, next: DispositionEscalation) {
+    setError(null);
+    patch(id, { escalation: next });
+    startTransition(async () => {
+      const res = await setDispositionEscalation({
+        id,
+        enabled: next.enabled,
+        stageIds: next.stageIds,
+        terminalStageId: next.terminalStageId,
+        terminalTagId: next.terminalTagId,
+        terminalSetDnc: next.terminalSetDnc,
+        matchCategory: next.matchCategory,
+      });
+      if (!res.ok) setError(res.error);
+    });
+  }
+
   function remove(d: Disposition) {
     setError(null);
     if (!window.confirm(`Archive "${d.label}"? Existing calls keep this label, but agents will no longer see it.`)) {
@@ -148,7 +181,7 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
         );
       })()}
       <div className="overflow-hidden rounded-xl border border-line bg-surface">
-        <div className="grid grid-cols-[60px_1fr_120px_100px_140px_100px_36px] items-center gap-3 border-b border-line bg-canvas px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+        <div className="grid grid-cols-[60px_1fr_120px_100px_140px_100px_72px] items-center gap-3 border-b border-line bg-canvas px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
           <span>Order</span>
           <span>Label</span>
           <span>Code</span>
@@ -163,9 +196,9 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
           </div>
         ) : (
           items.map((d, i) => (
+            <div key={d.id} className="border-b border-line/60 last:border-b-0">
             <div
-              key={d.id}
-              className="grid grid-cols-[60px_1fr_120px_100px_140px_100px_36px] items-center gap-3 border-b border-line/60 px-3 py-2.5 last:border-b-0"
+              className="grid grid-cols-[60px_1fr_120px_100px_140px_100px_72px] items-center gap-3 px-3 py-2.5"
             >
               <div className="flex items-center gap-1">
                 <button
@@ -251,16 +284,47 @@ export function DispositionsManager({ initial }: { initial: Disposition[] }) {
                 />
                 <span className="text-[10.5px] text-txt-3">min</span>
               </div>
-              <button
-                type="button"
-                onClick={() => remove(d)}
-                aria-label={`Archive ${d.label}`}
-                className="grid h-7 w-7 place-items-center rounded-md text-txt-3 hover:bg-hp/10 hover:text-hp"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
+              <div className="flex items-center justify-end gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOpenEscalationId((cur) => (cur === d.id ? null : d.id))
+                  }
+                  aria-label={`Configure escalation for ${d.label}`}
+                  aria-expanded={openEscalationId === d.id}
+                  title={
+                    d.escalation.enabled
+                      ? `Ladder enabled (${d.escalation.stageIds.length} rungs)`
+                      : 'Configure escalation ladder'
+                  }
+                  className={`grid h-7 w-7 place-items-center rounded-md hover:bg-canvas ${
+                    d.escalation.enabled ? 'text-teal' : 'text-txt-3'
+                  } hover:text-txt-1`}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 20h4v-6H3v6zM10 20h4V10h-4v10zM17 20h4V4h-4v16z" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => remove(d)}
+                  aria-label={`Archive ${d.label}`}
+                  className="grid h-7 w-7 place-items-center rounded-md text-txt-3 hover:bg-hp/10 hover:text-hp"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            {openEscalationId === d.id && (
+              <EscalationPanel
+                disposition={d}
+                stages={stages}
+                tags={tags}
+                onSave={(next) => saveEscalation(d.id, next)}
+              />
+            )}
             </div>
           ))
         )}
@@ -323,6 +387,14 @@ function AddDisposition({
         category,
         sortOrder: (existing.at(-1)?.sortOrder ?? 0) + 1,
         cooldownMinutes: null,
+        escalation: {
+          enabled: false,
+          stageIds: [],
+          terminalStageId: null,
+          terminalTagId: null,
+          terminalSetDnc: false,
+          matchCategory: true,
+        },
       });
       setLabel('');
       setCode('');
@@ -381,6 +453,197 @@ function AddDisposition({
       >
         {saving ? 'Adding…' : 'Add'}
       </button>
+    </div>
+  );
+}
+
+// Per-disposition escalation ladder editor. Renders inline below the
+// disposition row when expanded. Manager picks an ordered list of
+// pipeline stages (the "rungs") and a terminal action that applies
+// once the consecutive streak exceeds the ladder length.
+//
+// Local form state is committed to the server via onSave on every
+// edit (no separate Save button) — same pattern as the rest of this
+// page, where each select/checkbox change persists immediately.
+function EscalationPanel({
+  disposition,
+  stages,
+  tags,
+  onSave,
+}: {
+  disposition: Disposition;
+  stages: StageOption[];
+  tags: TagOption[];
+  onSave: (next: DispositionEscalation) => void;
+}) {
+  const e = disposition.escalation;
+
+  function setRung(index: number, stageId: string) {
+    const next = [...e.stageIds];
+    next[index] = stageId;
+    onSave({ ...e, stageIds: next });
+  }
+
+  function addRung() {
+    const first = stages[0]?.id ?? '';
+    if (!first) return;
+    onSave({ ...e, stageIds: [...e.stageIds, first] });
+  }
+
+  function removeRung(index: number) {
+    const next = e.stageIds.filter((_, i) => i !== index);
+    onSave({ ...e, stageIds: next });
+  }
+
+  return (
+    <div className="border-t border-line/60 bg-canvas/40 px-4 py-3 text-[12px]">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={e.enabled}
+          onChange={(ev) => onSave({ ...e, enabled: ev.currentTarget.checked })}
+          className="h-3.5 w-3.5 accent-teal"
+        />
+        <span className="font-medium">Enable escalation ladder</span>
+        <span className="text-txt-3">
+          — auto-progress the lead through pipeline stages on consecutive {disposition.label.toLowerCase()} calls in the same campaign.
+        </span>
+      </label>
+
+      {e.enabled && (
+        <div className="mt-3 space-y-4">
+          {/* Stage ladder */}
+          <div>
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-txt-3">
+              Stage ladder
+            </div>
+            <p className="mb-2 text-[11.5px] text-txt-3">
+              Each consecutive {disposition.label.toLowerCase()} call moves the lead one rung down. After the last rung, the terminal action below fires.
+            </p>
+            {e.stageIds.length === 0 ? (
+              <div className="text-[11.5px] italic text-txt-3">No rungs configured.</div>
+            ) : (
+              <ol className="space-y-1.5">
+                {e.stageIds.map((stageId, idx) => (
+                  <li key={idx} className="flex items-center gap-2">
+                    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-amber-500/15 text-[11px] font-semibold text-amber-700">
+                      {idx + 1}
+                    </span>
+                    <select
+                      value={stageId}
+                      onChange={(ev) => setRung(idx, ev.currentTarget.value)}
+                      className="rounded-md border border-line bg-surface px-2 py-1 text-[12px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+                    >
+                      {stages.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => removeRung(idx)}
+                      aria-label={`Remove rung ${idx + 1}`}
+                      className="text-[11px] text-txt-3 hover:text-hp"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+            <button
+              type="button"
+              onClick={addRung}
+              disabled={stages.length === 0}
+              className="mt-2 rounded-md border border-line bg-surface px-2 py-1 text-[11.5px] hover:bg-canvas disabled:opacity-50"
+            >
+              + Add rung
+            </button>
+          </div>
+
+          {/* Match category */}
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={e.matchCategory}
+              onChange={(ev) =>
+                onSave({ ...e, matchCategory: ev.currentTarget.checked })
+              }
+              className="mt-0.5 h-3.5 w-3.5 accent-teal"
+            />
+            <span>
+              <span className="font-medium">Match by category</span>
+              <span className="text-txt-3">
+                {' '}— also count other dispositions in the same category (e.g. "busy" with "no_answer") toward the streak.
+              </span>
+            </span>
+          </label>
+
+          {/* Terminal action */}
+          <div className="rounded-lg border border-line bg-surface p-3">
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-txt-3">
+              After the ladder
+            </div>
+            <p className="mb-3 text-[11.5px] text-txt-3">
+              Fires once the streak exceeds {e.stageIds.length} consecutive matches.
+            </p>
+            <div className="space-y-2.5">
+              <label className="flex items-center gap-2">
+                <span className="w-28 text-txt-3">Move to stage</span>
+                <select
+                  value={e.terminalStageId ?? ''}
+                  onChange={(ev) =>
+                    onSave({
+                      ...e,
+                      terminalStageId: ev.currentTarget.value || null,
+                    })
+                  }
+                  className="flex-1 rounded-md border border-line bg-canvas px-2 py-1 outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+                >
+                  <option value="">— none —</option>
+                  {stages.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="w-28 text-txt-3">Add tag</span>
+                <select
+                  value={e.terminalTagId ?? ''}
+                  onChange={(ev) =>
+                    onSave({
+                      ...e,
+                      terminalTagId: ev.currentTarget.value || null,
+                    })
+                  }
+                  className="flex-1 rounded-md border border-line bg-canvas px-2 py-1 outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+                >
+                  <option value="">— none —</option>
+                  {tags.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={e.terminalSetDnc}
+                  onChange={(ev) =>
+                    onSave({ ...e, terminalSetDnc: ev.currentTarget.checked })
+                  }
+                  className="h-3.5 w-3.5 accent-teal"
+                />
+                <span>Mark lead as Do Not Call</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -74,7 +74,11 @@ export default async function SettingsPage() {
               Cooldown suppresses redial of the lead for N minutes after a
               call resolves with that disposition.
             </p>
-            <DispositionsManager initial={dispositions} />
+            <DispositionsManager
+              initial={dispositions}
+              stages={stages.map((s) => ({ id: s.id, name: s.name }))}
+              tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
+            />
           </section>
           <section>
             <h2 className="mb-1 text-[13px] font-semibold">Default disposition follow-ups</h2>
