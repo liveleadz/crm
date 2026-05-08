@@ -222,6 +222,9 @@ function buildCtx(input: AutomationTriggerInput) {
           kind: input.trigger,
           disposition: input.disposition,
           callbackAt: input.callbackAt,
+          // Propagated so create_task can stamp tasks.call_id and the
+          // task UI can surface the originating call's recording / notes.
+          callId: input.callId,
         },
       };
     case 'call_received':

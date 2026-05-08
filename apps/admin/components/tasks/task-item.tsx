@@ -13,6 +13,7 @@ import type { TaskKind, TaskPriority, TaskRow } from '@/lib/tasks';
 import { TaskForm } from './task-form';
 import type { TeamMemberOpt } from './tasks-view';
 import { TagChip } from '@/components/tags/tag-chip';
+import { useOutgoingCall } from '@/components/outgoing-call/outgoing-call-provider';
 
 const KIND_ICON: Record<TaskKind, string> = {
   call: '📞',
@@ -77,8 +78,11 @@ export function TaskItem({
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [, startTransition] = useTransition();
+  const { start: startCall, status: callStatus } = useOutgoingCall();
   const due = formatDue(task.dueAt);
   const isDone = task.status === 'done';
+  const canCallback = !!(task.callId && task.callPhone) && !isDone;
+  const callbackBusy = callStatus.kind !== 'idle';
 
   function run(fn: () => Promise<{ ok: boolean }>) {
     setBusy(true);
@@ -194,9 +198,46 @@ export function TaskItem({
         {task.notes && (
           <p className="mt-1 line-clamp-2 text-[11.5px] text-txt-3">{task.notes}</p>
         )}
+        {task.callId && (task.callNote || task.callHasRecording) && (
+          <div className="mt-2 rounded-md border border-line bg-canvas/60 p-2">
+            <div className="flex items-center gap-1.5 text-[10.5px] uppercase tracking-wide text-txt-3">
+              <span aria-hidden>📞</span>
+              <span>From the original call</span>
+            </div>
+            {task.callNote && (
+              <p className="mt-1 whitespace-pre-wrap text-[11.5px] text-txt-2">{task.callNote}</p>
+            )}
+            {task.callHasRecording && (
+              <audio
+                controls
+                preload="none"
+                src={`/api/calls/recording/${task.callId}`}
+                className="mt-2 h-8 w-full"
+              />
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">
+        {canCallback && (
+          <button
+            type="button"
+            onClick={() =>
+              void startCall({
+                toNumber: task.callPhone!,
+                leadId: task.leadId,
+                brandName: null,
+                fromE164: null,
+              })
+            }
+            disabled={callbackBusy}
+            className="rounded bg-teal/10 px-2 py-0.5 text-[10.5px] font-medium text-teal hover:bg-teal/20 disabled:opacity-50"
+            title={`Call back ${task.callPhone}`}
+          >
+            📞 Callback
+          </button>
+        )}
         {!isDone && (
           <>
             <button

@@ -40,6 +40,9 @@ export type GraphRunContext = {
     kind: string;
     disposition?: string;
     callbackAt?: string | null;
+    // disposition_set only — back-pointer to the originating call so
+    // create_task can stamp tasks.call_id.
+    callId?: string;
     // call_received only
     fromNumber?: string;
     toNumber?: string;
@@ -407,14 +410,32 @@ export async function executeAction(action: AutomationAction, ctx: GraphRunConte
     }
     case 'create_task': {
       const dueAt = resolveDueAt(action, ctx);
-      await supabase.from('tasks').insert({
-        brand_id: ctx.brandId,
-        lead_id: ctx.leadId!,
-        assignee_id: action.assign_to_caller ? ctx.memberId : null,
-        title: renderTemplate(action.title, vars),
-        kind: action.task_kind ?? 'other',
-        due_at: dueAt,
-      });
+      const { data: task } = await supabase
+        .from('tasks')
+        .insert({
+          brand_id: ctx.brandId,
+          lead_id: ctx.leadId!,
+          assignee_id: action.assign_to_caller ? ctx.memberId : null,
+          title: renderTemplate(action.title, vars),
+          kind: action.task_kind ?? 'other',
+          due_at: dueAt,
+          // Carry the originating call so the task UI can show notes,
+          // a recording playback, and a one-click callback button.
+          call_id: ctx.trigger.callId ?? null,
+        })
+        .select('id')
+        .single();
+      // In-app reminder at the task's due_at — single fire, offset 0.
+      // Skipped if we couldn't resolve a due_at (no callback time +
+      // no fixed delay), since task_reminders.remind_at is NOT NULL.
+      if (action.with_reminder && task && dueAt) {
+        await supabase.from('task_reminders').insert({
+          task_id: task.id,
+          channel: 'in_app',
+          offset_minutes: 0,
+          remind_at: dueAt,
+        });
+      }
       return;
     }
 

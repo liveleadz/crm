@@ -2305,6 +2305,7 @@ export type Database = {
         Row: {
           assignee_id: string | null
           brand_id: string
+          call_id: string | null
           completed_at: string | null
           completed_by: string | null
           created_at: string
@@ -2325,6 +2326,7 @@ export type Database = {
         Insert: {
           assignee_id?: string | null
           brand_id: string
+          call_id?: string | null
           completed_at?: string | null
           completed_by?: string | null
           created_at?: string
@@ -2345,6 +2347,7 @@ export type Database = {
         Update: {
           assignee_id?: string | null
           brand_id?: string
+          call_id?: string | null
           completed_at?: string | null
           completed_by?: string | null
           created_at?: string
@@ -2375,6 +2378,13 @@ export type Database = {
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_call_id_fkey"
+            columns: ["call_id"]
+            isOneToOne: false
+            referencedRelation: "calls"
             referencedColumns: ["id"]
           },
           {

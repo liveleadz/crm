@@ -25,6 +25,10 @@ export type AutomationAction =
       due_in_minutes?: number;
       use_callback_at?: boolean;
       assign_to_caller?: boolean;
+      // When true, drop a single in-app task_reminder firing at due_at.
+      // Used by the seeded Callback automation so the agent gets a
+      // notification at the requested callback time.
+      with_reminder?: boolean;
     }
   | {
       kind: 'send_email';

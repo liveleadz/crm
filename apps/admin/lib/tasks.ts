@@ -41,6 +41,13 @@ export type TaskRow = {
   recurrence: RecurrenceRule | null;
   reminders: TaskReminder[];
   leadTags: Tag[];
+  // Originating call (Callback disposition seeds this). Drives the
+  // task row's recording playback + one-click callback button.
+  callId: string | null;
+  callPhone: string | null;
+  callNote: string | null;
+  callHasRecording: boolean;
+  callDirection: 'inbound' | 'outbound' | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -59,6 +66,7 @@ type TaskSelect = {
   brand_id: string;
   lead_id: string | null;
   assignee_id: string | null;
+  call_id: string | null;
   title: string;
   notes: string | null;
   kind: TaskKind;
@@ -72,6 +80,15 @@ type TaskSelect = {
   updated_at: string;
   leads: { first_name: string | null; last_name: string | null; phone: string | null } | null;
   assignee: { full_name: string | null; email: string } | null;
+  call:
+    | {
+        to_number: string | null;
+        from_number: string | null;
+        direction: 'inbound' | 'outbound' | null;
+        note: string | null;
+        recording_url: string | null;
+      }
+    | null;
 };
 
 function rowFromDb(t: TaskSelect, reminders: TaskReminder[], leadTags: Tag[]): TaskRow {
@@ -96,6 +113,16 @@ function rowFromDb(t: TaskSelect, reminders: TaskReminder[], leadTags: Tag[]): T
     : null;
   const assignee = t.assignee;
   const assigneeName = assignee?.full_name || assignee?.email || null;
+  // Pick the "other party" number for the callback dial. For an outbound
+  // call we want to_number; for an inbound call we want from_number.
+  // Falls back to the lead's phone so the Callback button still works
+  // when the call row is missing the data.
+  const callOtherParty =
+    t.call?.direction === 'inbound'
+      ? t.call.from_number
+      : t.call?.direction === 'outbound'
+        ? t.call.to_number
+        : null;
   return {
     id: t.id,
     brandId: t.brand_id,
@@ -115,17 +142,22 @@ function rowFromDb(t: TaskSelect, reminders: TaskReminder[], leadTags: Tag[]): T
     recurrence: rule,
     reminders,
     leadTags,
+    callId: t.call_id,
+    callPhone: callOtherParty ?? lead?.phone ?? null,
+    callNote: t.call?.note ?? null,
+    callHasRecording: Boolean(t.call?.recording_url),
+    callDirection: t.call?.direction ?? null,
     createdAt: t.created_at,
     updatedAt: t.updated_at,
   };
 }
 
-const TASK_SELECT = `
-  id, brand_id, lead_id, assignee_id, title, notes, kind, priority, status,
-  due_at, snoozed_until, completed_at, recurrence, created_at, updated_at,
-  leads:lead_id ( first_name, last_name, phone ),
-  assignee:assignee_id ( full_name, email )
-`;
+const TASK_SELECT =
+  'id, brand_id, lead_id, assignee_id, call_id, title, notes, kind, priority, status, ' +
+  'due_at, snoozed_until, completed_at, recurrence, created_at, updated_at, ' +
+  'leads:lead_id ( first_name, last_name, phone ), ' +
+  'assignee:assignee_id ( full_name, email ), ' +
+  'call:call_id ( to_number, from_number, direction, note, recording_url )';
 
 async function fetchReminders(taskIds: string[]): Promise<Map<string, TaskReminder[]>> {
   const map = new Map<string, TaskReminder[]>();
