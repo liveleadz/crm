@@ -206,22 +206,45 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ number: string 
 
   // Build LaML XML response.
   //
-  // In-browser PSTN→Subscriber routing for Call Fabric needs SWML, not
-  // LaML — the IncomingPhoneNumber must dispatch through a SignalWire ML
-  // application. Until that's wired, every inbound goes straight to
-  // voicemail so the caller never gets stuck in a dead dial. The agent
-  // still sees the call + recording in /calls and the lead owner gets a
-  // bell notification.
+  // PSTN → browser routing uses <Dial><Client>email</Client></Dial>: each
+  // member's lowercased email is also their SignalWire Subscriber
+  // `reference`, so any browser tab with our SignalWire JS client online
+  // for that subscriber receives the invite. With multiple <Client>
+  // children, SignalWire parallel-dials and bridges the first to accept.
+  // answerOnBridge keeps the caller from hearing answer-side media until
+  // a real bridge happens. action= fires only when no leg connects in
+  // `timeout` seconds, sending the caller to voicemail (or a polite
+  // hangup if voicemail is off). The previous nextRotationMemberId is
+  // already persisted above for round_robin advancement.
   void nextRotationMemberId;
-  void ringEmails;
   const verbs: string[] = [];
+  const timeoutSec = Math.max(5, Math.min(120, route?.ring_timeout_sec ?? 25));
+  const vmEnabled = (route?.voicemail_enabled ?? true) && !!callId;
+  const dialActionUrl = vmEnabled
+    ? `${getPublicAppUrl()}/api/swml/voicemail/${callId}/${signVoicemailPath(callId!)}`
+    : null;
 
-  if ((route?.voicemail_enabled ?? true) && callId) {
+  if (ringEmails.length > 0) {
+    const clientVerbs = ringEmails
+      .map((e) => `<Client>${escapeXml(e)}</Client>`)
+      .join('');
+    const dialAttrs = [
+      `timeout="${timeoutSec}"`,
+      'answerOnBridge="true"',
+      dialActionUrl ? `action="${escapeXml(dialActionUrl)}"` : '',
+      dialActionUrl ? 'method="POST"' : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    verbs.push(`<Dial ${dialAttrs}>${clientVerbs}</Dial>`);
+  }
+
+  if (vmEnabled) {
     const greeting =
       route?.voicemail_greeting ??
       "You've reached us. We can't take your call right now — please leave a message after the tone.";
-    const vmSig = signVoicemailPath(callId);
-    const vmUrl = `${getPublicAppUrl()}/api/swml/voicemail/${callId}/${vmSig}`;
+    const vmSig = signVoicemailPath(callId!);
+    const vmUrl = `${getPublicAppUrl()}/api/swml/voicemail/${callId!}/${vmSig}`;
     verbs.push(`<Say>${escapeXml(greeting)}</Say>`);
     verbs.push(
       `<Record action="${escapeXml(vmUrl)}" method="POST" maxLength="180" finishOnKey="#" playBeep="true" timeout="5"/>`,

@@ -815,8 +815,8 @@ function InboundRouteModal({
             </select>
             {strategy === 'round_robin' && (
               <p className="mt-1.5 text-[10.5px] text-txt-3">
-                Each inbound call rings the next member in the list, wrapping at the
-                end. Members without a mobile_phone are skipped on their turn.
+                Each inbound call rings the next member's browser in the list,
+                wrapping at the end.
               </p>
             )}
             {strategy === 'single' && (
@@ -827,28 +827,26 @@ function InboundRouteModal({
           </div>
 
           <div>
-            <Label>Members to ring (mobile_phone)</Label>
+            <Label>Members to ring (browser)</Label>
             {members.length === 0 ? (
               <p className="text-[11.5px] text-txt-3">No brand members yet.</p>
             ) : (
               <div className="grid gap-1.5 sm:grid-cols-2">
                 {members.map((m) => {
                   const checked = memberIds.includes(m.id);
-                  const disabled = !m.mobile_phone;
                   return (
                     <label
                       key={m.id}
-                      className={`flex items-start gap-2 rounded-md border px-2 py-1.5 text-[12px] ${
+                      className={`flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 text-[12px] hover:border-teal/40 ${
                         checked
                           ? "border-teal/50 bg-teal/5"
                           : "border-line bg-canvas"
-                      } ${disabled ? "opacity-50" : "cursor-pointer hover:border-teal/40"}`}
+                      }`}
                     >
                       <input
                         type="checkbox"
-                        disabled={disabled}
-                        checked={checked && !disabled}
-                        onChange={() => !disabled && toggleMember(m.id)}
+                        checked={checked}
+                        onChange={() => toggleMember(m.id)}
                         className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-teal"
                       />
                       <div className="min-w-0 flex-1">
@@ -856,7 +854,7 @@ function InboundRouteModal({
                           {m.full_name || m.email}
                         </div>
                         <div className="truncate font-mono text-[10.5px] text-txt-3">
-                          {m.mobile_phone || "no mobile_phone on file"}
+                          {m.email}
                         </div>
                       </div>
                     </label>
@@ -865,8 +863,9 @@ function InboundRouteModal({
               </div>
             )}
             <p className="mt-1.5 text-[10.5px] text-txt-3">
-              Members without a mobile_phone are greyed out — add one in their profile to
-              include them in the rotation.
+              Inbound calls ring the selected members' browsers via the SignalWire
+              client — the member must have the LeadPilot tab open to receive the
+              call popup.
             </p>
           </div>
 
