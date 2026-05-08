@@ -7,7 +7,6 @@ import { IncomingCallPopup } from '@/components/incoming-call/incoming-call-popu
 import { OutgoingCallProvider } from '@/components/outgoing-call/outgoing-call-provider';
 import { OutgoingCallPopup } from '@/components/outgoing-call/outgoing-call-popup';
 import { PresenceProvider } from '@/components/presence/presence-provider';
-import { SignalWireClientProvider } from '@/components/signalwire/signalwire-client-provider';
 import { getActiveBrand, getMembershipBrands } from '@/lib/active-brand';
 import { getCurrentBrandRole } from '@/lib/team';
 import { loadDispositions } from '@/lib/dispositions';
@@ -47,25 +46,23 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <PresenceProvider>
-      <SignalWireClientProvider>
-        <IncomingCallProvider
+      <IncomingCallProvider
+        dispositions={dispositions.map((d) => ({ id: d.id, code: d.code, label: d.label, tone: d.tone }))}
+      >
+        <OutgoingCallProvider
           dispositions={dispositions.map((d) => ({ id: d.id, code: d.code, label: d.label, tone: d.tone }))}
         >
-          <OutgoingCallProvider
-            dispositions={dispositions.map((d) => ({ id: d.id, code: d.code, label: d.label, tone: d.tone }))}
-          >
-            <div className="flex h-screen flex-col">
-              <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />
-              <div className="flex min-h-0 flex-1">
-                <Sidebar role={role} brandId={active.id} />
-                <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">{children}</main>
-              </div>
+          <div className="flex h-screen flex-col">
+            <Topbar brands={brands} active={active} email={user.email!} fullName={fullName} />
+            <div className="flex min-h-0 flex-1">
+              <Sidebar role={role} brandId={active.id} />
+              <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">{children}</main>
             </div>
-            <IncomingCallPopup />
-            <OutgoingCallPopup />
-          </OutgoingCallProvider>
-        </IncomingCallProvider>
-      </SignalWireClientProvider>
+          </div>
+          <IncomingCallPopup />
+          <OutgoingCallPopup />
+        </OutgoingCallProvider>
+      </IncomingCallProvider>
     </PresenceProvider>
   );
 }

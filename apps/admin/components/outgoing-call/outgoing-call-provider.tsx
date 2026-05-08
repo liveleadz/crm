@@ -19,7 +19,7 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import { type FabricRoomSession } from '@signalwire/js';
+import { SignalWire, type SignalWireClient, type FabricRoomSession } from '@signalwire/js';
 import {
   attachSignalwireCallId,
   markCallEnded,
@@ -28,7 +28,6 @@ import {
 } from '@/app/actions/dialer';
 import type { DispositionChoice } from '@/components/dialer/disposition-picker';
 import { usePresence } from '@/components/presence/presence-provider';
-import { useSignalWireClient } from '@/components/signalwire/signalwire-client-provider';
 
 export type OutgoingCallTarget = {
   toNumber: string;
@@ -73,6 +72,11 @@ export function useOutgoingCall(): Ctx {
   return ctx;
 }
 
+// Cap the cached client at 30 minutes — well under the SAT's 2h TTL.
+// Removes the most common source of authblock_is_expired: a tab idle
+// for hours.
+const CLIENT_MAX_AGE_MS = 30 * 60 * 1000;
+
 function isAuthExpiredError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err ?? '');
   return /authblock_is_expired|authblock has passed|UnprocessableEntity/i.test(msg);
@@ -89,12 +93,9 @@ export function OutgoingCallProvider({
   const [muted, setMuted] = useState(false);
   const [onHold, setOnHold] = useState(false);
   const { setOnCall } = usePresence();
-  // Shared SignalWire client (one per tab). Eliminates the cross-
-  // provider authblock race that we hit in 0046 — with one client in
-  // play, rotating it never stomps a separate authblock owned by the
-  // inbound side.
-  const { getClient, refreshNow, setBusy } = useSignalWireClient();
 
+  const clientRef = useRef<SignalWireClient | null>(null);
+  const clientMintedAtRef = useRef<number>(0);
   const sessionRef = useRef<FabricRoomSession | null>(null);
   const callIdRef = useRef<string | null>(null);
   const startedAtRef = useRef<number | null>(null);
@@ -107,22 +108,42 @@ export function OutgoingCallProvider({
       status.kind === 'in_call' ||
       status.kind === 'wrap_up';
     setOnCall(onCall);
-    // Same flag tells the shared client provider to defer rotation while
-    // we're mid-dial — tearing the client down between connecting and
-    // in_call would otherwise drop the call.
-    setBusy('outgoing', onCall);
-  }, [status.kind, setOnCall, setBusy]);
-  useEffect(() => () => {
-    setOnCall(false);
-    setBusy('outgoing', false);
-  }, [setOnCall, setBusy]);
+  }, [status.kind, setOnCall]);
+  useEffect(() => () => setOnCall(false), [setOnCall]);
 
-  // Tear down the active session on unmount. The shared client itself
-  // is owned by SignalWireClientProvider and lives on.
+  // Tear down the SignalWire client on unmount. Same shape as the old
+  // dial pad — a stale client would just block on auth at next dial.
   useEffect(() => {
     return () => {
       void sessionRef.current?.hangup?.().catch(() => undefined);
+      void clientRef.current?.disconnect?.().catch(() => undefined);
     };
+  }, []);
+
+  const getClient = useCallback(async (force = false): Promise<SignalWireClient> => {
+    const aged = Date.now() - clientMintedAtRef.current > CLIENT_MAX_AGE_MS;
+    const needsFresh = force || aged || !clientRef.current;
+    if (clientRef.current && !needsFresh) return clientRef.current;
+    if (clientRef.current) {
+      try {
+        await clientRef.current.disconnect();
+      } catch {
+        /* ignore */
+      }
+      clientRef.current = null;
+    }
+    const tokenRes = await fetch('/api/signalwire/token', {
+      method: 'POST',
+      cache: 'no-store',
+    });
+    if (!tokenRes.ok) {
+      throw new Error(`Token fetch failed (${tokenRes.status})`);
+    }
+    const { token } = (await tokenRes.json()) as { token: string };
+    const client = await SignalWire({ token });
+    clientRef.current = client;
+    clientMintedAtRef.current = Date.now();
+    return client;
   }, []);
 
   // Internal: mark this call ended locally + tell the server.
@@ -201,9 +222,7 @@ export function OutgoingCallProvider({
             /* ignore */
           }
           sessionRef.current = null;
-          // Mint a brand-new client; subsequent dialAndStart() will
-          // pick it up via getClient() inside dialAndStart's closure.
-          await refreshNow();
+          await getClient(true);
           session = await dialAndStart();
         }
         sessionRef.current = session;
@@ -232,7 +251,7 @@ export function OutgoingCallProvider({
         setStatus({ kind: 'error', target, message: msg });
       }
     },
-    [getClient, refreshNow, finishCall, status.kind],
+    [getClient, finishCall, status.kind],
   );
 
   const hangup = useCallback(async () => {
