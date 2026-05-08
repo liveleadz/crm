@@ -3,6 +3,7 @@ import { loadKanban } from '@/lib/leads';
 import { loadBrandTagsWithCounts } from '@/lib/tags';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadFollowupsForBrand } from '@/lib/disposition-followups';
+import { assertBrandRoleOrNotFound } from '@/lib/team';
 import { createServerClient } from '@leadpilot/db/server';
 import { PageHeader } from '@/components/page-header';
 import { StagesManager } from '@/components/settings/stages-manager';
@@ -14,6 +15,10 @@ import { BrandDialPolicy } from '@/components/settings/brand-dial-policy';
 export default async function SettingsPage() {
   const active = await getActiveBrand();
   if (!active) return null;
+  // Brand-config surface (stages / tags / dispositions / dial cap /
+  // followup templates) — manager+ only. Server actions already gate
+  // mutations; this page guard hides the read-only view too.
+  await assertBrandRoleOrNotFound('manager');
   const supabase = await createServerClient();
   const [{ stages }, tags, dispositions, brandFollowups, { data: brandRow }] = await Promise.all([
     loadKanban(active.id),
