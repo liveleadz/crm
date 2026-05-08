@@ -104,6 +104,75 @@ export async function findBrandLeadByPhone(
   return data ?? null;
 }
 
+// Make sure the call has a lead attached, creating one on the fly if it
+// doesn't. This is what lets disposition automations fire on ad-hoc dials
+// to numbers that aren't in the contacts list yet — the seeded
+// "Sale → move to Won" / "DNC → mark Do Not Call" / etc. rules all
+// require ctx.leadId, so without a lead they silently no-op.
+//
+// Idempotent and concurrent-safe: re-runs against the same callId will
+// return the existing lead_id rather than minting duplicates. We also
+// re-check the brand-wide phone index right before inserting in case
+// another path (e.g. inbound webhook) just resolved the same lead.
+//
+// Uses the admin client because: (a) the call's owner may not have RLS
+// rights to insert leads, (b) we backfill calls.lead_id which the agent
+// also might not own under the role-scoped RLS from migration 0040.
+export async function ensureLeadForCall(callId: string): Promise<string | null> {
+  const sb = createAdminClient();
+  const { data: call } = await sb
+    .from('calls')
+    .select('id, brand_id, lead_id, member_id, direction, from_number, to_number')
+    .eq('id', callId)
+    .maybeSingle();
+  if (!call) return null;
+  if (call.lead_id) return call.lead_id;
+
+  // Outbound: dialed-out number is the contact. Inbound: caller is.
+  const otherSide = call.direction === 'inbound' ? call.from_number : call.to_number;
+  if (!otherSide || otherSide === 'unknown') return null;
+  const e164 = toE164(otherSide) ?? otherSide;
+
+  // Last-chance lookup before insert. Covers the race where the inbound
+  // webhook + the agent's wrap-up both try to materialize the same lead.
+  const existing = await findBrandLeadByPhone(call.brand_id, e164);
+  if (existing) {
+    await sb.from('calls').update({ lead_id: existing.id }).eq('id', callId);
+    return existing.id;
+  }
+
+  // Drop the new lead on the brand's first pipeline stage so it shows up
+  // in the kanban under "New" (or whatever the manager named position 0).
+  // Falling back to null is fine — the seeded automations move the lead
+  // to its correct destination stage immediately after this anyway.
+  const { data: firstStage } = await sb
+    .from('stages')
+    .select('id')
+    .eq('brand_id', call.brand_id)
+    .order('position', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: created, error } = await sb
+    .from('leads')
+    .insert({
+      brand_id: call.brand_id,
+      stage_id: firstStage?.id ?? null,
+      // Owner the lead to whoever placed/took the call so it shows up
+      // in their assigned-to-me views and respects the leads_select RLS
+      // self-scope for agents.
+      owner_id: call.member_id ?? null,
+      source: 'manual',
+      phone: e164,
+    })
+    .select('id')
+    .single();
+  if (error || !created) return null;
+
+  await sb.from('calls').update({ lead_id: created.id }).eq('id', callId);
+  return created.id;
+}
+
 export function getPublicAppUrl(): string {
   // Only trust NEXT_PUBLIC_APP_URL if it actually parses as an http(s) URL.
   // (Some Vercel projects ship with the literal placeholder string baked in,

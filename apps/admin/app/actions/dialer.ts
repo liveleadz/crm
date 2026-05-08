@@ -10,7 +10,13 @@
 
 import { revalidatePath } from 'next/cache';
 import { getActiveBrand } from '@/lib/active-brand';
-import { findBrandLeadByPhone, getMyProfile, getPublicAppUrl, toE164 } from '@/lib/dialer';
+import {
+  ensureLeadForCall,
+  findBrandLeadByPhone,
+  getMyProfile,
+  getPublicAppUrl,
+  toE164,
+} from '@/lib/dialer';
 import { pickOutboundNumber } from '@/lib/phone-pools';
 import { signDialToken, signTransferPath } from '@/lib/dial-token';
 import { redirectInProgressCall } from '@/lib/signalwire';
@@ -423,11 +429,19 @@ export async function setDisposition(input: {
   // Fan out to user-defined automations. Best-effort: a misbehaving rule
   // must never reject the disposition save.
   if (row) {
+    // Materialize a lead if the call still has none — every seeded
+    // disposition_set rule (Sale, DNC, Wrong number, Not interested,
+    // Callback) is leadBound and short-circuits without ctx.leadId.
+    // Auto-creating here means dialing a brand-new number then
+    // dispositioning it as Sale will both produce the contact and run
+    // the "Sale → move to Won" automation in a single step.
+    const resolvedLeadId = row.lead_id ?? (await ensureLeadForCall(input.callId));
+
     await runAutomations({
       trigger: 'disposition_set',
       brandId: row.brand_id,
       callId: input.callId,
-      leadId: row.lead_id,
+      leadId: resolvedLeadId,
       memberId: row.member_id,
       disposition: input.disposition,
       callbackAt,
@@ -554,20 +568,24 @@ export async function bulkSetDispositions(input: {
   if (error) return { ok: false, error: error.message };
   const updated = rows?.length ?? 0;
 
-  // Fan out automations per row, best-effort.
+  // Fan out automations per row, best-effort. Same auto-create-lead
+  // safety net as the single setDisposition path so bulk-applying Sale
+  // (or any other rule with leadBound actions) works on calls that
+  // came in lead-less.
   if (rows && rows.length > 0) {
     await Promise.all(
-      rows.map((r) =>
-        runAutomations({
+      rows.map(async (r) => {
+        const resolvedLeadId = r.lead_id ?? (await ensureLeadForCall(r.id));
+        return runAutomations({
           trigger: 'disposition_set',
           brandId: r.brand_id,
           callId: r.id,
-          leadId: r.lead_id,
+          leadId: resolvedLeadId,
           memberId: r.member_id,
           disposition: input.disposition,
           callbackAt: null,
-        }).catch(() => undefined),
-      ),
+        }).catch(() => undefined);
+      }),
     );
   }
 
