@@ -17,7 +17,8 @@ import {
   type ReportFilter,
   type ReportRange,
 } from '@/lib/reports';
-import { loadTeam } from '@/lib/team';
+import { getCurrentBrandRole, loadTeam } from '@/lib/team';
+import { getMyProfile } from '@/lib/dialer';
 import { PageHeader } from '@/components/page-header';
 import { ReportFilters } from '@/components/reports/report-filters';
 import { ReportTabs, type ReportTab } from '@/components/reports/report-tabs';
@@ -92,7 +93,16 @@ export default async function ReportsPage({
   const tab = parseTab(sp.tab);
   let range = parseRange(sp.range);
   const direction = parseDirection(sp.dir);
-  const agentId = sp.agent && sp.agent.length > 0 ? sp.agent : null;
+  const urlAgentId = sp.agent && sp.agent.length > 0 ? sp.agent : null;
+
+  // Agents/viewers can't peek at a colleague's numbers via ?agent=…;
+  // pass viewerMemberId so the report loader force-overrides agentId
+  // to the caller's own member id. Manager+ keeps brand-wide access.
+  const role = await getCurrentBrandRole(active.id);
+  const profile = await getMyProfile();
+  const viewerMemberId =
+    profile && (role === 'agent' || role === 'viewer') ? profile.id : null;
+  const agentId = viewerMemberId ?? urlAgentId;
 
   const fromDate = isValidDate(sp.from) ? sp.from : '';
   const toDate = isValidDate(sp.to) ? sp.to : '';
@@ -106,6 +116,7 @@ export default async function ReportsPage({
     fromIso: range === 'custom' && fromDate ? startIso(fromDate) : null,
     toIso: range === 'custom' && toDate ? endIso(toDate) : null,
     timezone: active.timezone,
+    viewerMemberId,
   };
 
   const team = await loadTeam(active.id);

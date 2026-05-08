@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getActiveBrand } from '@/lib/active-brand';
+import { assertBrandRoleOrNotFound } from '@/lib/team';
 import { loadStages } from '@/lib/leads';
 import { loadCustomFields } from '@/lib/lists';
 import { loadBrandTags } from '@/lib/tags';
@@ -19,6 +20,9 @@ import { ImportWizard } from '@/components/leads/import-wizard';
 // CSV and pick a stage — the wizard tolerates an empty list of custom
 // fields and an empty stages array (it just disables the stage picker).
 export default async function ImportLeadsPage() {
+  // Bulk import is manager+ — agents work the leads they're assigned,
+  // they don't onboard new ones from CSV.
+  await assertBrandRoleOrNotFound('manager');
   const active = await getActiveBrand();
   if (!active) redirect('/');
   const [stages, customFields, tagLibrary, presets] = await Promise.all([

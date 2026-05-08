@@ -1,16 +1,16 @@
-import { redirect } from 'next/navigation';
 import { getActiveBrand } from '@/lib/active-brand';
-import { canManageTeam, getCurrentBrandRole } from '@/lib/team';
+import { assertBrandRoleOrNotFound } from '@/lib/team';
 import { loadBrandCalendars } from '@/lib/calendars';
 import { loadTeam } from '@/lib/team';
 import { PageHeader } from '@/components/page-header';
 import { CalendarsManager } from '@/components/settings/calendars-manager';
 
 export default async function CalendarsPage() {
+  // Calendar config is manager+. Was previously gated to admin/owner via
+  // canManageTeam — same bug we fixed in actions/calendars.ts.
+  await assertBrandRoleOrNotFound('manager');
   const active = await getActiveBrand();
   if (!active) return null;
-  const role = await getCurrentBrandRole(active.id);
-  if (!canManageTeam(role)) redirect('/settings');
 
   const [calendars, team] = await Promise.all([
     loadBrandCalendars(active.id),

@@ -2,6 +2,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadDashboard } from '@/lib/dashboard';
 import { loadAgentCampaignSummary } from '@/lib/campaigns';
 import { getMyProfile } from '@/lib/dialer';
+import { getCurrentBrandRole } from '@/lib/team';
 import { PageHeader } from '@/components/page-header';
 import { KpiCards } from '@/components/dashboard/kpi-cards';
 import { PipelineByStage } from '@/components/dashboard/pipeline-by-stage';
@@ -18,6 +19,12 @@ export default async function DashboardPage() {
   const active = await getActiveBrand();
   if (!active) return null;
   const profile = await getMyProfile();
+  // Agents/viewers see only their own work; manager+ sees brand-wide
+  // aggregates. Reuses the existing role lookup (cached per request via
+  // the brand_role RPC).
+  const role = await getCurrentBrandRole(active.id);
+  const viewerMemberId =
+    profile && (role === 'agent' || role === 'viewer') ? profile.id : null;
   const [
     {
       kpis,
@@ -30,7 +37,7 @@ export default async function DashboardPage() {
     },
     myCampaigns,
   ] = await Promise.all([
-    loadDashboard(active.id),
+    loadDashboard(active.id, { viewerMemberId }),
     profile ? loadAgentCampaignSummary(active.id, profile.id) : Promise.resolve([]),
   ]);
 

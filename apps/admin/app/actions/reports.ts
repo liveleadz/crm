@@ -6,6 +6,8 @@
 // on the active tab so each report kind emits its own CSV shape.
 
 import { getActiveBrand } from '@/lib/active-brand';
+import { getCurrentBrandRole } from '@/lib/team';
+import { getMyProfile } from '@/lib/dialer';
 import {
   loadCallReport,
   loadEmailReport,
@@ -50,13 +52,23 @@ export async function exportAgentReportCsv(input: {
     const active = await getActiveBrand();
     if (!active) return { ok: false, error: 'No active brand.' };
 
+    // Mirror the report page's self-scope: agents/viewers can't export
+    // a colleague's slice via the input.agentId. The loader's
+    // effectiveFilter() rewrites agentId to viewerMemberId, but we
+    // also pass it explicitly so the filter object is consistent.
+    const role = await getCurrentBrandRole(active.id);
+    const profile = await getMyProfile();
+    const viewerMemberId =
+      profile && (role === 'agent' || role === 'viewer') ? profile.id : null;
+
     const filter: ReportFilter = {
       range: input.range,
-      agentId: input.agentId ?? null,
+      agentId: viewerMemberId ?? input.agentId ?? null,
       direction: input.direction ?? 'all',
       fromIso: input.fromIso ?? null,
       toIso: input.toIso ?? null,
       timezone: active.timezone,
+      viewerMemberId,
     };
 
     const tab: ReportTabKind = input.tab ?? 'calls';

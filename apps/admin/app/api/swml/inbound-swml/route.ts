@@ -258,6 +258,30 @@ async function handle(req: NextRequest) {
     callId = callRow?.id ?? null;
   }
 
+  // Auto-claim ownership: if the matched lead has no owner and the
+  // inbound is being dispatched to a single deterministic agent
+  // (`single` strategy, or the round-robin slot that just got picked),
+  // assign that agent as owner. Mirrors the outbound `ensureLeadForCall`
+  // behavior so an agent who handles a callback also owns the lead in
+  // their pipeline. Idempotent — `.is('owner_id', null)` guarantees we
+  // never overwrite an existing owner. Skipped for `simul` (multiple
+  // ringers, no deterministic claimant until pickup) and on retries
+  // (the first hit already claimed it).
+  if (
+    !isRetry &&
+    leadId &&
+    !leadOwnerId &&
+    (strategy === 'single' || strategy === 'round_robin') &&
+    targetMemberIds.length > 0
+  ) {
+    const claimMemberId = targetMemberIds[0];
+    void supabase
+      .from('leads')
+      .update({ owner_id: claimMemberId })
+      .eq('id', leadId)
+      .is('owner_id', null);
+  }
+
   // Insert a "Missed call" notification up-front for the assigned
   // members (and the lead owner if matched). claimRecentInboundCall
   // marks these as READ when the agent picks up — so the bell only ever

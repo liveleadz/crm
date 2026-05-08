@@ -77,11 +77,29 @@ function sevenDaysAgoIso() {
   return d.toISOString();
 }
 
-export async function loadDashboard(brandId: string) {
+export async function loadDashboard(
+  brandId: string,
+  opts?: { viewerMemberId?: string | null },
+) {
   const supabase = await createServerClient();
   const todayStart = startOfTodayIso();
   const tomorrowStart = startOfTomorrowIso();
   const weekAgo = sevenDaysAgoIso();
+  // Self-scope filter for agents/viewers. When set, every aggregate that
+  // has a member-or-owner attribution column is narrowed to that member,
+  // so the agent's KPIs and lists reflect their own work — not the
+  // brand-wide totals managers see. Brand-wide config (stages, tags,
+  // dispositions) is left brand-scoped.
+  const selfMemberId = opts?.viewerMemberId ?? null;
+
+  // Helper closures keep the Promise.all readable: each builder appends
+  // the self-scope filter when applicable. Without these, the whole
+  // .all block would be a wall of conditional .eq() chains.
+  const scopeLeads = <T extends { eq: (col: string, val: string) => T }>(q: T): T =>
+    selfMemberId ? q.eq('owner_id', selfMemberId) : q;
+  const scopeCalls = <T extends { eq: (col: string, val: string) => T }>(q: T): T =>
+    selfMemberId ? q.eq('member_id', selfMemberId) : q;
+  const scopeAppts = scopeCalls;
 
   const [
     activeLeadsRes,
@@ -98,63 +116,82 @@ export async function loadDashboard(brandId: string) {
     tagLibraryRes,
     dispositions,
   ] = await Promise.all([
-    supabase
-      .from('leads')
-      .select('id', { count: 'exact', head: true })
-      .eq('brand_id', brandId),
-    supabase
-      .from('appointments')
-      .select('id', { count: 'exact', head: true })
-      .eq('brand_id', brandId)
-      .gte('starts_at', todayStart)
-      .lt('starts_at', tomorrowStart),
-    supabase
-      .from('appointments')
-      .select('id', { count: 'exact', head: true })
-      .eq('brand_id', brandId)
-      .eq('status', 'no_show')
-      .gte('starts_at', weekAgo),
-    supabase
-      .from('calls')
-      .select('id', { count: 'exact', head: true })
-      .eq('brand_id', brandId)
-      .gte('started_at', weekAgo),
+    scopeLeads(
+      supabase
+        .from('leads')
+        .select('id', { count: 'exact', head: true })
+        .eq('brand_id', brandId),
+    ),
+    scopeAppts(
+      supabase
+        .from('appointments')
+        .select('id', { count: 'exact', head: true })
+        .eq('brand_id', brandId)
+        .gte('starts_at', todayStart)
+        .lt('starts_at', tomorrowStart),
+    ),
+    scopeAppts(
+      supabase
+        .from('appointments')
+        .select('id', { count: 'exact', head: true })
+        .eq('brand_id', brandId)
+        .eq('status', 'no_show')
+        .gte('starts_at', weekAgo),
+    ),
+    scopeCalls(
+      supabase
+        .from('calls')
+        .select('id', { count: 'exact', head: true })
+        .eq('brand_id', brandId)
+        .gte('started_at', weekAgo),
+    ),
     supabase
       .from('stages')
       .select('id, name, color, position, is_won, is_lost')
       .eq('brand_id', brandId)
       .order('position'),
-    supabase
-      .from('leads')
-      .select('stage_id')
-      .eq('brand_id', brandId),
-    supabase
-      .from('calls')
-      .select('id, started_at, duration_sec, direction, disposition, recording_url, leads(first_name, last_name)')
-      .eq('brand_id', brandId)
-      .order('started_at', { ascending: false })
-      .limit(5),
-    supabase
-      .from('appointments')
-      .select('id, starts_at, ends_at, title, status, location, leads(first_name, last_name)')
-      .eq('brand_id', brandId)
-      .gte('starts_at', todayStart)
-      .lt('starts_at', tomorrowStart)
-      .order('starts_at')
-      .limit(8),
+    scopeLeads(
+      supabase
+        .from('leads')
+        .select('stage_id')
+        .eq('brand_id', brandId),
+    ),
+    scopeCalls(
+      supabase
+        .from('calls')
+        .select('id, started_at, duration_sec, direction, disposition, recording_url, leads(first_name, last_name)')
+        .eq('brand_id', brandId)
+        .order('started_at', { ascending: false })
+        .limit(5),
+    ),
+    scopeAppts(
+      supabase
+        .from('appointments')
+        .select('id, starts_at, ends_at, title, status, location, leads(first_name, last_name)')
+        .eq('brand_id', brandId)
+        .gte('starts_at', todayStart)
+        .lt('starts_at', tomorrowStart)
+        .order('starts_at')
+        .limit(8),
+    ),
     // Calls started today, restricted to those with a disposition set.
     // We aggregate client-side because the SQL view for grouped counts
     // doesn't exist yet and the daily volume is well under any
     // reasonable in-process aggregate budget.
-    supabase
-      .from('calls')
-      .select('disposition')
-      .eq('brand_id', brandId)
-      .gte('started_at', todayStart)
-      .not('disposition', 'is', null),
+    scopeCalls(
+      supabase
+        .from('calls')
+        .select('disposition')
+        .eq('brand_id', brandId)
+        .gte('started_at', todayStart)
+        .not('disposition', 'is', null),
+    ),
     // Imports — last 5 import-source lists. Counts come from a separate
     // lookup against leads.list_id below (matches the loadLists pattern
-    // and survives RLS without an extra join).
+    // and survives RLS without an extra join). Lists are brand config
+    // (no member attribution column), so we leave them brand-wide even
+    // for self-scoped viewers — agents see what's available to import
+    // from, just as they would on the lists page.
     supabase
       .from('lead_lists')
       .select('id, name, created_at')
@@ -162,11 +199,19 @@ export async function loadDashboard(brandId: string) {
       .eq('source', 'import')
       .order('created_at', { ascending: false })
       .limit(5),
-    // All lead_tags joins for this brand's leads; aggregated below.
-    supabase
-      .from('lead_tags')
-      .select('tag_id, leads!inner(brand_id)')
-      .eq('leads.brand_id', brandId),
+    // All lead_tags joins for this brand's leads; aggregated below. For
+    // self-scoped viewers, restrict via the underlying lead's owner_id
+    // so the agent's "Top tags" reflects only their own pipeline.
+    selfMemberId
+      ? supabase
+          .from('lead_tags')
+          .select('tag_id, leads!inner(brand_id, owner_id)')
+          .eq('leads.brand_id', brandId)
+          .eq('leads.owner_id', selfMemberId)
+      : supabase
+          .from('lead_tags')
+          .select('tag_id, leads!inner(brand_id)')
+          .eq('leads.brand_id', brandId),
     supabase
       .from('tags')
       .select('id, name, color')
@@ -258,14 +303,15 @@ export async function loadDashboard(brandId: string) {
   // large; per-list count(*) with head:true is cheap.
   const importsRaw = recentImportsRes.data ?? [];
   const importCounts = await Promise.all(
-    importsRaw.map((l) =>
-      supabase
+    importsRaw.map((l) => {
+      let q = supabase
         .from('leads')
         .select('id', { count: 'exact', head: true })
         .eq('brand_id', brandId)
-        .eq('list_id', l.id)
-        .then((r) => r.count ?? 0),
-    ),
+        .eq('list_id', l.id);
+      if (selfMemberId) q = q.eq('owner_id', selfMemberId);
+      return q.then((r) => r.count ?? 0);
+    }),
   );
   const recentImports: RecentImport[] = importsRaw.map((l, i) => ({
     id: l.id,

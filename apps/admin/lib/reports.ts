@@ -33,6 +33,11 @@ export type ReportFilter = {
   /** IANA tz used to bucket the trend (per-day) and heatmap (dow×hour).
    *  Falls back to UTC when omitted. */
   timezone?: string | null;
+  /** When set, force every report query to filter by this member id —
+   * regardless of any agentId in the URL. Pages set this to the caller's
+   * own member id when the role is agent/viewer so a colleague's id in
+   * `?agent=` can't be used to peek at their numbers. */
+  viewerMemberId?: string | null;
 };
 
 export type ReportKpis = {
@@ -128,6 +133,18 @@ const DAY_MS = 86_400_000;
 // `loadCategoryByCode(brandId)`.
 type CategoryLookup = (code: string | null | undefined) => DispositionCategory;
 
+// Apply the viewer self-scope: when the page passes a viewerMemberId
+// (because the caller is an agent/viewer), force the report's agentId
+// to that member — overwriting any value the URL or caller supplied.
+// Centralizes the rule so every report loader ends up self-scoped
+// without each one re-implementing the override.
+function effectiveFilter(filter: ReportFilter): ReportFilter {
+  if (filter.viewerMemberId) {
+    return { ...filter, agentId: filter.viewerMemberId };
+  }
+  return filter;
+}
+
 function rangeBounds(filter: ReportFilter): { fromIso: string; toIso: string } {
   const now = Date.now();
   if (filter.range === 'custom' && filter.fromIso && filter.toIso) {
@@ -207,8 +224,9 @@ function computeKpis(rows: CallRow[], categoryFor: CategoryLookup): ReportKpis {
 
 export async function loadCallReport(
   brandId: string,
-  filter: ReportFilter,
+  filterIn: ReportFilter,
 ): Promise<CallReport> {
+  const filter = effectiveFilter(filterIn);
   const supabase = await createServerClient();
   const { fromIso, toIso } = rangeBounds(filter);
   // Default to UTC when no tz is provided so callers (e.g. CSV export)
@@ -509,18 +527,23 @@ export type EmailReport = {
 
 export async function loadEmailReport(
   brandId: string,
-  filter: ReportFilter,
+  filterIn: ReportFilter,
 ): Promise<EmailReport> {
+  const filter = effectiveFilter(filterIn);
   const supabase = await createServerClient();
   const { fromIso, toIso } = rangeBounds(filter);
   const tz = filter.timezone || 'UTC';
 
   // Fetch threads for the brand. We need thread→member mapping to attribute
-  // outbound sends and inbound receipts to the right agent.
-  const { data: threads } = await supabase
+  // outbound sends and inbound receipts to the right agent. When the
+  // caller is self-scoped (agent/viewer or explicit ?agent=…), narrow
+  // to threads owned by that member so the KPIs reflect only their work.
+  let threadQuery = supabase
     .from('email_threads')
     .select('id, member_id, last_message_at')
     .eq('brand_id', brandId);
+  if (filter.agentId) threadQuery = threadQuery.eq('member_id', filter.agentId);
+  const { data: threads } = await threadQuery;
   const threadRows = threads ?? [];
   const threadIds = threadRows.map((t) => t.id);
   const threadOwner = new Map(threadRows.map((t) => [t.id, t.member_id]));
@@ -707,8 +730,9 @@ export type PipelineReport = {
 
 export async function loadPipelineReport(
   brandId: string,
-  filter: ReportFilter,
+  filterIn: ReportFilter,
 ): Promise<PipelineReport> {
+  const filter = effectiveFilter(filterIn);
   const supabase = await createServerClient();
   const { fromIso, toIso } = rangeBounds(filter);
   // Pull a wider window of events so we can measure dwell time even when
@@ -718,17 +742,24 @@ export async function loadPipelineReport(
     new Date(fromIso).getTime() - 365 * 86_400_000,
   ).toISOString();
 
+  // Self-scope: filter the lead snapshot by owner_id. Stage events stay
+  // brand-wide because lead_events has no member attribution column;
+  // RLS already restricts agents to their own leads' events at the row
+  // level so the dwell/movement math still ends up self-scoped on read.
+  let leadsQ = supabase
+    .from('leads')
+    .select('id, stage_id')
+    .eq('brand_id', brandId)
+    .limit(50_000);
+  if (filter.agentId) leadsQ = leadsQ.eq('owner_id', filter.agentId);
+
   const [{ data: stages }, { data: leadCounts }, { data: events }] = await Promise.all([
     supabase
       .from('stages')
       .select('id, name, position, is_won, is_lost')
       .eq('brand_id', brandId)
       .order('position', { ascending: true }),
-    supabase
-      .from('leads')
-      .select('id, stage_id')
-      .eq('brand_id', brandId)
-      .limit(50_000),
+    leadsQ,
     supabase
       .from('lead_events')
       .select('lead_id, payload, created_at')
@@ -875,19 +906,22 @@ export type AppointmentsReport = {
 
 export async function loadAppointmentsReport(
   brandId: string,
-  filter: ReportFilter,
+  filterIn: ReportFilter,
 ): Promise<AppointmentsReport> {
+  const filter = effectiveFilter(filterIn);
   const supabase = await createServerClient();
   const { fromIso, toIso } = rangeBounds(filter);
   const tz = filter.timezone || 'UTC';
 
-  const { data: appts } = await supabase
+  let apptsQ = supabase
     .from('appointments')
     .select('id, status, member_id, starts_at')
     .eq('brand_id', brandId)
     .gte('starts_at', fromIso)
     .lte('starts_at', toIso)
     .limit(50_000);
+  if (filter.agentId) apptsQ = apptsQ.eq('member_id', filter.agentId);
+  const { data: appts } = await apptsQ;
   const rowsOut = appts ?? [];
 
   let booked = 0;
@@ -987,11 +1021,16 @@ export type SmsReport = {
   trend: SmsTrendPoint[];
 };
 
-export async function loadSmsReport(brandId: string, filter: ReportFilter): Promise<SmsReport> {
+export async function loadSmsReport(brandId: string, filterIn: ReportFilter): Promise<SmsReport> {
+  const filter = effectiveFilter(filterIn);
   const supabase = await createServerClient();
   const { fromIso, toIso } = rangeBounds(filter);
   const tz = filter.timezone || 'UTC';
 
+  // message_outbox has no member attribution column, so we can't
+  // self-scope SMS volume directly. RLS already hides rows for leads
+  // the agent can't see, so the count naturally narrows under an agent
+  // session — we just don't add an extra .eq() here.
   const { data: outbox } = await supabase
     .from('message_outbox')
     .select('id, status, created_at')
@@ -1065,8 +1104,9 @@ export type CampaignReport = {
 
 export async function loadCampaignReport(
   brandId: string,
-  filter: ReportFilter,
+  filterIn: ReportFilter,
 ): Promise<CampaignReport> {
+  const filter = effectiveFilter(filterIn);
   const supabase = await createServerClient();
   const { fromIso, toIso } = rangeBounds(filter);
 
@@ -1087,23 +1127,32 @@ export async function loadCampaignReport(
 
   const ids = campaigns.map((c) => c.id);
 
+  // Self-scope: when agentId is set (either via the URL or forced by
+  // viewerMemberId), restrict both calls and appointments to that
+  // member so per-campaign rows show the agent's own contribution.
+  let callsQ = supabase
+    .from('calls')
+    .select('campaign_id, disposition')
+    .eq('brand_id', brandId)
+    .in('campaign_id', ids)
+    .gte('started_at', fromIso)
+    .lte('started_at', toIso)
+    .limit(100_000);
+  if (filter.agentId) callsQ = callsQ.eq('member_id', filter.agentId);
+
+  let apptsQ = supabase
+    .from('appointments')
+    .select('campaign_id, status')
+    .eq('brand_id', brandId)
+    .in('campaign_id', ids)
+    .gte('created_at', fromIso)
+    .lte('created_at', toIso)
+    .limit(100_000);
+  if (filter.agentId) apptsQ = apptsQ.eq('member_id', filter.agentId);
+
   const [callsRes, apptsRes, categoryFor] = await Promise.all([
-    supabase
-      .from('calls')
-      .select('campaign_id, disposition')
-      .eq('brand_id', brandId)
-      .in('campaign_id', ids)
-      .gte('started_at', fromIso)
-      .lte('started_at', toIso)
-      .limit(100_000),
-    supabase
-      .from('appointments')
-      .select('campaign_id, status')
-      .eq('brand_id', brandId)
-      .in('campaign_id', ids)
-      .gte('created_at', fromIso)
-      .lte('created_at', toIso)
-      .limit(100_000),
+    callsQ,
+    apptsQ,
     loadCategoryByCode(brandId),
   ]);
   // Connect = any disposition whose category is in the connected set

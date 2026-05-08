@@ -1,5 +1,6 @@
 import { PageHeader } from '@/components/page-header';
 import { getActiveBrand } from '@/lib/active-brand';
+import { assertBrandRoleOrNotFound } from '@/lib/team';
 import { loadNumbersWithHealth } from '@/lib/numbers';
 import { NumbersManager } from '@/components/numbers/numbers-manager';
 import { PoolManager } from '@/components/numbers/pool-manager';
@@ -41,6 +42,7 @@ async function loadAllInboundRoutes(brandId: string) {
 }
 
 export default async function NumbersPage() {
+  await assertBrandRoleOrNotFound('manager');
   const active = await getActiveBrand();
   if (!active) {
     return (

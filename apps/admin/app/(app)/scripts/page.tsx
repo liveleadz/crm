@@ -1,4 +1,5 @@
 import { getActiveBrand } from '@/lib/active-brand';
+import { assertBrandRoleOrNotFound } from '@/lib/team';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadScripts } from '@/lib/scripts-server';
 import type { ScriptKind } from '@/lib/scripts';
@@ -17,6 +18,7 @@ export default async function ScriptsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await assertBrandRoleOrNotFound('manager');
   const active = await getActiveBrand();
   if (!active) return null;
   const sp = await searchParams;
