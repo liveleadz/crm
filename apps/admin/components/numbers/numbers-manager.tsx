@@ -16,6 +16,7 @@ import {
   saveInboundRoute,
   setA2pCampaignId,
   setNumberActive,
+  setNumberAssignedMember,
   updateNumberLabel,
   type InboundRouteRow,
 } from '@/app/actions/numbers';
@@ -28,13 +29,21 @@ type BrandMember = {
   mobile_phone: string | null;
 };
 
+type NumberAssignment = { numberId: string; assignedMemberId: string | null };
+
 type Props = {
   initial: NumberWithHealth[];
   members?: BrandMember[];
   initialRoutes?: InboundRouteRow[];
+  initialAssignments?: NumberAssignment[];
 };
 
-export function NumbersManager({ initial, members = [], initialRoutes = [] }: Props) {
+export function NumbersManager({
+  initial,
+  members = [],
+  initialRoutes = [],
+  initialAssignments = [],
+}: Props) {
   const [items, setItems] = useState<NumberWithHealth[]>(initial);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -42,8 +51,33 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
   const [routes, setRoutes] = useState<Map<string, InboundRouteRow>>(
     () => new Map(initialRoutes.map((r) => [r.numberId, r])),
   );
+  const [assignments, setAssignments] = useState<Map<string, string | null>>(
+    () => new Map(initialAssignments.map((a) => [a.numberId, a.assignedMemberId])),
+  );
   const [routingNumberId, setRoutingNumberId] = useState<string | null>(null);
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
+
+  async function onAssignChange(numberId: string, memberId: string | null) {
+    const prev = assignments.get(numberId) ?? null;
+    if (prev === memberId) return;
+    // Optimistic — flip back on failure.
+    setAssignments((cur) => {
+      const m = new Map(cur);
+      m.set(numberId, memberId);
+      return m;
+    });
+    startTransition(async () => {
+      const res = await setNumberAssignedMember({ id: numberId, memberId });
+      if (!res.ok) {
+        setAssignments((cur) => {
+          const m = new Map(cur);
+          m.set(numberId, prev);
+          return m;
+        });
+        setError(res.error);
+      }
+    });
+  }
 
   function patch(id: string, fn: (n: NumberWithHealth) => NumberWithHealth) {
     setItems((prev) => prev.map((n) => (n.id === id ? fn(n) : n)));
@@ -214,6 +248,7 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
               <col style={{ width: 100 }} />
               <col style={{ width: 90 }} />
               <col style={{ width: 90 }} />
+              <col style={{ width: 140 }} />
               <col style={{ width: 130 }} />
               <col style={{ width: 70 }} />
               <col style={{ width: 60 }} />
@@ -240,6 +275,12 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
                 <th className="px-3 py-2 font-medium">Block rate</th>
                 <th className="px-3 py-2 font-medium">Risk</th>
                 <th className="px-3 py-2 font-medium">Last used</th>
+                <th
+                  className="px-3 py-2 font-medium"
+                  title="Outbound caller-ID owner. When this agent dials, they use this number."
+                >
+                  Assigned to
+                </th>
                 <th className="px-3 py-2 font-medium">Inbound</th>
                 <th className="px-3 py-2 font-medium">Active</th>
                 <th className="px-3 py-2" />
@@ -302,6 +343,23 @@ export function NumbersManager({ initial, members = [], initialRoutes = [] }: Pr
                   </td>
                   <td className="px-3 py-3 text-txt-2">
                     {n.health.lastUsedAt ? timeAgo(n.health.lastUsedAt) : <span className="text-txt-3">never</span>}
+                  </td>
+                  <td className="px-3 py-3">
+                    <select
+                      value={assignments.get(n.id) ?? ''}
+                      onChange={(e) =>
+                        onAssignChange(n.id, e.target.value ? e.target.value : null)
+                      }
+                      aria-label="Assign number to a member"
+                      className="w-full rounded-md border border-line bg-canvas px-2 py-1 text-[11.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+                    >
+                      <option value="">— Pool / Unassigned —</option>
+                      {members.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.full_name || m.email}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   <td className="px-3 py-3">
                     <InboundCell
@@ -722,6 +780,9 @@ function InboundRouteModal({
   const [ring, setRing] = useState<number>(existing?.ringTimeoutSec ?? 25);
   const [vmOn, setVmOn] = useState<boolean>(existing?.voicemailEnabled ?? true);
   const [vmGreeting, setVmGreeting] = useState<string>(existing?.voicemailGreeting ?? "");
+  const [defaultRecipient, setDefaultRecipient] = useState<string | null>(
+    existing?.defaultRecipientMemberId ?? null,
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -743,6 +804,7 @@ function InboundRouteModal({
       ringTimeoutSec: ring,
       voicemailEnabled: vmOn,
       voicemailGreeting: vmGreeting || null,
+      defaultRecipientMemberId: defaultRecipient,
     });
     setBusy(false);
     if (!res.ok) {
@@ -756,6 +818,7 @@ function InboundRouteModal({
       ringTimeoutSec: ring,
       voicemailEnabled: vmOn,
       voicemailGreeting: vmGreeting || null,
+      defaultRecipientMemberId: defaultRecipient,
     });
   }
 
@@ -866,6 +929,29 @@ function InboundRouteModal({
               Inbound calls ring the selected members' browsers via the SignalWire
               client — the member must have the LeadPilot tab open to receive the
               call popup.
+            </p>
+          </div>
+
+          <div>
+            <Label>Default recipient (when no lead owner)</Label>
+            <select
+              value={defaultRecipient ?? ''}
+              onChange={(e) =>
+                setDefaultRecipient(e.target.value ? e.target.value : null)
+              }
+              className={inputCls}
+            >
+              <option value="">— Fallback (hello@liveleadz.com) —</option>
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.full_name || m.email}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-[10.5px] text-txt-3">
+              Inbound calls without a matching lead owner ring this member. Falls
+              back to <span className="font-mono">hello@liveleadz.com</span> when
+              unset.
             </p>
           </div>
 

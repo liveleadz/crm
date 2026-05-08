@@ -136,15 +136,22 @@ async function handle(req: NextRequest) {
   const [routeRes, leadRes, dedupRes] = await Promise.all([
     supabase
       .from('inbound_routes')
-      .select('ring_timeout_sec, voicemail_enabled, voicemail_greeting')
+      .select(
+        'ring_timeout_sec, voicemail_enabled, voicemail_greeting, default_recipient_member_id',
+      )
       .eq('number_id', numberRow.id)
       .maybeSingle(),
+    // Order by created_at desc + limit 1 so duplicate-phone leads in a
+    // brand don't blow up the SWML response (`.maybeSingle()` throws
+    // "more than one row returned" and we'd silently hangup the call).
     fromNumber !== 'unknown'
       ? supabase
           .from('leads')
           .select('id, first_name, last_name, owner_id')
           .eq('brand_id', numberRow.brand_id)
           .eq('phone', fromNumber)
+          .order('created_at', { ascending: false })
+          .limit(1)
           .maybeSingle()
       : Promise.resolve({ data: null }),
     // Dedup probe: prefer the parent/segment ID if SignalWire exposed one,
@@ -199,19 +206,14 @@ async function handle(req: NextRequest) {
   const leadOwnerId: string | null = lead?.owner_id ?? null;
 
   // Smart routing (always rings exactly one Subscriber):
-  //   1. Lead matched + has an owner → ring that owner (the agent who
-  //      last touched the lead — manual claim, prior outbound, or prior
-  //      inbound auto-claim below).
-  //   2. Otherwise → ring the brand's default fallback recipient
-  //      (hello@liveleadz.com). Auto-claim immediately attaches that
-  //      member as owner, so subsequent calls from the same number ring
-  //      them directly per rule 1.
-  //
-  // The legacy inbound_routes.strategy / member_ids fan-out is bypassed
-  // here. We still read the row for voicemail config below, but the
-  // ring path no longer respects it. A future inbound-routing admin UI
-  // will replace this hard-coded fallback with a brand-configurable
-  // default recipient.
+  //   1. Lead matched + has an owner → ring that owner.
+  //   2. Number's inbound route has a configured default_recipient
+  //      (set in /numbers admin UI) → ring that member.
+  //   3. Last-resort fallback → hello@liveleadz.com. Stays hard-coded so
+  //      a brand without any routing configured still rings somebody
+  //      instead of dropping straight to voicemail.
+  // Auto-claim attaches the first ring target as the lead's owner so
+  // subsequent calls from the same number ring the same agent per #1.
   const FALLBACK_EMAIL = 'hello@liveleadz.com';
   const ringEmails: string[] = [];
   const targetMemberIds: string[] = [];
@@ -227,12 +229,24 @@ async function handle(req: NextRequest) {
       targetMemberIds.push(owner.id);
     }
   }
+  // Step 2: number-level default recipient.
+  if (ringEmails.length === 0 && route?.default_recipient_member_id) {
+    const { data: defaultRecipient } = await supabase
+      .from('members')
+      .select('id, email')
+      .eq('id', route.default_recipient_member_id)
+      .maybeSingle();
+    if (defaultRecipient?.email) {
+      ringEmails.push(defaultRecipient.email.toLowerCase());
+      targetMemberIds.push(defaultRecipient.id);
+    }
+  }
+  // Step 3: terminal fallback. Resolve to a member row + verify they
+  // belong to this brand via brand_members so the notification +
+  // auto-claim only attach when the recipient is actually a member.
+  // (Subscribers are SignalWire-account-wide so the connect dispatch
+  // always works regardless.)
   if (ringEmails.length === 0) {
-    // Fallback: brand-default recipient. Resolve to a member row, then
-    // verify that member belongs to this brand via brand_members so the
-    // notification + auto-claim only attach when the recipient is
-    // actually a member of the brand. (Subscribers themselves are
-    // SignalWire-account-wide so the connect dispatch always works.)
     ringEmails.push(FALLBACK_EMAIL);
     const { data: fallbackMember } = await supabase
       .from('members')

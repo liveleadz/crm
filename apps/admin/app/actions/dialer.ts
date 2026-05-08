@@ -155,10 +155,15 @@ export async function prepareCall(input: {
     }
   }
 
+  const profile = await getMyProfile();
+  if (!profile) return { ok: false, error: 'Not authenticated.' };
+
   const fromNumber = await pickOutboundNumber({
     brandId: active.id,
     campaignId: input.campaignId ?? null,
     leadId: input.leadId ?? null,
+    // Member-assigned numbers (set per-row in /numbers) win over pools.
+    memberId: profile.id,
   });
   if (!fromNumber) {
     return {
@@ -167,9 +172,6 @@ export async function prepareCall(input: {
       error: `No outbound number assigned to ${active.name}.`,
     };
   }
-
-  const profile = await getMyProfile();
-  if (!profile) return { ok: false, error: 'Not authenticated.' };
 
   // If the caller didn't pass an explicit leadId (keypad dial, dialer
   // entry from a non-lead surface, etc.), try to attribute the call to a

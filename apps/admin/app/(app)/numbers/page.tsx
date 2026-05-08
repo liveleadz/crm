@@ -36,7 +36,18 @@ async function loadAllInboundRoutes(brandId: string) {
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('inbound_routes')
-    .select('number_id, strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting')
+    .select(
+      'number_id, strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting, default_recipient_member_id',
+    )
+    .eq('brand_id', brandId);
+  return data ?? [];
+}
+
+async function loadNumberAssignments(brandId: string) {
+  const supabase = await createServerClient();
+  const { data } = await supabase
+    .from('numbers')
+    .select('id, assigned_member_id')
     .eq('brand_id', brandId);
   return data ?? [];
 }
@@ -54,10 +65,11 @@ export default async function NumbersPage() {
   }
 
   const supabase = await createServerClient();
-  const [numbers, members, routes, pools, brandRow] = await Promise.all([
+  const [numbers, members, routes, assignments, pools, brandRow] = await Promise.all([
     loadNumbersWithHealth(active.id),
     loadBrandMembers(active.id),
     loadAllInboundRoutes(active.id),
+    loadNumberAssignments(active.id),
     loadPools(active.id),
     supabase.from('brands').select('default_pool_id').eq('id', active.id).maybeSingle(),
   ]);
@@ -84,6 +96,11 @@ export default async function NumbersPage() {
           ringTimeoutSec: r.ring_timeout_sec,
           voicemailEnabled: r.voicemail_enabled,
           voicemailGreeting: r.voicemail_greeting,
+          defaultRecipientMemberId: r.default_recipient_member_id,
+        }))}
+        initialAssignments={assignments.map((a) => ({
+          numberId: a.id,
+          assignedMemberId: a.assigned_member_id,
         }))}
       />
       <div className="px-6 pb-6">

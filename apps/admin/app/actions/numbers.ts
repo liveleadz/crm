@@ -36,13 +36,19 @@ export type InboundRouteRow = {
   ringTimeoutSec: number;
   voicemailEnabled: boolean;
   voicemailGreeting: string | null;
+  // The member who rings when the inbound has no matching lead owner.
+  // Read by the SWML route as step 2 of smart routing; null falls back
+  // to the hard-coded `hello@liveleadz.com` terminal recipient.
+  defaultRecipientMemberId: string | null;
 };
 
 export async function loadInboundRoute(numberId: string): Promise<InboundRouteRow | null> {
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('inbound_routes')
-    .select('number_id, strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting')
+    .select(
+      'number_id, strategy, member_ids, ring_timeout_sec, voicemail_enabled, voicemail_greeting, default_recipient_member_id',
+    )
     .eq('number_id', numberId)
     .maybeSingle();
   if (!data) return null;
@@ -53,6 +59,7 @@ export async function loadInboundRoute(numberId: string): Promise<InboundRouteRo
     ringTimeoutSec: data.ring_timeout_sec,
     voicemailEnabled: data.voicemail_enabled,
     voicemailGreeting: data.voicemail_greeting,
+    defaultRecipientMemberId: data.default_recipient_member_id,
   };
 }
 
@@ -63,6 +70,7 @@ export async function saveInboundRoute(input: {
   ringTimeoutSec: number;
   voicemailEnabled: boolean;
   voicemailGreeting?: string | null;
+  defaultRecipientMemberId?: string | null;
 }): Promise<Result> {
   const guard = await requireBrandRole('manager');
   if (!guard.ok) return guard;
@@ -78,6 +86,25 @@ export async function saveInboundRoute(input: {
   const ring = Math.max(5, Math.min(120, Math.trunc(input.ringTimeoutSec) || 25));
   const memberIds = Array.from(new Set(input.memberIds.filter(Boolean)));
 
+  // Reject default_recipient_member_id values that aren't members of
+  // this brand, otherwise the SWML route would ring a Subscriber but
+  // never attach the missed-call notification or auto-claim — silent
+  // misconfiguration. Null is allowed (falls through to hard-coded
+  // fallback).
+  let defaultRecipient: string | null = null;
+  if (input.defaultRecipientMemberId) {
+    const { data: bm } = await supabase
+      .from('brand_members')
+      .select('member_id')
+      .eq('brand_id', guard.brandId)
+      .eq('member_id', input.defaultRecipientMemberId)
+      .maybeSingle();
+    if (!bm?.member_id) {
+      return { ok: false, error: 'Default recipient is not a member of this brand.' };
+    }
+    defaultRecipient = input.defaultRecipientMemberId;
+  }
+
   const { error } = await supabase.from('inbound_routes').upsert(
     {
       number_id: input.numberId,
@@ -87,10 +114,46 @@ export async function saveInboundRoute(input: {
       ring_timeout_sec: ring,
       voicemail_enabled: input.voicemailEnabled,
       voicemail_greeting: input.voicemailGreeting?.trim() || null,
+      default_recipient_member_id: defaultRecipient,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'number_id' },
   );
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/numbers');
+  return { ok: true };
+}
+
+// Per-number outbound assignment. The dialing agent's assigned number
+// wins over campaign / brand pools in pickOutboundNumber.
+export async function setNumberAssignedMember(input: {
+  id: string;
+  memberId: string | null;
+}): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
+  const supabase = await createServerClient();
+
+  // If a member is being assigned, verify they belong to this brand —
+  // otherwise the dialer would try to use an outbound number that
+  // doesn't belong to its brand from the agent's perspective.
+  if (input.memberId) {
+    const { data: bm } = await supabase
+      .from('brand_members')
+      .select('member_id')
+      .eq('brand_id', guard.brandId)
+      .eq('member_id', input.memberId)
+      .maybeSingle();
+    if (!bm?.member_id) {
+      return { ok: false, error: 'Selected member is not in this brand.' };
+    }
+  }
+
+  const { error } = await supabase
+    .from('numbers')
+    .update({ assigned_member_id: input.memberId })
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   return { ok: true };

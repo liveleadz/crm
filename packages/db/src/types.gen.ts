@@ -1207,6 +1207,7 @@ export type Database = {
       inbound_routes: {
         Row: {
           brand_id: string
+          default_recipient_member_id: string | null
           last_rung_member_id: string | null
           member_ids: string[]
           number_id: string
@@ -1218,6 +1219,7 @@ export type Database = {
         }
         Insert: {
           brand_id: string
+          default_recipient_member_id?: string | null
           last_rung_member_id?: string | null
           member_ids?: string[]
           number_id: string
@@ -1229,6 +1231,7 @@ export type Database = {
         }
         Update: {
           brand_id?: string
+          default_recipient_member_id?: string | null
           last_rung_member_id?: string | null
           member_ids?: string[]
           number_id?: string
@@ -1244,6 +1247,13 @@ export type Database = {
             columns: ["brand_id"]
             isOneToOne: false
             referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inbound_routes_default_recipient_member_id_fkey"
+            columns: ["default_recipient_member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
             referencedColumns: ["id"]
           },
           {
@@ -1836,6 +1846,7 @@ export type Database = {
         Row: {
           a2p_campaign_id: string | null
           active: boolean
+          assigned_member_id: string | null
           brand_id: string
           cnam: string | null
           cnam_checked_at: string | null
@@ -1849,6 +1860,7 @@ export type Database = {
         Insert: {
           a2p_campaign_id?: string | null
           active?: boolean
+          assigned_member_id?: string | null
           brand_id: string
           cnam?: string | null
           cnam_checked_at?: string | null
@@ -1862,6 +1874,7 @@ export type Database = {
         Update: {
           a2p_campaign_id?: string | null
           active?: boolean
+          assigned_member_id?: string | null
           brand_id?: string
           cnam?: string | null
           cnam_checked_at?: string | null
@@ -1873,6 +1886,13 @@ export type Database = {
           signalwire_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "numbers_assigned_member_id_fkey"
+            columns: ["assigned_member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "numbers_brand_id_fkey"
             columns: ["brand_id"]

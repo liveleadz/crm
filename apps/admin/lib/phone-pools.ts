@@ -7,11 +7,13 @@ import 'server-only';
 //   - sticky_lead: hash leadId → stable member. Falls back to round_robin
 //     when no leadId is supplied (e.g. raw click-to-dial against a number).
 //
-// pickOutboundNumber() resolves which pool to use:
+// pickOutboundNumber() resolves which number to dial out from:
+//   0. numbers.assigned_member_id == dialing agent  (per-agent number)
 //   1. campaign.phone_pool_id  (if a campaignId is supplied + set)
 //   2. brand.default_pool_id   (if set)
 //   3. legacy fallback to the brand's oldest active number
-// so brands without any pool configured keep the pre-Phase-I behavior.
+// so brands without any pool/assignment configured keep the pre-Phase-I
+// behavior.
 
 import { createServerClient } from '@leadpilot/db/server';
 import { getOutboundFromNumber, type OutboundFromNumber } from '@/lib/dialer';
@@ -168,8 +170,33 @@ export async function pickOutboundNumber(input: {
   brandId: string;
   campaignId?: string | null;
   leadId?: string | null;
+  /**
+   * The dialing agent's member id. When set, an active number assigned
+   * to this member in the brand wins over campaign / brand pools.
+   * Configured per-number in the /numbers admin UI.
+   */
+  memberId?: string | null;
 }): Promise<OutboundFromNumber | null> {
   const supabase = await createServerClient();
+
+  // 0. Member-assigned number (highest priority). Lets a brand give
+  // each agent their own outbound caller-ID without juggling pools.
+  // No-op when nothing is assigned, so brands relying on pools are
+  // unchanged.
+  if (input.memberId) {
+    const { data: assigned } = await supabase
+      .from('numbers')
+      .select('id, e164, label, active')
+      .eq('brand_id', input.brandId)
+      .eq('assigned_member_id', input.memberId)
+      .eq('active', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (assigned?.id) {
+      return { id: assigned.id, e164: assigned.e164, label: assigned.label };
+    }
+  }
 
   // 1. Campaign-level pool override.
   if (input.campaignId) {
