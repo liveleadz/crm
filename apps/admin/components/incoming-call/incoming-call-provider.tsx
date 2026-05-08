@@ -12,13 +12,13 @@
 // would otherwise blank the page with a video container.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { SignalWire, type SignalWireClient } from '@signalwire/js';
 import {
   attachSignalwireCallId,
   claimRecentInboundCall,
   transferCall,
 } from '@/app/actions/dialer';
 import type { DispositionChoice } from '@/components/dialer/disposition-picker';
+import { useSignalWireClient } from '@/components/signalwire/signalwire-client-provider';
 
 export type IncomingCall = {
   fromNumber: string;
@@ -121,109 +121,58 @@ export function IncomingCallProvider({
   const [pending, setPending] = useState<IncomingCall | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [muted, setMuted] = useState(false);
-  const clientRef = useRef<SignalWireClient | null>(null);
   const inviteRef = useRef<LooseInvite | null>(null);
   const sessionRef = useRef<ActiveSession | null>(null);
   const callIdRef = useRef<string | null>(null);
 
-  // Boot a long-lived SignalWire client and register for incoming calls.
-  // Re-establishes the client every CLIENT_REFRESH_MS so the underlying
-  // SAT never goes stale. SignalWire's authblock TTL is 2h by default;
-  // a tab left open for hours otherwise hits `authblock_is_expired` on
-  // the next dial, and inbound invites silently stop arriving.
+  // Shared SignalWire client (one per tab) — owns SAT minting + 30-min
+  // rotation + auto re-arm of online() on every refresh. We just feed
+  // it our invite handler and report busy state so it knows when to
+  // skip rotation.
+  const { setIncomingHandler, setBusy } = useSignalWireClient();
+
+  // Register the inbound invite handler exactly once. The shared client
+  // provider re-arms online() with this handler on every rotation, so
+  // the subscription survives token refresh without anything here.
   useEffect(() => {
-    let cancelled = false;
-    let activeClient: SignalWireClient | null = null;
-    // Refresh well under the 2h SAT TTL. Same cap the OutgoingCallProvider
-    // uses for its own client.
-    const CLIENT_REFRESH_MS = 30 * 60 * 1000;
-
-    const boot = async () => {
-      // If we have a session in flight (an invite popup or active call),
-      // skip this rotation tick — we'll catch the next one. Tearing down
-      // mid-call would drop the user.
-      if (inviteRef.current || sessionRef.current) return;
-
+    setIncomingHandler((notification) => {
+      console.log('[incoming-call] invite received', notification);
+      const inv = (notification as { invite?: LooseInvite })?.invite;
+      if (!inv) return;
+      const details = inv.details ?? {};
+      inviteRef.current = inv;
+      const receivedAt = Date.now();
+      const onCancelled = () => {
+        if (inviteRef.current === inv) {
+          inviteRef.current = null;
+          setBusy('incoming', false);
+          setPending((cur) => (cur && cur.receivedAt === receivedAt ? null : cur));
+        }
+      };
       try {
-        const tokenRes = await fetch('/api/signalwire/token', {
-          method: 'POST',
-          cache: 'no-store',
-        });
-        if (!tokenRes.ok) {
-          console.warn('[incoming-call] SAT token request failed', tokenRes.status);
-          return; // not signed in or env not set — silently skip
-        }
-        const { token } = (await tokenRes.json()) as { token?: string };
-        if (!token || cancelled) return;
-
-        const next = await SignalWire({ token });
-        if (cancelled) {
-          await next.disconnect().catch(() => undefined);
-          return;
-        }
-
-        // Tear down the previous client AFTER the new one is built so
-        // there's never a window with no online subscriber.
-        const prev = activeClient;
-        activeClient = next;
-        clientRef.current = next;
-
-        await next.online({
-          incomingCallHandlers: {
-            all: ((notification: unknown) => {
-              console.log('[incoming-call] invite received', notification);
-              const inv = (notification as { invite?: LooseInvite })?.invite;
-              if (!inv) return;
-              const details = inv.details ?? {};
-              inviteRef.current = inv;
-              const onCancelled = () => {
-                if (inviteRef.current === inv) {
-                  inviteRef.current = null;
-                  setPending((cur) => (cur && cur.receivedAt === receivedAt ? null : cur));
-                }
-              };
-              const receivedAt = Date.now();
-              try {
-                inv.on?.('destroy', onCancelled);
-              } catch {
-                /* no-op */
-              }
-              window.setTimeout(() => {
-                if (inviteRef.current === inv) onCancelled();
-              }, 60_000);
-              setPending({
-                fromNumber:
-                  cleanPhone(details.caller_id_number) ?? cleanPhone(details.from) ?? 'Unknown',
-                toNumber: cleanPhone(details.callee_id_number) ?? cleanPhone(details.to) ?? '',
-                leadName: cleanName(details.caller_id_name),
-                receivedAt,
-              });
-            }) as never,
-          },
-        });
-        console.log('[incoming-call] subscriber online — ready to receive calls');
-
-        if (prev) {
-          await prev.disconnect().catch(() => undefined);
-        }
-      } catch (e) {
-        // Don't crash the app shell if the SDK fails to init — features
-        // outside inbound calls keep working.
-        console.error('[incoming-call] init failed', (e as Error).message);
+        inv.on?.('destroy', onCancelled);
+      } catch {
+        /* no-op */
       }
-    };
-
-    void boot();
-    const interval = window.setInterval(() => {
-      void boot();
-    }, CLIENT_REFRESH_MS);
-
+      window.setTimeout(() => {
+        if (inviteRef.current === inv) onCancelled();
+      }, 60_000);
+      // Tell the shared client we're busy — rotation will hold off
+      // until the invite is accepted/rejected/timed out.
+      setBusy('incoming', true);
+      setPending({
+        fromNumber:
+          cleanPhone(details.caller_id_number) ?? cleanPhone(details.from) ?? 'Unknown',
+        toNumber: cleanPhone(details.callee_id_number) ?? cleanPhone(details.to) ?? '',
+        leadName: cleanName(details.caller_id_name),
+        receivedAt,
+      });
+    });
     return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      void activeClient?.disconnect().catch(() => undefined);
+      setIncomingHandler(null);
+      setBusy('incoming', false);
     };
-  }, []);
+  }, [setIncomingHandler, setBusy]);
 
   const cleanup = useCallback(async () => {
     inviteRef.current = null;
@@ -282,14 +231,16 @@ export function IncomingCallProvider({
           setStatus({ kind: 'idle' });
         }
         sessionRef.current = null;
+        setBusy('incoming', false);
       });
       setStatus({ kind: 'in_call', startedAt: Date.now() });
       setPending(null);
     } catch (e) {
       setStatus({ kind: 'error', message: (e as Error).message });
+      setBusy('incoming', false);
       void cleanup();
     }
-  }, [cleanup]);
+  }, [cleanup, setBusy]);
 
   const reject = useCallback(async () => {
     const invite = inviteRef.current;
@@ -302,7 +253,8 @@ export function IncomingCallProvider({
       }
     }
     inviteRef.current = null;
-  }, []);
+    setBusy('incoming', false);
+  }, [setBusy]);
 
   const hangup = useCallback(async () => {
     const cid = callIdRef.current;
@@ -312,7 +264,8 @@ export function IncomingCallProvider({
     } else {
       setStatus({ kind: 'idle' });
     }
-  }, [cleanup]);
+    setBusy('incoming', false);
+  }, [cleanup, setBusy]);
 
   const closeWrapUp = useCallback(() => {
     callIdRef.current = null;
