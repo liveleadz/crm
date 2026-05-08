@@ -1,13 +1,15 @@
 'use server';
 
-// CRUD actions for per-brand automations. Owner/admin only — RLS enforces
-// at the database layer; we still gate `getActiveBrand()` so we never
-// operate on the wrong brand.
+// CRUD actions for per-brand automations. Owner/admin only — RLS
+// enforces at the DB layer (migration 0013); this layer adds explicit
+// role checks so we surface a clean "Forbidden" instead of an empty
+// affected-rows result, and adds brand_id filters so a stray id can't
+// mutate cross-brand.
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { getActiveBrand } from '@/lib/active-brand';
 import { createServerClient } from '@leadpilot/db/server';
+import { requireBrandRole } from '@/lib/team';
 import type { Json } from '@leadpilot/db/types';
 import type { AutomationAction, AutomationMode, WorkflowGraph } from '@/lib/automations';
 import { linearizeGraph } from '@/lib/automations';
@@ -51,8 +53,8 @@ export async function createAutomation(input: {
   triggerConfig: Record<string, unknown>;
   actions: AutomationAction[];
 }): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
 
   const name = input.name.trim();
   if (!name) return { ok: false, error: 'Name is required.' };
@@ -63,7 +65,7 @@ export async function createAutomation(input: {
   const { data: maxRow } = await supabase
     .from('automations')
     .select('sort_order')
-    .eq('brand_id', active.id)
+    .eq('brand_id', guard.brandId)
     .order('sort_order', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -72,7 +74,7 @@ export async function createAutomation(input: {
   const { data, error } = await supabase
     .from('automations')
     .insert({
-      brand_id: active.id,
+      brand_id: guard.brandId,
       name,
       description: input.description?.trim() || null,
       trigger_type: input.triggerType,
@@ -98,8 +100,8 @@ export async function createAutomation(input: {
 export async function createBlankAutomation(input?: {
   triggerType?: string;
 }): Promise<Result | never> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
 
   // The placeholder trigger_type just keeps the dispatcher's index-based
   // filter sane until the user picks one in the canvas. The matches() call
@@ -110,7 +112,7 @@ export async function createBlankAutomation(input?: {
   const { data: maxRow } = await supabase
     .from('automations')
     .select('sort_order')
-    .eq('brand_id', active.id)
+    .eq('brand_id', guard.brandId)
     .order('sort_order', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -124,7 +126,7 @@ export async function createBlankAutomation(input?: {
   const { data, error } = await supabase
     .from('automations')
     .insert({
-      brand_id: active.id,
+      brand_id: guard.brandId,
       name: 'Untitled workflow',
       description: null,
       trigger_type: triggerType,
@@ -155,6 +157,9 @@ export async function updateAutomation(input: {
   triggerConfig: Record<string, unknown>;
   actions: AutomationAction[];
 }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
+
   const name = input.name.trim();
   if (!name) return { ok: false, error: 'Name is required.' };
   if (!validateActions(input.actions)) return { ok: false, error: 'Invalid actions.' };
@@ -170,6 +175,7 @@ export async function updateAutomation(input: {
       .from('automations')
       .select('webhook_token')
       .eq('id', input.id)
+      .eq('brand_id', guard.brandId)
       .maybeSingle();
     if (!row?.webhook_token) {
       webhookTokenPatch = { webhook_token: generateWebhookToken() };
@@ -185,7 +191,8 @@ export async function updateAutomation(input: {
       actions: input.actions as unknown as Json,
       ...(webhookTokenPatch ?? {}),
     })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   revalidatePath(`/workflows/${input.id}`);
@@ -193,12 +200,15 @@ export async function updateAutomation(input: {
 }
 
 export async function regenerateWebhookToken(input: { id: string }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const token = generateWebhookToken();
   const { error } = await supabase
     .from('automations')
     .update({ webhook_token: token })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath(`/workflows/${input.id}`);
   return { ok: true };
@@ -208,22 +218,31 @@ export async function setAutomationEnabled(input: {
   id: string;
   enabled: boolean;
 }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('automations')
     .update({ is_enabled: input.enabled })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   return { ok: true };
 }
 
 export async function deleteAutomation(input: { id: string }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   // System automations are deletable too — they're seeded once and managers
   // can prune anything they don't want. The is_system flag is informational
   // (drives the "default" badge in the UI).
-  const { error } = await supabase.from('automations').delete().eq('id', input.id);
+  const { error } = await supabase
+    .from('automations')
+    .delete()
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   return { ok: true };
@@ -258,6 +277,8 @@ export async function saveAutomationGraph(input: {
   id: string;
   graph: WorkflowGraph;
 }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   if (!validateGraph(input.graph)) return { ok: false, error: 'Invalid graph.' };
 
   // Linearize the graph into actions[] for back-compat readouts. If the graph
@@ -283,6 +304,7 @@ export async function saveAutomationGraph(input: {
       .from('automations')
       .select('webhook_token')
       .eq('id', input.id)
+      .eq('brand_id', guard.brandId)
       .maybeSingle();
     if (!row?.webhook_token) {
       webhookTokenPatch = { webhook_token: generateWebhookToken() };
@@ -299,7 +321,8 @@ export async function saveAutomationGraph(input: {
       ...(triggerConfig ? { trigger_config: triggerConfig as unknown as Json } : {}),
       ...(webhookTokenPatch ?? {}),
     })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   revalidatePath(`/workflows/${input.id}`);
@@ -310,11 +333,14 @@ export async function setAutomationMode(input: {
   id: string;
   mode: AutomationMode;
 }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('automations')
     .update({ mode: input.mode })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   revalidatePath(`/workflows/${input.id}`);
@@ -322,10 +348,16 @@ export async function setAutomationMode(input: {
 }
 
 export async function renameAutomation(input: { id: string; name: string }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const name = input.name.trim();
   if (!name) return { ok: false, error: 'Name is required.' };
   const supabase = await createServerClient();
-  const { error } = await supabase.from('automations').update({ name }).eq('id', input.id);
+  const { error } = await supabase
+    .from('automations')
+    .update({ name })
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   return { ok: true };
@@ -342,8 +374,8 @@ function uniqueIds(ids: string[]): string[] {
 }
 
 export async function bulkDeleteAutomations(input: { ids: string[] }): Promise<BulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -351,7 +383,7 @@ export async function bulkDeleteAutomations(input: { ids: string[] }): Promise<B
     .from('automations')
     .delete({ count: 'exact' })
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   return { ok: true, count: count ?? 0 };
@@ -361,8 +393,8 @@ export async function bulkSetAutomationsEnabled(input: {
   ids: string[];
   enabled: boolean;
 }): Promise<BulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -370,15 +402,15 @@ export async function bulkSetAutomationsEnabled(input: {
     .from('automations')
     .update({ is_enabled: input.enabled }, { count: 'exact' })
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/workflows');
   return { ok: true, count: count ?? 0 };
 }
 
 export async function reorderAutomations(input: { ids: string[] }): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
 
   const supabase = await createServerClient();
   for (let i = 0; i < input.ids.length; i++) {
@@ -388,7 +420,7 @@ export async function reorderAutomations(input: { ids: string[] }): Promise<Resu
       .from('automations')
       .update({ sort_order: (i + 1) * 10 })
       .eq('id', id)
-      .eq('brand_id', active.id);
+      .eq('brand_id', guard.brandId);
     if (error) return { ok: false, error: error.message };
   }
   revalidatePath('/workflows');

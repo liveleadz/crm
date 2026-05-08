@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
-import { getActiveBrand } from '@/lib/active-brand';
+import { requireBrandRole } from '@/lib/team';
 
 const COLORS = ['teal', 'hp', 'vl', 'bs', 'll', 'hb', 'bi'] as const;
 type StageColor = (typeof COLORS)[number];
@@ -23,15 +23,15 @@ export async function createStage(input: {
   isWon?: boolean;
   isLost?: boolean;
 }) {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false as const, error: 'No active brand' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const name = input.name.trim();
   if (!name) return { ok: false as const, error: 'Name is required' };
   const supabase = await createServerClient();
   const { data: existing } = await supabase
     .from('stages')
     .select('position')
-    .eq('brand_id', active.id)
+    .eq('brand_id', guard.brandId)
     .order('position', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -40,7 +40,7 @@ export async function createStage(input: {
   const { data, error } = await supabase
     .from('stages')
     .insert({
-      brand_id: active.id,
+      brand_id: guard.brandId,
       name,
       color,
       position: nextPos,
@@ -68,6 +68,8 @@ export async function updateStage(
   stageId: string,
   patch: { name?: string; color?: string | null; isWon?: boolean; isLost?: boolean },
 ) {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const update: {
     name?: string;
@@ -85,13 +87,19 @@ export async function updateStage(
   }
   if (patch.isWon !== undefined) update.is_won = patch.isWon;
   if (patch.isLost !== undefined) update.is_lost = patch.isLost;
-  const { error } = await supabase.from('stages').update(update).eq('id', stageId);
+  const { error } = await supabase
+    .from('stages')
+    .update(update)
+    .eq('id', stageId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false as const, error: error.message };
   bumpAll();
   return { ok: true as const };
 }
 
 export async function deleteStage(stageId: string) {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   // Block delete if any leads still reference the stage.
   const { count } = await supabase
@@ -104,15 +112,19 @@ export async function deleteStage(stageId: string) {
       error: `Cannot delete: ${count} lead${count === 1 ? '' : 's'} still in this stage.`,
     };
   }
-  const { error } = await supabase.from('stages').delete().eq('id', stageId);
+  const { error } = await supabase
+    .from('stages')
+    .delete()
+    .eq('id', stageId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false as const, error: error.message };
   bumpAll();
   return { ok: true as const };
 }
 
 export async function reorderStages(orderedIds: string[]) {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false as const, error: 'No active brand' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   // Two-phase: shift to negative positions to dodge the (brand_id, position) unique
   // constraint, then write final positions.
@@ -122,7 +134,7 @@ export async function reorderStages(orderedIds: string[]) {
       .from('stages')
       .update({ position: -(i + 1) })
       .eq('id', id)
-      .eq('brand_id', active.id);
+      .eq('brand_id', guard.brandId);
     if (error) return { ok: false as const, error: error.message };
   }
   for (let i = 0; i < orderedIds.length; i += 1) {
@@ -131,7 +143,7 @@ export async function reorderStages(orderedIds: string[]) {
       .from('stages')
       .update({ position: i })
       .eq('id', id)
-      .eq('brand_id', active.id);
+      .eq('brand_id', guard.brandId);
     if (error) return { ok: false as const, error: error.message };
   }
   bumpAll();

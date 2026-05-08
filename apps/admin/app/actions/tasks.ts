@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
+import { requireBrandRole } from '@/lib/team';
 import {
   loadTasks,
   nextRecurrence,
@@ -387,8 +388,8 @@ function uniqueIds(ids: string[]): string[] {
 }
 
 export async function bulkCompleteTasks(input: { ids: string[] }): Promise<TasksBulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -407,15 +408,15 @@ export async function bulkCompleteTasks(input: { ids: string[] }): Promise<Tasks
       { count: 'exact' },
     )
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   bumpAll(null);
   return { ok: true, count: count ?? 0 };
 }
 
 export async function bulkReopenTasks(input: { ids: string[] }): Promise<TasksBulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -426,7 +427,7 @@ export async function bulkReopenTasks(input: { ids: string[] }): Promise<TasksBu
       { count: 'exact' },
     )
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   bumpAll(null);
   return { ok: true, count: count ?? 0 };
@@ -436,8 +437,8 @@ export async function bulkAssignTasks(input: {
   ids: string[];
   assigneeId: string | null;
 }): Promise<TasksBulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -445,15 +446,15 @@ export async function bulkAssignTasks(input: {
     .from('tasks')
     .update({ assignee_id: input.assigneeId }, { count: 'exact' })
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   bumpAll(null);
   return { ok: true, count: count ?? 0 };
 }
 
 export async function bulkDeleteTasks(input: { ids: string[] }): Promise<TasksBulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -461,7 +462,7 @@ export async function bulkDeleteTasks(input: { ids: string[] }): Promise<TasksBu
     .from('tasks')
     .delete({ count: 'exact' })
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   bumpAll(null);
   return { ok: true, count: count ?? 0 };

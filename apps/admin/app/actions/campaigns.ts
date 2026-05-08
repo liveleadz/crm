@@ -7,8 +7,7 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import type { Database } from '@leadpilot/db';
-import { getActiveBrand } from '@/lib/active-brand';
-import { getCurrentBrandRole } from '@/lib/team';
+import { requireBrandRole } from '@/lib/team';
 import type { CampaignStatus } from '@/lib/campaigns';
 
 type CampaignUpdate = Database['public']['Tables']['campaigns']['Update'];
@@ -18,13 +17,7 @@ type ActionResult<T = void> = T extends void
   : { ok: true; data: T } | { ok: false; error: string };
 
 async function requireManager() {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false as const, error: 'No active brand' };
-  const role = await getCurrentBrandRole(active.id);
-  if (role !== 'owner' && role !== 'admin' && role !== 'manager') {
-    return { ok: false as const, error: 'Forbidden' };
-  }
-  return { ok: true as const, brandId: active.id };
+  return requireBrandRole('manager');
 }
 
 function bump(campaignId?: string) {

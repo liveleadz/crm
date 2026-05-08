@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
+import { requireBrandRole } from '@/lib/team';
 import { loadBrandTags, loadLeadTags, type Tag } from '@/lib/tags';
 import { runAutomations } from '@/lib/automation-engine';
 
@@ -156,27 +157,45 @@ export async function attachTagByName(leadId: string, name: string) {
 }
 
 export async function renameTag(tagId: string, name: string) {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const trimmed = name.trim();
   if (!trimmed) return { ok: false as const, error: 'Tag name is required' };
   const supabase = await createServerClient();
-  const { error } = await supabase.from('tags').update({ name: trimmed }).eq('id', tagId);
+  const { error } = await supabase
+    .from('tags')
+    .update({ name: trimmed })
+    .eq('id', tagId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false as const, error: error.message };
   bumpLead(null);
   return { ok: true as const };
 }
 
 export async function setTagColor(tagId: string, color: string) {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
-  const { error } = await supabase.from('tags').update({ color }).eq('id', tagId);
+  const { error } = await supabase
+    .from('tags')
+    .update({ color })
+    .eq('id', tagId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false as const, error: error.message };
   bumpLead(null);
   return { ok: true as const };
 }
 
 export async function deleteTag(tagId: string) {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   // Cascades to lead_tags via FK.
-  const { error } = await supabase.from('tags').delete().eq('id', tagId);
+  const { error } = await supabase
+    .from('tags')
+    .delete()
+    .eq('id', tagId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false as const, error: error.message };
   bumpLead(null);
   return { ok: true as const };

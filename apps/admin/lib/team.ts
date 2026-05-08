@@ -1,8 +1,10 @@
 // Team helpers — load brand members + role utilities.
 import 'server-only';
+import { notFound } from 'next/navigation';
 import { createAdminClient } from '@leadpilot/db/admin';
 import { createServerClient } from '@leadpilot/db/server';
 import type { Database } from '@leadpilot/db/types';
+import { getActiveBrand } from '@/lib/active-brand';
 
 export type MemberRole = Database['public']['Enums']['member_role'];
 
@@ -40,6 +42,38 @@ export async function getCurrentBrandRole(brandId: string): Promise<MemberRole |
   const supabase = await createServerClient();
   const { data } = await supabase.rpc('brand_role', { b: brandId });
   return (data as MemberRole | null) ?? null;
+}
+
+// One shared role-gate for server actions and API routes.
+// Resolves the active brand, fetches the caller's role, and rejects
+// if the role's rank is below `min`. Use the returned `brandId` in
+// follow-up `.eq('brand_id', guard.brandId)` filters so cross-brand
+// writes can't slip through even if RLS changes later.
+export async function requireBrandRole(
+  min: MemberRole,
+): Promise<
+  | { ok: true; brandId: string; role: MemberRole }
+  | { ok: false; error: string }
+> {
+  const active = await getActiveBrand();
+  if (!active) return { ok: false as const, error: 'No active brand' };
+  const role = await getCurrentBrandRole(active.id);
+  if (!role || ROLE_RANK[role] < ROLE_RANK[min]) {
+    return { ok: false as const, error: 'Forbidden' };
+  }
+  return { ok: true as const, brandId: active.id, role };
+}
+
+// Page-side guard. 404s instead of returning a result object so RSC
+// pages don't render at all when the caller lacks the role.
+export async function assertBrandRoleOrNotFound(
+  min: MemberRole,
+): Promise<{ brandId: string; role: MemberRole }> {
+  const active = await getActiveBrand();
+  if (!active) notFound();
+  const role = await getCurrentBrandRole(active.id);
+  if (!role || ROLE_RANK[role] < ROLE_RANK[min]) notFound();
+  return { brandId: active.id, role };
 }
 
 export async function loadTeam(brandId: string): Promise<TeamRow[]> {

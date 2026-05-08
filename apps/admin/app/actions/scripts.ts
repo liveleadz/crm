@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
+import { requireBrandRole } from '@/lib/team';
 import { loadScripts } from '@/lib/scripts-server';
 import type { ScriptKind, ScriptRow, ScriptSection } from '@/lib/scripts';
 
@@ -61,8 +62,8 @@ export async function createScript(input: {
   subject?: string | null;
   body?: string;
 }) {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false as const, error: 'No active brand' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const name = input.name.trim();
   if (!name) return { ok: false as const, error: 'Name is required' };
 
@@ -75,7 +76,7 @@ export async function createScript(input: {
   const { data, error } = await supabase
     .from('scripts')
     .insert({
-      brand_id: active.id,
+      brand_id: guard.brandId,
       kind: input.kind,
       name,
       description: input.description?.trim() || null,
@@ -102,6 +103,8 @@ export async function updateScript(
     sections?: ScriptSection[] | null;
   },
 ) {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const update: {
     name?: string;
@@ -124,15 +127,25 @@ export async function updateScript(
   if (patch.body !== undefined) update.body = patch.body;
   if (patch.sections !== undefined) update.sections = sanitizeSections(patch.sections);
 
-  const { error } = await supabase.from('scripts').update(update).eq('id', scriptId);
+  const { error } = await supabase
+    .from('scripts')
+    .update(update)
+    .eq('id', scriptId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false as const, error: error.message };
   bump();
   return { ok: true as const };
 }
 
 export async function deleteScript(scriptId: string) {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
-  const { error } = await supabase.from('scripts').delete().eq('id', scriptId);
+  const { error } = await supabase
+    .from('scripts')
+    .delete()
+    .eq('id', scriptId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false as const, error: error.message };
   bump();
   return { ok: true as const };

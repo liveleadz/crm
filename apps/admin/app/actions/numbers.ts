@@ -7,7 +7,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
-import { getActiveBrand } from '@/lib/active-brand';
+import { requireBrandRole } from '@/lib/team';
 import {
   clearIncomingPhoneNumberCallingHandler,
   findFabricResourceIdByName,
@@ -64,14 +64,14 @@ export async function saveInboundRoute(input: {
   voicemailEnabled: boolean;
   voicemailGreeting?: string | null;
 }): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { data: num } = await supabase
     .from('numbers')
     .select('id')
     .eq('id', input.numberId)
-    .eq('brand_id', active.id)
+    .eq('brand_id', guard.brandId)
     .maybeSingle();
   if (!num) return { ok: false, error: 'Number not found in this brand.' };
 
@@ -81,7 +81,7 @@ export async function saveInboundRoute(input: {
   const { error } = await supabase.from('inbound_routes').upsert(
     {
       number_id: input.numberId,
-      brand_id: active.id,
+      brand_id: guard.brandId,
       strategy: input.strategy,
       member_ids: memberIds,
       ring_timeout_sec: ring,
@@ -97,14 +97,14 @@ export async function saveInboundRoute(input: {
 }
 
 export async function deleteInboundRoute(input: { numberId: string }): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('inbound_routes')
     .delete()
     .eq('number_id', input.numberId)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   return { ok: true };
@@ -119,14 +119,14 @@ export async function deleteInboundRoute(input: { numberId: string }): Promise<R
 export async function connectInboundNumber(input: {
   numberId: string;
 }): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { data: num } = await supabase
     .from('numbers')
     .select('id, e164, signalwire_id')
     .eq('id', input.numberId)
-    .eq('brand_id', active.id)
+    .eq('brand_id', guard.brandId)
     .maybeSingle();
   if (!num) return { ok: false, error: 'Number not found in this brand.' };
 
@@ -183,14 +183,14 @@ export async function connectInboundNumber(input: {
 export async function disconnectInboundNumber(input: {
   numberId: string;
 }): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { data: num } = await supabase
     .from('numbers')
     .select('id, e164, signalwire_id')
     .eq('id', input.numberId)
-    .eq('brand_id', active.id)
+    .eq('brand_id', guard.brandId)
     .maybeSingle();
   if (!num) return { ok: false, error: 'Number not found in this brand.' };
   if (!num.signalwire_id) {
@@ -220,11 +220,14 @@ export async function disconnectInboundNumber(input: {
 export async function refreshCnam(input: {
   id: string;
 }): Promise<Result<{ cnam: string | null }>> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { data: row } = await supabase
     .from('numbers')
     .select('id, e164')
     .eq('id', input.id)
+    .eq('brand_id', guard.brandId)
     .maybeSingle();
   if (!row) return { ok: false, error: 'Number not found.' };
 
@@ -235,7 +238,8 @@ export async function refreshCnam(input: {
   const { error } = await supabase
     .from('numbers')
     .update({ cnam, cnam_checked_at: new Date().toISOString() })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
 
   revalidatePath('/numbers');
@@ -246,12 +250,15 @@ export async function updateNumberLabel(input: {
   id: string;
   label: string | null;
 }): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const label = input.label?.trim() || null;
   const { error } = await supabase
     .from('numbers')
     .update({ label })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   return { ok: true };
@@ -261,11 +268,14 @@ export async function setNumberActive(input: {
   id: string;
   active: boolean;
 }): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('numbers')
     .update({ active: input.active })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   return { ok: true };
@@ -275,20 +285,29 @@ export async function setA2pCampaignId(input: {
   id: string;
   campaignId: string | null;
 }): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const a2p = input.campaignId?.trim() || null;
   const { error } = await supabase
     .from('numbers')
     .update({ a2p_campaign_id: a2p })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   return { ok: true };
 }
 
 export async function deleteNumber(input: { id: string }): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
-  const { error } = await supabase.from('numbers').delete().eq('id', input.id);
+  const { error } = await supabase
+    .from('numbers')
+    .delete()
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   return { ok: true };
@@ -297,8 +316,8 @@ export async function deleteNumber(input: { id: string }): Promise<Result> {
 export async function bulkDeleteNumbers(input: {
   ids: string[];
 }): Promise<Result<{ count: number }>> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = Array.from(new Set(input.ids.filter(Boolean)));
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -306,7 +325,7 @@ export async function bulkDeleteNumbers(input: {
     .from('numbers')
     .delete({ count: 'exact' })
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   return { ok: true, count: count ?? 0 };

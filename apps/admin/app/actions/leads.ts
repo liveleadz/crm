@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { getActiveBrand } from '@/lib/active-brand';
+import { getCurrentBrandRole, requireBrandRole } from '@/lib/team';
 import { loadLeadDetail } from '@/lib/leads';
 import {
   applyMapping,
@@ -34,6 +35,18 @@ export async function createLead(input: {
   }
 
   const supabase = await createServerClient();
+  // Agent-created leads default to owning themselves so they actually
+  // appear on the agent's pipeline. Manager+ leaves owner_id null and
+  // can assign explicitly via the owner picker.
+  const role = await getCurrentBrandRole(active.id);
+  let defaultOwnerId: string | null = null;
+  if (role === 'agent' || role === 'viewer') {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    defaultOwnerId = user?.id ?? null;
+  }
+
   const { data, error } = await supabase
     .from('leads')
     .insert({
@@ -48,6 +61,7 @@ export async function createLead(input: {
       stage_id: input.stageId ?? null,
       notes: input.notes?.trim() || null,
       source: 'manual',
+      owner_id: defaultOwnerId,
     })
     .select('id')
     .single();
@@ -96,12 +110,24 @@ export async function createLeadFromCall(input: { callId: string }): Promise<
     call.direction === 'inbound' ? call.from_number : call.to_number;
   if (!leadPhone) return { ok: false, error: 'No phone on call to create from.' };
 
+  // Default owner to the calling agent so the lead lands on their
+  // pipeline. Manager+ stays unassigned.
+  const role = await getCurrentBrandRole(active.id);
+  let defaultOwnerId: string | null = null;
+  if (role === 'agent' || role === 'viewer') {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    defaultOwnerId = user?.id ?? null;
+  }
+
   const { data: lead, error: insertErr } = await supabase
     .from('leads')
     .insert({
       brand_id: active.id,
       phone: leadPhone,
       source: 'manual',
+      owner_id: defaultOwnerId,
     })
     .select('id')
     .single();
@@ -239,15 +265,17 @@ export async function updateLeadFields(input: {
 
 // Single-lead owner assign used by the detail drawer. Mirrors
 // bulkAssignLeadsOwner but for one row. ownerId=null clears the owner.
+// Manager+ only — the DB trigger leads_owner_guard backstops this with
+// 42501, but we want a clean error path before we hit that.
 export async function setLeadOwner(input: { leadId: string; ownerId: string | null }) {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false as const, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('leads')
     .update({ owner_id: input.ownerId, updated_at: new Date().toISOString() })
     .eq('id', input.leadId)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false as const, error: error.message };
   revalidatePath('/leads');
   return { ok: true as const };
@@ -419,8 +447,10 @@ async function importLeadsInner(input: {
   defaultCountry?: PhoneCountry;
   extraTagIds?: string[];
 }) {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false as const, error: 'No active brand' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
+  // Keep `active` so the rest of the function reads naturally.
+  const active = { id: guard.brandId };
   const supabase = await createServerClient();
   const {
     data: { user },
@@ -723,8 +753,8 @@ function uniqueIds(ids: string[]): string[] {
 }
 
 export async function bulkDeleteLeads(input: { ids: string[] }): Promise<BulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -732,7 +762,7 @@ export async function bulkDeleteLeads(input: { ids: string[] }): Promise<BulkRes
     .from('leads')
     .delete({ count: 'exact' })
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/leads');
   revalidatePath('/dashboard');
@@ -743,8 +773,8 @@ export async function bulkMoveLeadsStage(input: {
   ids: string[];
   stageId: string;
 }): Promise<BulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -753,7 +783,7 @@ export async function bulkMoveLeadsStage(input: {
     .from('leads')
     .select('id, stage_id')
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   const priorMap = new Map<string, string | null>(
     (priors ?? []).map((r) => [r.id, r.stage_id]),
   );
@@ -765,7 +795,7 @@ export async function bulkMoveLeadsStage(input: {
       { count: 'exact' },
     )
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
 
   // Audit rows for the leads whose stage actually changed. We deliberately
@@ -775,7 +805,7 @@ export async function bulkMoveLeadsStage(input: {
   const eventRows = Array.from(priorMap.entries())
     .filter(([, prior]) => prior !== input.stageId)
     .map(([leadId, prior]) => ({
-      brand_id: active.id,
+      brand_id: guard.brandId,
       lead_id: leadId,
       type: 'stage_change',
       payload: { from_stage_id: prior, to_stage_id: input.stageId },
@@ -794,8 +824,8 @@ export async function bulkSetLeadsConsent(input: {
   doNotCall?: boolean;
   doNotEmail?: boolean;
 }): Promise<BulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const patch: { updated_at: string; do_not_call?: boolean; do_not_email?: boolean } = {
@@ -808,7 +838,7 @@ export async function bulkSetLeadsConsent(input: {
     .from('leads')
     .update(patch, { count: 'exact' })
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/leads');
   return { ok: true, count: count ?? 0 };
@@ -818,8 +848,8 @@ export async function bulkAddTagToLeads(input: {
   ids: string[];
   tagId: string;
 }): Promise<BulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -828,7 +858,7 @@ export async function bulkAddTagToLeads(input: {
     .from('leads')
     .select('id')
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   const allowed = (scoped ?? []).map((r) => r.id);
   if (allowed.length === 0) return { ok: true, count: 0 };
   const rows = allowed.map((leadId) => ({ lead_id: leadId, tag_id: input.tagId }));
@@ -844,15 +874,24 @@ export async function bulkRemoveTagFromLeads(input: {
   ids: string[];
   tagId: string;
 }): Promise<BulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
+  // Confirm the leads belong to this brand so an attacker can't strip tags
+  // from cross-brand leads by passing the right tag id.
+  const { data: scoped } = await supabase
+    .from('leads')
+    .select('id')
+    .in('id', ids)
+    .eq('brand_id', guard.brandId);
+  const allowed = (scoped ?? []).map((r) => r.id);
+  if (allowed.length === 0) return { ok: true, count: 0 };
   const { error, count } = await supabase
     .from('lead_tags')
     .delete({ count: 'exact' })
-    .in('lead_id', ids)
+    .in('lead_id', allowed)
     .eq('tag_id', input.tagId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/leads');
@@ -860,15 +899,14 @@ export async function bulkRemoveTagFromLeads(input: {
 }
 
 // Assigns (or unassigns when ownerId is null) a single owner to all selected
-// leads. We don't validate ownerId against brand membership here — the FK on
-// leads.owner_id -> members enforces it implicitly, and the brand_id filter
-// ensures the caller can only touch leads they already control.
+// leads. Manager+ only — agents can't reassign ownership (the
+// leads_owner_guard trigger backstops this in the DB).
 export async function bulkAssignLeadsOwner(input: {
   ids: string[];
   ownerId: string | null;
 }): Promise<BulkResult> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const ids = uniqueIds(input.ids);
   if (ids.length === 0) return { ok: true, count: 0 };
   const supabase = await createServerClient();
@@ -879,7 +917,7 @@ export async function bulkAssignLeadsOwner(input: {
       { count: 'exact' },
     )
     .in('id', ids)
-    .eq('brand_id', active.id);
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/leads');
   revalidatePath('/dashboard');

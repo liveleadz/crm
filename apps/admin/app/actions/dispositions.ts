@@ -1,12 +1,14 @@
 'use server';
 
 // CRUD actions for per-brand dispositions. Owner/admin only — RLS
-// enforces this at the database layer; we still gate `getActiveBrand()`
-// here so we never operate on the wrong brand.
+// enforces this at the database layer (migration 0011); this layer
+// adds explicit role checks so we surface a clean "Forbidden" instead
+// of an empty affected-rows result, and adds brand_id filters so a
+// stray id can't mutate cross-brand.
 
 import { revalidatePath } from 'next/cache';
-import { getActiveBrand } from '@/lib/active-brand';
 import { createServerClient } from '@leadpilot/db/server';
+import { requireBrandRole } from '@/lib/team';
 import { DISPOSITION_CATEGORIES, type DispositionCategory } from '@/lib/dispositions-shared';
 
 type Result<T = void> = T extends void
@@ -29,8 +31,8 @@ export async function createDisposition(input: {
   tone: string;
   category?: string;
 }): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
 
   const code = input.code.trim().toLowerCase();
   const label = input.label.trim();
@@ -47,7 +49,7 @@ export async function createDisposition(input: {
   const { data: maxRow } = await supabase
     .from('dispositions')
     .select('sort_order')
-    .eq('brand_id', active.id)
+    .eq('brand_id', guard.brandId)
     .eq('is_archived', false)
     .order('sort_order', { ascending: false })
     .limit(1)
@@ -55,7 +57,7 @@ export async function createDisposition(input: {
   const nextSort = (maxRow?.sort_order ?? 0) + 1;
 
   const { error } = await supabase.from('dispositions').insert({
-    brand_id: active.id,
+    brand_id: guard.brandId,
     code,
     label,
     tone: input.tone,
@@ -79,6 +81,8 @@ export async function setDispositionCategory(input: {
   id: string;
   category: string;
 }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   if (!validateCategory(input.category)) {
     return { ok: false, error: 'Invalid category.' };
   }
@@ -86,7 +90,8 @@ export async function setDispositionCategory(input: {
   const { error } = await supabase
     .from('dispositions')
     .update({ category: input.category })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/(app)/settings', 'page');
   return { ok: true };
@@ -97,6 +102,8 @@ export async function updateDisposition(input: {
   label: string;
   tone: string;
 }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const label = input.label.trim();
   if (!label) return { ok: false, error: 'Label is required.' };
   if (!validateTone(input.tone)) return { ok: false, error: 'Invalid tone.' };
@@ -105,7 +112,8 @@ export async function updateDisposition(input: {
   const { error } = await supabase
     .from('dispositions')
     .update({ label, tone: input.tone })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/(app)/settings', 'page');
   return { ok: true };
@@ -117,6 +125,8 @@ export async function setDispositionCooldown(input: {
   id: string;
   minutes: number | null;
 }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   if (input.minutes !== null) {
     if (!Number.isInteger(input.minutes) || input.minutes < 0 || input.minutes > 60 * 24 * 7) {
       return { ok: false, error: 'Cooldown must be 0–10080 minutes (7 days).' };
@@ -126,7 +136,8 @@ export async function setDispositionCooldown(input: {
   const { error } = await supabase
     .from('dispositions')
     .update({ cooldown_minutes: input.minutes && input.minutes > 0 ? input.minutes : null })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/(app)/settings', 'page');
   return { ok: true };
@@ -135,22 +146,28 @@ export async function setDispositionCooldown(input: {
 // Soft-delete: archive instead of removing so historical calls keep
 // their disposition label resolvable.
 export async function archiveDisposition(input: { id: string }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('dispositions')
     .update({ is_archived: true })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/(app)/settings', 'page');
   return { ok: true };
 }
 
 export async function restoreDisposition(input: { id: string }): Promise<Result> {
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('dispositions')
     .update({ is_archived: false })
-    .eq('id', input.id);
+    .eq('id', input.id)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/(app)/settings', 'page');
   return { ok: true };
@@ -159,8 +176,8 @@ export async function restoreDisposition(input: { id: string }): Promise<Result>
 // Bulk reorder: client sends the full ordered id list, we rewrite
 // sort_order in one transactional pass.
 export async function reorderDispositions(input: { ids: string[] }): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('admin');
+  if (!guard.ok) return guard;
 
   const supabase = await createServerClient();
   // Run updates serially — Supabase doesn't expose a bulk-CASE update.
@@ -172,7 +189,7 @@ export async function reorderDispositions(input: { ids: string[] }): Promise<Res
       .from('dispositions')
       .update({ sort_order: i + 1 })
       .eq('id', id)
-      .eq('brand_id', active.id);
+      .eq('brand_id', guard.brandId);
     if (error) return { ok: false, error: error.message };
   }
   revalidatePath('/(app)/settings', 'page');

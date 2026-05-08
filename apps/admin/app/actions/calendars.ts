@@ -3,16 +3,14 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { createAdminClient } from '@leadpilot/db/admin';
-import { getActiveBrand } from '@/lib/active-brand';
-import { canManageTeam, getCurrentBrandRole } from '@/lib/team';
+import { requireBrandRole } from '@/lib/team';
 import { listMyCalendars as listGoogleCalendars } from '@/lib/calendar/google';
 
+// Calendar config is manager+. The previous local helper used
+// canManageTeam (admin/owner only) by mistake — the original intent
+// was manager+, matching every other "config" surface.
 async function requireManager() {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false as const, error: 'No active brand' };
-  const role = await getCurrentBrandRole(active.id);
-  if (!canManageTeam(role)) return { ok: false as const, error: 'Forbidden' };
-  return { ok: true as const, brandId: active.id };
+  return requireBrandRole('manager');
 }
 
 function bump() {

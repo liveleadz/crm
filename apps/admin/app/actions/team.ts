@@ -3,8 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@leadpilot/db/server';
 import { createAdminClient } from '@leadpilot/db/admin';
-import { getActiveBrand } from '@/lib/active-brand';
-import { canManageTeam, getCurrentBrandRole, type MemberRole } from '@/lib/team';
+import { requireBrandRole, type MemberRole } from '@/lib/team';
 import { getPublicAppUrl } from '@/lib/dialer';
 
 // Where the Supabase invite email's "Accept invite" link lands. Supabase
@@ -21,12 +20,10 @@ function isRole(v: unknown): v is MemberRole {
   return typeof v === 'string' && (ROLES as string[]).includes(v);
 }
 
+// Team management — invites, role changes, removals — is admin/owner
+// only. Managers can run the team, but only admins can shape it.
 async function requireManager() {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false as const, error: 'No active brand' };
-  const role = await getCurrentBrandRole(active.id);
-  if (!canManageTeam(role)) return { ok: false as const, error: 'Forbidden' };
-  return { ok: true as const, brandId: active.id, role };
+  return requireBrandRole('admin');
 }
 
 function bump() {

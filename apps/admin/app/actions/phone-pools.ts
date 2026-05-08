@@ -1,13 +1,14 @@
 'use server';
 
 // CRUD for outbound caller-ID pools. Manager+ guard via RLS on
-// phone_pools / phone_pool_numbers; this layer just shapes errors and
-// revalidates the surfaces that surface pool data (numbers manager,
-// campaign editor).
+// phone_pools / phone_pool_numbers; this layer adds explicit role
+// checks so we surface a clean "Forbidden" instead of an RLS-empty-
+// row error, and adds brand_id filters so a stray id can't mutate
+// cross-brand.
 
 import { revalidatePath } from 'next/cache';
-import { getActiveBrand } from '@/lib/active-brand';
 import { createServerClient } from '@leadpilot/db/server';
+import { requireBrandRole } from '@/lib/team';
 import type { PoolStrategy } from '@/lib/phone-pools';
 
 type Result<T = undefined> =
@@ -18,15 +19,15 @@ export async function createPool(input: {
   name: string;
   strategy?: PoolStrategy;
 }): Promise<Result<{ poolId: string }>> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const name = input.name.trim();
   if (!name) return { ok: false, error: 'Pool name is required.' };
   const supabase = await createServerClient();
   const { data, error } = await supabase
     .from('phone_pools')
     .insert({
-      brand_id: active.id,
+      brand_id: guard.brandId,
       name,
       strategy: input.strategy ?? 'round_robin',
     })
@@ -42,6 +43,8 @@ export async function updatePool(input: {
   name?: string;
   strategy?: PoolStrategy;
 }): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const patch: { name?: string; strategy?: PoolStrategy } = {};
   if (input.name !== undefined) {
@@ -54,7 +57,8 @@ export async function updatePool(input: {
   const { error } = await supabase
     .from('phone_pools')
     .update(patch)
-    .eq('id', input.poolId);
+    .eq('id', input.poolId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   revalidatePath('/campaigns');
@@ -62,8 +66,14 @@ export async function updatePool(input: {
 }
 
 export async function deletePool(poolId: string): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
-  const { error } = await supabase.from('phone_pools').delete().eq('id', poolId);
+  const { error } = await supabase
+    .from('phone_pools')
+    .delete()
+    .eq('id', poolId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   revalidatePath('/campaigns');
@@ -77,7 +87,18 @@ export async function setPoolMembers(input: {
   poolId: string;
   numberIds: string[];
 }): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
+  // Confirm the pool belongs to the active brand before mutating membership.
+  const { data: pool } = await supabase
+    .from('phone_pools')
+    .select('id')
+    .eq('id', input.poolId)
+    .eq('brand_id', guard.brandId)
+    .maybeSingle();
+  if (!pool) return { ok: false, error: 'Pool not found in this brand.' };
+
   const { error: delErr } = await supabase
     .from('phone_pool_numbers')
     .delete()
@@ -98,13 +119,13 @@ export async function setPoolMembers(input: {
 export async function setBrandDefaultPool(
   poolId: string | null,
 ): Promise<Result> {
-  const active = await getActiveBrand();
-  if (!active) return { ok: false, error: 'No active brand.' };
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('brands')
     .update({ default_pool_id: poolId })
-    .eq('id', active.id);
+    .eq('id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/numbers');
   return { ok: true };
@@ -114,11 +135,14 @@ export async function setCampaignPool(input: {
   campaignId: string;
   poolId: string | null;
 }): Promise<Result> {
+  const guard = await requireBrandRole('manager');
+  if (!guard.ok) return guard;
   const supabase = await createServerClient();
   const { error } = await supabase
     .from('campaigns')
     .update({ phone_pool_id: input.poolId })
-    .eq('id', input.campaignId);
+    .eq('id', input.campaignId)
+    .eq('brand_id', guard.brandId);
   if (error) return { ok: false, error: error.message };
   revalidatePath('/campaigns');
   return { ok: true };
