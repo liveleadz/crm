@@ -134,6 +134,12 @@ const STRATEGY: NavItem[] = [
       </>,
     ),
   },
+];
+
+// Automations live under Management — only managers+ can author or audit
+// trigger→action rules. Non-managers don't see the link at all (and the
+// page enforces the role check server-side too).
+const MANAGEMENT: NavItem[] = [
   {
     href: '/workflows',
     label: 'Automations',
@@ -147,9 +153,6 @@ const STRATEGY: NavItem[] = [
       </>,
     ),
   },
-];
-
-const MANAGEMENT: NavItem[] = [
   {
     href: '/team',
     label: 'Team & Performance',

@@ -6,6 +6,7 @@ import { loadDispositions } from '@/lib/dispositions';
 import { loadBrandTagsWithCounts } from '@/lib/tags';
 import { loadRecentWorkflowRuns } from '@/lib/workflow-runs';
 import { loadRecentActionLog } from '@/lib/action-log';
+import { canSeeManagement, getCurrentBrandRole } from '@/lib/team';
 import { createServerClient } from '@leadpilot/db/server';
 
 async function loadStages(brandId: string) {
@@ -38,6 +39,11 @@ export default async function AutomationEditorPage({
   const { id } = await params;
   const active = await getActiveBrand();
   if (!active) notFound();
+
+  // Manager+ only — same gate as the list page. notFound() avoids leaking
+  // the URL to agents who try to deep-link an automation by id.
+  const role = await getCurrentBrandRole(active.id);
+  if (!canSeeManagement(role)) notFound();
 
   const [automation, stages, tagsWithCounts, dispositions, members, runs, actionLog] =
     await Promise.all([

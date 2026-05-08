@@ -1,9 +1,11 @@
+import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
 import { AutomationsManager } from '@/components/automations/automations-manager';
 import { getActiveBrand } from '@/lib/active-brand';
 import { loadAutomations } from '@/lib/automations';
 import { loadDispositions } from '@/lib/dispositions';
 import { loadBrandTagsWithCounts } from '@/lib/tags';
+import { canSeeManagement, getCurrentBrandRole } from '@/lib/team';
 import { createServerClient } from '@leadpilot/db/server';
 
 async function loadStages(brandId: string) {
@@ -26,6 +28,11 @@ export default async function WorkflowsPage() {
       </>
     );
   }
+
+  // Manager+ only. Agents and viewers must not see automation rules; we
+  // 404 instead of redirecting so the URL doesn't leak the page's existence.
+  const role = await getCurrentBrandRole(active.id);
+  if (!canSeeManagement(role)) notFound();
 
   const [automations, stages, tagsWithCounts, dispositions] = await Promise.all([
     loadAutomations(active.id),
