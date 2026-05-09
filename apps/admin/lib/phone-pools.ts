@@ -16,6 +16,7 @@ import 'server-only';
 // behavior.
 
 import { createServerClient } from '@leadpilot/db/server';
+import { createAdminClient } from '@leadpilot/db/admin';
 import { getOutboundFromNumber, type OutboundFromNumber } from '@/lib/dialer';
 
 export type PoolStrategy = 'round_robin' | 'random' | 'sticky_lead';
@@ -100,7 +101,12 @@ async function pickFromPool(
   strategy: PoolStrategy,
   leadId: string | null,
 ): Promise<OutboundFromNumber | null> {
-  const supabase = await createServerClient();
+  // Admin client: RLS on numbers / phone_pools / phone_pool_numbers requires
+  // is_manager_or_above, but dial-time pool selection runs on behalf of
+  // agents too. Caller (prepareCall) has already validated session + brand
+  // membership, so bypassing RLS here is safe — we're only reading routing
+  // metadata, not exposing it to the client.
+  const supabase = createAdminClient();
   const { data: rows } = await supabase
     .from('phone_pool_numbers')
     .select('number_id, weight, last_used_at, numbers(id, e164, label, active)')
@@ -177,7 +183,11 @@ export async function pickOutboundNumber(input: {
    */
   memberId?: string | null;
 }): Promise<OutboundFromNumber | null> {
-  const supabase = await createServerClient();
+  // Admin client (see pickFromPool note): agents can't SELECT numbers under
+  // RLS, so without this Step 0 silently returns no rows for the dialing
+  // agent and we fall through to the legacy brand-wide fallback — which is
+  // exactly the bug "agent's outbound caller-ID is the wrong number".
+  const supabase = createAdminClient();
 
   // 0. Member-assigned number (highest priority). Lets a brand give
   // each agent their own outbound caller-ID without juggling pools.
