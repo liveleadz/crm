@@ -1,6 +1,7 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
 import { loadDispositions, type Disposition } from './dispositions';
+import type { MemberRole } from './team';
 
 export type Kpis = {
   activeLeads: number;
@@ -16,6 +17,8 @@ export type PipelineSlice = {
   position: number;
   isWon: boolean;
   isLost: boolean;
+  isAppointmentSet: boolean;
+  isNoShow: boolean;
   count: number;
 };
 
@@ -79,7 +82,7 @@ function sevenDaysAgoIso() {
 
 export async function loadDashboard(
   brandId: string,
-  opts?: { viewerMemberId?: string | null },
+  opts?: { viewerMemberId?: string | null; role?: MemberRole | null },
 ) {
   const supabase = await createServerClient();
   const todayStart = startOfTodayIso();
@@ -147,7 +150,7 @@ export async function loadDashboard(
     ),
     supabase
       .from('stages')
-      .select('id, name, color, position, is_won, is_lost')
+      .select('id, name, color, position, is_won, is_lost, is_appointment_set, is_no_show')
       .eq('brand_id', brandId)
       .order('position'),
     scopeLeads(
@@ -224,19 +227,27 @@ export async function loadDashboard(
   for (const row of leadsByStageRes.data ?? []) {
     if (row.stage_id) counts.set(row.stage_id, (counts.get(row.stage_id) ?? 0) + 1);
   }
-  const pipeline: PipelineSlice[] = stages.map((s) => ({
+  const allPipeline: PipelineSlice[] = stages.map((s) => ({
     id: s.id,
     name: s.name,
     color: s.color,
     position: s.position,
     isWon: s.is_won,
     isLost: s.is_lost,
+    isAppointmentSet: s.is_appointment_set,
+    isNoShow: s.is_no_show,
     count: counts.get(s.id) ?? 0,
   }));
+  // Above-agent roles only see the closing handoff stages on the dashboard
+  // pipeline card, mirroring the kanban scoping in lib/leads.ts.
+  const closerOnly = opts?.role === 'manager' || opts?.role === 'admin' || opts?.role === 'owner';
+  const pipeline: PipelineSlice[] = closerOnly
+    ? allPipeline.filter((p) => p.isAppointmentSet || p.isNoShow || p.isWon)
+    : allPipeline;
 
   const activeLeads =
     (activeLeadsRes.count ?? 0) -
-    pipeline.filter((p) => p.isWon || p.isLost).reduce((acc, p) => acc + p.count, 0);
+    allPipeline.filter((p) => p.isWon || p.isLost).reduce((acc, p) => acc + p.count, 0);
 
   const kpis: Kpis = {
     activeLeads: Math.max(activeLeads, 0),

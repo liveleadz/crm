@@ -1452,6 +1452,8 @@ export type Database = {
       }
       leads: {
         Row: {
+          appointment_set_at: string | null
+          appointment_set_by_member_id: string | null
           brand_id: string
           city: string | null
           created_at: string
@@ -1473,6 +1475,8 @@ export type Database = {
           zip: string | null
         }
         Insert: {
+          appointment_set_at?: string | null
+          appointment_set_by_member_id?: string | null
           brand_id: string
           city?: string | null
           created_at?: string
@@ -1494,6 +1498,8 @@ export type Database = {
           zip?: string | null
         }
         Update: {
+          appointment_set_at?: string | null
+          appointment_set_by_member_id?: string | null
           brand_id?: string
           city?: string | null
           created_at?: string
@@ -1515,6 +1521,13 @@ export type Database = {
           zip?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "leads_appointment_set_by_member_id_fkey"
+            columns: ["appointment_set_by_member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "leads_brand_id_fkey"
             columns: ["brand_id"]
@@ -2203,7 +2216,9 @@ export type Database = {
           color: string | null
           created_at: string
           id: string
+          is_appointment_set: boolean
           is_lost: boolean
+          is_no_show: boolean
           is_won: boolean
           name: string
           position: number
@@ -2213,7 +2228,9 @@ export type Database = {
           color?: string | null
           created_at?: string
           id?: string
+          is_appointment_set?: boolean
           is_lost?: boolean
+          is_no_show?: boolean
           is_won?: boolean
           name: string
           position: number
@@ -2223,7 +2240,9 @@ export type Database = {
           color?: string | null
           created_at?: string
           id?: string
+          is_appointment_set?: boolean
           is_lost?: boolean
+          is_no_show?: boolean
           is_won?: boolean
           name?: string
           position?: number

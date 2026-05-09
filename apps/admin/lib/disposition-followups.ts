@@ -257,9 +257,25 @@ export async function enqueueFollowups(input: {
   // the timeline event captures the transition both ways. Skipped if the
   // lead is already on the target stage so we don't spam events.
   if (tpl.moveStageId && lead.stage_id !== tpl.moveStageId) {
+    // Pre-populate the appointment setter when this move lands the lead
+    // on an Appointment Set stage. The DB trigger uses auth.uid() as a
+    // fallback, but we run under the admin client here (auth.uid() is
+    // null), so without this the No Show notification later would have
+    // no agent to ping.
+    const { data: destStage } = await supabase
+      .from('stages')
+      .select('is_appointment_set')
+      .eq('id', tpl.moveStageId)
+      .maybeSingle();
+    const update: { stage_id: string; appointment_set_by_member_id?: string } = {
+      stage_id: tpl.moveStageId,
+    };
+    if (destStage?.is_appointment_set && input.memberId) {
+      update.appointment_set_by_member_id = input.memberId;
+    }
     const { error: stageErr } = await supabase
       .from('leads')
-      .update({ stage_id: tpl.moveStageId })
+      .update(update)
       .eq('id', input.leadId);
     if (!stageErr) {
       out.stageMoved = { stageId: tpl.moveStageId };

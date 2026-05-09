@@ -37,7 +37,7 @@ export default async function DashboardPage() {
     },
     myCampaigns,
   ] = await Promise.all([
-    loadDashboard(active.id, { viewerMemberId }),
+    loadDashboard(active.id, { viewerMemberId, role }),
     profile ? loadAgentCampaignSummary(active.id, profile.id) : Promise.resolve([]),
   ]);
 

@@ -8,7 +8,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadKanban } from '@/lib/leads';
 import { loadLists } from '@/lib/lists';
 import { loadBrandTags } from '@/lib/tags';
-import { loadTeam } from '@/lib/team';
+import { getCurrentBrandRole, loadTeam } from '@/lib/team';
 import { PageHeader } from '@/components/page-header';
 import { LeadFilters } from '@/components/leads/lead-filters';
 import { ListPills } from '@/components/leads/list-pills';
@@ -43,10 +43,11 @@ export default async function LeadsListPage({
   const excludeDnc = sp.dnc === '1';
   const excludeDne = sp.dne === '1';
 
-  const [lists, tagLibrary, team] = await Promise.all([
+  const [lists, tagLibrary, team, role] = await Promise.all([
     loadLists(active.id),
     loadBrandTags(active.id),
     loadTeam(active.id),
+    getCurrentBrandRole(active.id),
   ]);
 
   // Filter-source (smart) lists carry their criteria in URL params (set by
@@ -55,14 +56,18 @@ export default async function LeadsListPage({
   const activeList = activeListId ? lists.find((l) => l.id === activeListId) ?? null : null;
   const materializedListId = activeList && activeList.source !== 'filter' ? activeList.id : null;
 
-  const { stages, leads } = await loadKanban(active.id, {
-    listId: materializedListId,
-    search,
-    source,
-    tagIds,
-    excludeDnc,
-    excludeDne,
-  });
+  const { stages, leads } = await loadKanban(
+    active.id,
+    {
+      listId: materializedListId,
+      search,
+      source,
+      tagIds,
+      excludeDnc,
+      excludeDne,
+    },
+    role,
+  );
 
   const teamOpts = team.map((t) => ({
     id: t.memberId,

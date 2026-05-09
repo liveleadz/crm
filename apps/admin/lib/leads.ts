@@ -2,6 +2,7 @@ import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
 import { loadTagsForLeads, type Tag } from './tags';
 import { pickCompanyFromCustom } from './company-name';
+import type { MemberRole } from './team';
 
 export type LeadStage = {
   id: string;
@@ -10,7 +11,24 @@ export type LeadStage = {
   position: number;
   isWon: boolean;
   isLost: boolean;
+  isAppointmentSet: boolean;
+  isNoShow: boolean;
 };
+
+// Above-agent roles only see the closing handoff: Appointment Set / No Show /
+// Won. Agents keep the full pipeline. Pure view scoping — RLS is unchanged so
+// direct lead URLs and imports keep working for above-agent roles.
+function isCloserOnly(role: MemberRole | null | undefined): boolean {
+  return role === 'manager' || role === 'admin' || role === 'owner';
+}
+
+function filterStagesForRole(
+  stages: LeadStage[],
+  role: MemberRole | null | undefined,
+): LeadStage[] {
+  if (!isCloserOnly(role)) return stages;
+  return stages.filter((s) => s.isAppointmentSet || s.isNoShow || s.isWon);
+}
 
 export type LeadCard = {
   id: string;
@@ -176,24 +194,34 @@ export async function loadLeadDetail(leadId: string, brandId: string) {
 // import wizard). Skips the (potentially expensive) leads + tag join that
 // loadKanban performs, so it stays fast even on brands with thousands of
 // leads.
-export async function loadStages(brandId: string): Promise<LeadStage[]> {
+export async function loadStages(
+  brandId: string,
+  role?: MemberRole | null,
+): Promise<LeadStage[]> {
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('stages')
-    .select('id, name, color, position, is_won, is_lost')
+    .select('id, name, color, position, is_won, is_lost, is_appointment_set, is_no_show')
     .eq('brand_id', brandId)
     .order('position');
-  return (data ?? []).map((s) => ({
+  const stages: LeadStage[] = (data ?? []).map((s) => ({
     id: s.id,
     name: s.name,
     color: s.color,
     position: s.position,
     isWon: s.is_won,
     isLost: s.is_lost,
+    isAppointmentSet: s.is_appointment_set,
+    isNoShow: s.is_no_show,
   }));
+  return filterStagesForRole(stages, role);
 }
 
-export async function loadKanban(brandId: string, filter: KanbanFilter = {}) {
+export async function loadKanban(
+  brandId: string,
+  filter: KanbanFilter = {},
+  role?: MemberRole | null,
+) {
   const supabase = await createServerClient();
   let leadsQuery = supabase
     .from('leads')
@@ -241,22 +269,32 @@ export async function loadKanban(brandId: string, filter: KanbanFilter = {}) {
   const [stagesRes, leadsRes] = await Promise.all([
     supabase
       .from('stages')
-      .select('id, name, color, position, is_won, is_lost')
+      .select('id, name, color, position, is_won, is_lost, is_appointment_set, is_no_show')
       .eq('brand_id', brandId)
       .order('position'),
     leadsQuery,
   ]);
 
-  const stages: LeadStage[] = (stagesRes.data ?? []).map((s) => ({
+  const allStages: LeadStage[] = (stagesRes.data ?? []).map((s) => ({
     id: s.id,
     name: s.name,
     color: s.color,
     position: s.position,
     isWon: s.is_won,
     isLost: s.is_lost,
+    isAppointmentSet: s.is_appointment_set,
+    isNoShow: s.is_no_show,
   }));
+  const stages = filterStagesForRole(allStages, role);
+  // Closer-only roles also have their leads list scoped to the visible
+  // stages, so manager / admin / owner don't see early-stage leads in
+  // the flat list either. Keeps the row count consistent with the kanban.
+  const visibleStageIds = isCloserOnly(role) ? new Set(stages.map((s) => s.id)) : null;
 
-  const rows = leadsRes.data ?? [];
+  const rawRows = leadsRes.data ?? [];
+  const rows = visibleStageIds
+    ? rawRows.filter((l) => l.stage_id && visibleStageIds.has(l.stage_id))
+    : rawRows;
   const tagMap = await loadTagsForLeads(rows.map((l) => l.id));
   const leads: LeadCard[] = rows.map((l) => ({
     id: l.id,

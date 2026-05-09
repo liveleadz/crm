@@ -47,7 +47,7 @@ export async function createStage(input: {
       is_won: !!input.isWon,
       is_lost: !!input.isLost,
     })
-    .select('id, name, color, position, is_won, is_lost')
+    .select('id, name, color, position, is_won, is_lost, is_appointment_set, is_no_show')
     .single();
   if (error || !data) return { ok: false as const, error: error?.message ?? 'Insert failed' };
   bumpAll();
@@ -60,6 +60,8 @@ export async function createStage(input: {
       position: data.position,
       isWon: data.is_won,
       isLost: data.is_lost,
+      isAppointmentSet: data.is_appointment_set,
+      isNoShow: data.is_no_show,
     },
   };
 }

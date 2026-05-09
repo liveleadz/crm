@@ -3,7 +3,7 @@ import { getActiveBrand } from '@/lib/active-brand';
 import { loadKanban } from '@/lib/leads';
 import { loadLists } from '@/lib/lists';
 import { loadBrandTags } from '@/lib/tags';
-import { loadTeam } from '@/lib/team';
+import { getCurrentBrandRole, loadTeam } from '@/lib/team';
 import { PageHeader } from '@/components/page-header';
 import { KanbanBoard } from '@/components/leads/kanban-board';
 import { NewLeadButton } from '@/components/leads/new-lead-button';
@@ -38,10 +38,11 @@ export default async function PipelinesPage({
   const excludeDnc = sp.dnc === '1';
   const excludeDne = sp.dne === '1';
 
-  const [lists, tagLibrary, team] = await Promise.all([
+  const [lists, tagLibrary, team, role] = await Promise.all([
     loadLists(active.id),
     loadBrandTags(active.id),
     loadTeam(active.id),
+    getCurrentBrandRole(active.id),
   ]);
   const teamOpts = team.map((t) => ({
     id: t.memberId,
@@ -53,14 +54,18 @@ export default async function PipelinesPage({
   // they aren't materialized so don't scope leads by list_id.
   const materializedListId = activeList && activeList.source !== 'filter' ? activeList.id : null;
 
-  const { stages, leads } = await loadKanban(active.id, {
-    listId: materializedListId,
-    search,
-    source,
-    tagIds,
-    excludeDnc,
-    excludeDne,
-  });
+  const { stages, leads } = await loadKanban(
+    active.id,
+    {
+      listId: materializedListId,
+      search,
+      source,
+      tagIds,
+      excludeDnc,
+      excludeDne,
+    },
+    role,
+  );
   const filtersActive =
     !!search || !!source || tagIds.length > 0 || excludeDnc || excludeDne;
   const subtitle = activeList
