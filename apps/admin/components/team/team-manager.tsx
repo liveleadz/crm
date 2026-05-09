@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
 import {
+  createAgentAccount,
   inviteMember,
   removeMember,
   resendInvite,
@@ -51,6 +52,7 @@ export function TeamManager({
 }) {
   const [team, setTeam] = useState(initialTeam);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [createAgentOpen, setCreateAgentOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
@@ -110,13 +112,22 @@ export function TeamManager({
         <div className="text-[12px] text-txt-3">
           {team.length} {team.length === 1 ? 'member' : 'members'}
         </div>
-        <button
-          type="button"
-          onClick={() => setInviteOpen(true)}
-          className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90"
-        >
-          + Invite member
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setCreateAgentOpen(true)}
+            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-txt-2 hover:bg-canvas"
+          >
+            + Create agent (username login)
+          </button>
+          <button
+            type="button"
+            onClick={() => setInviteOpen(true)}
+            className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90"
+          >
+            + Invite member
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -263,6 +274,20 @@ export function TeamManager({
           }}
         />
       )}
+
+      {createAgentOpen && (
+        <CreateAgentDialog
+          onClose={() => setCreateAgentOpen(false)}
+          onCreated={(newMember) => {
+            setTeam((t) =>
+              t.find((m) => m.memberId === newMember.memberId)
+                ? t.map((m) => (m.memberId === newMember.memberId ? newMember : m))
+                : [...t, newMember],
+            );
+            setCreateAgentOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -393,6 +418,184 @@ function InviteDialog({
             className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
           >
             {saving ? 'Sending…' : 'Send invite'}
+          </button>
+        </footer>
+      </div>
+    </>
+  );
+}
+
+function CreateAgentDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (m: TeamRow) => void;
+}) {
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<MemberRole>('agent');
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [, startTransition] = useTransition();
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  function submit() {
+    setError(null);
+    setSaving(true);
+    startTransition(async () => {
+      const res = await createAgentAccount({ fullName, email, username, password, role });
+      setSaving(false);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      onCreated({
+        memberId: res.memberId,
+        email: email.trim().toLowerCase(),
+        fullName: fullName.trim(),
+        avatarUrl: null,
+        mobilePhone: null,
+        role,
+        isActive: true,
+        joinedAt: new Date().toISOString(),
+        pendingInvite: false,
+      });
+    });
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]"
+      />
+      <div
+        role="dialog"
+        aria-label="Create agent"
+        className="fixed left-1/2 top-1/2 z-50 w-[460px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-line bg-surface shadow-2xl"
+      >
+        <header className="flex items-center justify-between border-b border-line px-5 py-3">
+          <h3 className="text-[13.5px] font-semibold">Create agent (username login)</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close dialog"
+            className="grid h-7 w-7 place-items-center rounded-lg text-txt-3 hover:bg-canvas"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+            </svg>
+          </button>
+        </header>
+        <div className="space-y-3 p-5">
+          <label className="block">
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+              Full name
+            </div>
+            <input
+              type="text"
+              autoFocus
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Victor"
+              className="w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+            />
+          </label>
+          <label className="block">
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+              Email
+            </div>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="agent@example.com"
+              className="w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+            />
+            <p className="mt-1 text-[10.5px] text-txt-3">
+              Used for password resets. Login is by username.
+            </p>
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+                Username
+              </div>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="victorliveleadz"
+                className="w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+                Password
+              </div>
+              <input
+                type="text"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                className="w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+              />
+            </label>
+          </div>
+          <label className="block">
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-txt-3">
+              Role
+            </div>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as MemberRole)}
+              className="w-full rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+            >
+              {ROLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label} — {opt.hint}
+                </option>
+              ))}
+            </select>
+          </label>
+          {error && (
+            <div className="rounded-lg border border-hp/40 bg-hp/10 px-3 py-2 text-[11.5px] text-hp">
+              {error}
+            </div>
+          )}
+          <p className="text-[11px] text-txt-3">
+            Creates the account immediately — no email sent. Hand the username and password to
+            the agent directly.
+          </p>
+        </div>
+        <footer className="flex justify-end gap-2 border-t border-line bg-canvas px-5 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-txt-2 hover:bg-canvas disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={saving || !fullName || !email || !username || !password}
+            className="rounded-lg bg-teal px-3 py-1.5 text-[12px] font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+          >
+            {saving ? 'Creating…' : 'Create agent'}
           </button>
         </footer>
       </div>

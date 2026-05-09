@@ -86,6 +86,109 @@ export async function inviteMember(input: { email: string; role: MemberRole }) {
   return { ok: true as const, memberId };
 }
 
+// Create an agent account that logs in with a username + password
+// instead of an emailed invite link. Used for power-dialer agents
+// (Victor, etc.) who share devices and prefer a short handle. The
+// `email` is still required by Supabase Auth — it can be the agent's
+// real inbox so password resets work.
+export async function createAgentAccount(input: {
+  fullName: string;
+  email: string;
+  username: string;
+  password: string;
+  role: MemberRole;
+}) {
+  const guard = await requireManager();
+  if (!guard.ok) return guard;
+
+  const fullName = input.fullName.trim();
+  const email = input.email.trim().toLowerCase();
+  const username = input.username.trim().toLowerCase();
+  const password = input.password;
+  const role = input.role;
+
+  if (!fullName) return { ok: false as const, error: 'Full name required' };
+  if (!email.includes('@')) return { ok: false as const, error: 'Valid email required' };
+  if (!/^[a-z0-9_.-]{3,32}$/.test(username)) {
+    return {
+      ok: false as const,
+      error: 'Username must be 3–32 chars: lowercase letters, digits, _ . -',
+    };
+  }
+  if (password.length < 8) {
+    return { ok: false as const, error: 'Password must be at least 8 characters' };
+  }
+  if (!isRole(role) || role === 'owner') {
+    return { ok: false as const, error: 'Invalid role' };
+  }
+
+  const admin = createAdminClient();
+
+  // Username must be globally unique (RLS-bypassed lookup).
+  const { data: existingUsername } = await admin
+    .from('members')
+    .select('id')
+    .eq('username', username)
+    .maybeSingle();
+  if (existingUsername) {
+    return { ok: false as const, error: 'Username already taken' };
+  }
+
+  // Reuse member if email already has an account; otherwise create one.
+  const { data: existingByEmail } = await admin
+    .from('members')
+    .select('id')
+    .eq('email', email)
+    .maybeSingle();
+
+  let memberId: string;
+  if (existingByEmail) {
+    memberId = existingByEmail.id;
+    // Reset password on the existing auth user so the manager can hand
+    // out the new credentials cleanly.
+    const { error: pwErr } = await admin.auth.admin.updateUserById(memberId, {
+      password,
+      email_confirm: true,
+    });
+    if (pwErr) return { ok: false as const, error: pwErr.message };
+  } else {
+    const { data: created, error: createErr } = await admin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: fullName },
+    });
+    if (createErr || !created?.user) {
+      return { ok: false as const, error: createErr?.message ?? 'Could not create user' };
+    }
+    memberId = created.user.id;
+    // The handle_new_user trigger inserts a members row, but upsert
+    // here guarantees full_name lands even if the trigger races.
+    await admin
+      .from('members')
+      .upsert({ id: memberId, email, full_name: fullName }, { onConflict: 'id' });
+  }
+
+  // Set username + name (idempotent — covers both branches above).
+  const { error: profileErr } = await admin
+    .from('members')
+    .update({ username, full_name: fullName })
+    .eq('id', memberId);
+  if (profileErr) return { ok: false as const, error: profileErr.message };
+
+  // Wire into the active brand.
+  const { error: bmErr } = await admin
+    .from('brand_members')
+    .upsert(
+      { brand_id: guard.brandId, member_id: memberId, role, is_active: true },
+      { onConflict: 'brand_id,member_id' },
+    );
+  if (bmErr) return { ok: false as const, error: bmErr.message };
+
+  bump();
+  return { ok: true as const, memberId };
+}
+
 export async function updateMemberRole(memberId: string, role: MemberRole) {
   const guard = await requireManager();
   if (!guard.ok) return guard;

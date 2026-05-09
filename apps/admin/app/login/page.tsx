@@ -4,13 +4,14 @@ import { createBrowserClient } from '@leadpilot/db/client';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
+import { resolveLoginIdentifier } from '@/app/actions/auth';
 
 function LoginForm() {
   const searchParams = useSearchParams();
   const callbackError = searchParams.get('error');
   const welcome = searchParams.get('welcome') === '1';
   const next = searchParams.get('next') ?? '/dashboard';
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(callbackError);
   const [loading, setLoading] = useState(false);
@@ -19,8 +20,20 @@ function LoginForm() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    // Username-or-email login: server resolves a bare username to its
+    // member email via the admin client; supabase.auth still requires
+    // an email to issue the session.
+    const resolved = await resolveLoginIdentifier(identifier);
+    if (!resolved.ok) {
+      setError(resolved.error);
+      setLoading(false);
+      return;
+    }
     const supabase = createBrowserClient();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email: resolved.email,
+      password,
+    });
     if (error) {
       setError(error.message);
       setLoading(false);
@@ -41,12 +54,12 @@ function LoginForm() {
         )}
         <form onSubmit={onSubmit} className="space-y-3">
           <input
-            type="email"
+            type="text"
             required
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@leadpilot.com"
+            autoComplete="username"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
+            placeholder="Username or email"
             className="w-full rounded border border-line bg-canvas px-3 py-2 text-sm outline-none focus:border-teal"
           />
           <input
