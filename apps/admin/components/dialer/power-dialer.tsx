@@ -24,7 +24,7 @@ import {
 } from '@/components/dialer/disposition-picker';
 import { RecordingButton } from '@/components/calls/recording-button';
 import { LeadContextPanel } from '@/components/dialer/lead-context-panel';
-import type { QueuedLead } from '@/lib/dial-queue';
+import type { QueuedLead, QueueDropCounts } from '@/lib/dial-queue';
 import type { ScriptRow } from '@/lib/campaigns';
 import {
   entrySectionId,
@@ -57,6 +57,7 @@ export function PowerDialer({
   fromE164,
   dispositions,
   queue,
+  dropped = { recent: 0, capped: 0, cooldown: 0, tcpa: 0 },
   campaignId = null,
   sessionKey = null,
   script = null,
@@ -67,6 +68,10 @@ export function PowerDialer({
   fromE164: string | null;
   dispositions: DispositionChoice[];
   queue: QueuedLead[];
+  // Per-reason count of leads that matched the source list/stage but
+  // were dropped by guardrails before reaching the queue. Surfaces in a
+  // banner so reps don't perceive "random skipping".
+  dropped?: QueueDropCounts;
   // When set, every call is attributed to this campaign and the script
   // panel renders on the right.
   campaignId?: string | null;
@@ -582,6 +587,38 @@ export function PowerDialer({
               Resumed where you left off — {completed} already handled. Hit Resume to keep dialing.
             </div>
           )}
+          {(() => {
+            // Transparency banner: how many leads matched the source
+            // list/stage but were dropped before reaching the queue.
+            // Without this, drops from brand-level cooldowns / daily
+            // cap / TCPA feel like "random skipping" — agents see fewer
+            // leads in the dialer than in the pipeline view and have
+            // no idea why.
+            const total =
+              dropped.recent + dropped.capped + dropped.cooldown + dropped.tcpa;
+            if (total === 0) return null;
+            const parts: string[] = [];
+            if (dropped.cooldown > 0)
+              parts.push(
+                `${dropped.cooldown} in cooldown after a recent disposition`,
+              );
+            if (dropped.capped > 0)
+              parts.push(`${dropped.capped} at the daily attempt cap`);
+            if (dropped.recent > 0)
+              parts.push(`${dropped.recent} dialed within the campaign window`);
+            if (dropped.tcpa > 0)
+              parts.push(`${dropped.tcpa} outside the TCPA dial window`);
+            return (
+              <div className="mb-3 rounded-lg border border-amber/30 bg-amber/5 px-3 py-2 text-[11.5px] text-amber">
+                <span className="font-semibold">
+                  {total} lead{total === 1 ? '' : 's'} from this list
+                  {total === 1 ? ' was' : ' were'} filtered:
+                </span>{' '}
+                {parts.join(' · ')}. Adjust cooldowns or the daily cap in
+                Settings to dial them.
+              </div>
+            );
+          })()}
 
           {queue.length === 0 ? (
             <div className="rounded-xl border border-dashed border-line p-6 text-center text-[12px] text-txt-3">

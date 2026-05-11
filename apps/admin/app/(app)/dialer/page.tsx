@@ -68,7 +68,14 @@ export default async function DialerPage({
       ])
     : [null, [], null];
 
-  const queue =
+  // Ad-hoc dial (list / stage / search) must mirror the visible source
+  // list exactly — agents had been seeing leads "randomly skipped"
+  // because the prior 240-minute recently-called filter silently dropped
+  // any lead touched in the last 4h. Brand-level cooldowns + the daily
+  // attempt cap still apply (those are intentional rate-limits), and
+  // their drop counts surface in the dialer banner below. Campaign mode
+  // keeps its own recently_called_minutes window (set per-campaign).
+  const queueResult =
     active && queueMode
       ? await loadDialQueue(active.id, {
           listId: sp.list ?? null,
@@ -79,12 +86,12 @@ export default async function DialerPage({
             : null,
           stageId: sp.stage ?? null,
           campaignId: campaign?.id ?? null,
-          // Don't redial leads we just rang in the last 4h. Campaign mode
-          // overrides this from the campaign's recently_called_minutes.
-          recentlyCalledMinutes: campaign ? undefined : 240,
+          recentlyCalledMinutes: campaign ? undefined : 0,
           limit: 500,
         })
-      : [];
+      : { queue: [], dropped: { recent: 0, capped: 0, cooldown: 0, tcpa: 0 } };
+  const queue = queueResult.queue;
+  const dropped = queueResult.dropped;
 
   const subtitle = !active
     ? 'No active brand'
@@ -110,6 +117,7 @@ export default async function DialerPage({
             fromE164={fromNumber?.e164 ?? null}
             dispositions={dispositions}
             queue={queue}
+            dropped={dropped}
             campaignId={campaign?.id ?? null}
             sessionKey={persistKey}
             script={script}

@@ -25,6 +25,22 @@ export type QueuedLead = {
   state: string | null;
 };
 
+// Per-reason counts of leads that matched the filter but were dropped
+// before dialing. Surfaced in the PowerDialer header so the rep can see
+// why the queue is shorter than the visible list / stage and adjust
+// (e.g., raise the brand-level attempt cap, shorten cooldowns).
+export type QueueDropCounts = {
+  recent: number; // dropped by recentlyCalledMinutes filter
+  capped: number; // dropped by brands.max_dials_per_lead_per_day
+  cooldown: number; // dropped by per-disposition cooldown
+  tcpa: number; // dropped by campaign TCPA dial-window
+};
+
+export type DialQueueResult = {
+  queue: QueuedLead[];
+  dropped: QueueDropCounts;
+};
+
 export type QueueFilter = {
   listId?: string | null;
   search?: string | null;
@@ -47,7 +63,7 @@ export type QueueFilter = {
 export async function loadDialQueue(
   brandId: string,
   filter: QueueFilter = {},
-): Promise<QueuedLead[]> {
+): Promise<DialQueueResult> {
   const supabase = await createServerClient();
   const limit = Math.max(1, Math.min(filter.limit ?? 500, 2000));
 
@@ -100,7 +116,9 @@ export async function loadDialQueue(
         return ll && ll.source !== 'filter';
       })
       .map((r) => r.list_id);
-    if (campaignListIds.length === 0) return [];
+    if (campaignListIds.length === 0) {
+      return { queue: [], dropped: { recent: 0, capped: 0, cooldown: 0, tcpa: 0 } };
+    }
   }
 
   // Base lead query — phone present, not DNC, not DNE-only mismatched.
@@ -154,7 +172,9 @@ export async function loadDialQueue(
       .select('lead_id')
       .in('tag_id', filter.tagIds);
     const tagLeadIds = Array.from(new Set((tagRows ?? []).map((r) => r.lead_id)));
-    if (tagLeadIds.length === 0) return [];
+    if (tagLeadIds.length === 0) {
+      return { queue: [], dropped: { recent: 0, capped: 0, cooldown: 0, tcpa: 0 } };
+    }
     // Cap to avoid an ultra-long URL on the parent leads query.
     query = query.in('id', tagLeadIds.slice(0, 1000));
   }
@@ -162,7 +182,9 @@ export async function loadDialQueue(
   query = query.order('updated_at', { ascending: true }).limit(limit);
 
   const { data: leads } = await query;
-  if (!leads || leads.length === 0) return [];
+  if (!leads || leads.length === 0) {
+    return { queue: [], dropped: { recent: 0, capped: 0, cooldown: 0, tcpa: 0 } };
+  }
 
   // Optionally drop any lead with a recent call so we don't redial after
   // a pause. Default 0 (never skip). Campaign mode supplies its own default.
@@ -242,16 +264,33 @@ export async function loadDialQueue(
     }).ok;
   };
 
-  return leads
-    .filter(
-      (l) =>
-        l.phone &&
-        !recentLeadIds.has(l.id) &&
-        !cappedLeadIds.has(l.id) &&
-        !cooldownLeadIds.has(l.id) &&
-        tcpaFilter(l.state),
-    )
-    .map<QueuedLead>((l) => ({
+  // Walk each lead and tally the FIRST reason that drops it. Order matters
+  // for the banner — we report what was filtered against the visible list,
+  // so we count each lead once even when multiple guardrails would apply.
+  const dropped: QueueDropCounts = { recent: 0, capped: 0, cooldown: 0, tcpa: 0 };
+  const kept = leads.filter((l) => {
+    if (!l.phone) return false;
+    if (recentLeadIds.has(l.id)) {
+      dropped.recent += 1;
+      return false;
+    }
+    if (cappedLeadIds.has(l.id)) {
+      dropped.capped += 1;
+      return false;
+    }
+    if (cooldownLeadIds.has(l.id)) {
+      dropped.cooldown += 1;
+      return false;
+    }
+    if (!tcpaFilter(l.state)) {
+      dropped.tcpa += 1;
+      return false;
+    }
+    return true;
+  });
+
+  return {
+    queue: kept.map<QueuedLead>((l) => ({
       id: l.id,
       firstName: l.first_name,
       lastName: l.last_name,
@@ -261,5 +300,7 @@ export async function loadDialQueue(
       companyName: pickCompanyFromCustom(l.custom),
       city: l.city,
       state: l.state,
-    }));
+    })),
+    dropped,
+  };
 }
