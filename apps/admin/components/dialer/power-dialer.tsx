@@ -261,6 +261,32 @@ export function PowerDialer({
     return /authblock_is_expired|authblock has passed|UnprocessableEntity/i.test(msg);
   }
 
+  // Transient network / SDK errors that are worth a single retry with a
+  // fresh client. Without this, a single dropped fetch (Vercel cold
+  // start, SignalWire WebSocket flap, transient DNS hiccup) surfaces as
+  // "Failed to fetch" on the call card and the agent has to manually
+  // refresh and lose queue position.
+  function isTransientNetworkError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    return /failed to fetch|networkerror|network request failed|load failed|fetch failed|timed? ?out|websocket|connection (lost|closed|reset)|ECONN|aborted|stream (reset|closed)/i.test(
+      msg,
+    );
+  }
+
+  // Human-readable fallback for the call card. The raw "Failed to fetch"
+  // TypeError is meaningless to a sales rep — translate it to something
+  // they can act on.
+  function friendlyDialError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return 'You appear to be offline. Reconnect and dial again.';
+    }
+    if (isTransientNetworkError(err)) {
+      return 'Network hiccup connecting to the calling service. Try dialing again.';
+    }
+    return msg || 'Call failed.';
+  }
+
   async function dialIndex(i: number) {
     const lead = queue[i];
     if (!lead) {
@@ -296,10 +322,20 @@ export function PowerDialer({
       try {
         session = await dialOnce();
       } catch (err) {
-        if (!isAuthExpiredError(err)) throw err;
-        // Token expired — force a new client + token, then retry once.
-        await getClient(true);
-        session = await dialOnce();
+        // Retry once with a fresh client on either auth expiry OR a
+        // transient network failure. The client cache and the cached SAT
+        // are both invalidated so the second attempt starts clean.
+        const retryable = isAuthExpiredError(err) || isTransientNetworkError(err);
+        if (!retryable) throw err;
+        console.warn('[dialer] dial failed, retrying with fresh client', err);
+        try {
+          await getClient(true);
+          session = await dialOnce();
+        } catch (retryErr) {
+          // Surface the friendlier message instead of the raw
+          // "Failed to fetch" — useful for both UX and triage.
+          throw new Error(friendlyDialError(retryErr));
+        }
       }
       sessionRef.current = session;
       const swCallId = (session as unknown as { id?: string }).id;
@@ -316,7 +352,8 @@ export function PowerDialer({
       startedAtRef.current = startedAt;
       setStatus({ kind: 'in_call', startedAt });
     } catch (e) {
-      setStatus({ kind: 'error', message: (e as Error).message ?? 'Call failed.' });
+      console.error('[dialer] dial pipeline error', e);
+      setStatus({ kind: 'error', message: friendlyDialError(e) });
     }
   }
 
