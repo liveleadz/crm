@@ -121,6 +121,10 @@ export function PowerDialer({
   // finishCall before the disposition picker fires).
   const lastCallIdRef = useRef<string | null>(null);
   const startedAtRef = useRef<number | null>(null);
+  // One-shot latch so `finishCall` is idempotent across duplicate
+  // SignalWire `destroy` emissions (see comment in finishCall).
+  // Reset at the start of each new dial.
+  const finishingRef = useRef(false);
   // After we save a disposition we want the next dial to happen without
   // an extra click. Tracked here so the disposition-picker callback can
   // peek without retriggering React state.
@@ -268,6 +272,9 @@ export function PowerDialer({
       return;
     }
     setStatus({ kind: 'connecting' });
+    // Reset the finish latch for this fresh call so the destroy listener
+    // can fire exactly once during this dial's lifecycle.
+    finishingRef.current = false;
     try {
       const prep = await prepareCall({ toNumber: lead.phone, leadId: lead.id, campaignId });
       if (!prep.ok) {
@@ -314,6 +321,16 @@ export function PowerDialer({
   }
 
   function finishCall() {
+    // Idempotency guard: the SignalWire FabricRoomSession can emit
+    // `destroy` more than once in some failure modes (network drop +
+    // local hangup race, SDK reconnect after server-side cleanup).
+    // Without this guard the second fire would re-enter with a null
+    // callIdRef, advance the queue an extra time, and stomp the agent
+    // mid-disposition — which has previously surfaced as a React
+    // exception when the destroyed session is referenced from a stale
+    // closure. One-shot it.
+    if (finishingRef.current) return;
+    finishingRef.current = true;
     const cid = callIdRef.current;
     const startedAt = startedAtRef.current;
     sessionRef.current = null;
@@ -326,7 +343,9 @@ export function PowerDialer({
         ? Math.floor((Date.now() - startedAt) / 1000)
         : undefined;
       startTransition(() => {
-        void markCallEnded({ callId: cid, durationSec: duration });
+        void markCallEnded({ callId: cid, durationSec: duration }).catch((err) => {
+          console.error('[dialer] markCallEnded failed', err);
+        });
       });
       // Disposition gate before we advance.
       setStatus({ kind: 'wrap_up', callId: cid });

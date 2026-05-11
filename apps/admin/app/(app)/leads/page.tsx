@@ -56,7 +56,7 @@ export default async function LeadsListPage({
   const activeList = activeListId ? lists.find((l) => l.id === activeListId) ?? null : null;
   const materializedListId = activeList && activeList.source !== 'filter' ? activeList.id : null;
 
-  const { stages, leads } = await loadKanban(
+  const { stages, leads, total } = await loadKanban(
     active.id,
     {
       listId: materializedListId,
@@ -76,7 +76,7 @@ export default async function LeadsListPage({
 
   const filtersActive =
     !!search || !!source || tagIds.length > 0 || excludeDnc || excludeDne;
-  const subtitle = `${leads.length.toLocaleString()}${filtersActive ? ' filtered' : ' total'}`;
+  const subtitle = `${total.toLocaleString()}${filtersActive ? ' filtered' : ' total'}`;
 
   const stageById = new Map(stages.map((s) => [s.id, s]));
 

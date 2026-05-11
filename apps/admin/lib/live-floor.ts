@@ -61,7 +61,39 @@ export async function loadActiveCalls(brandId: string): Promise<ActiveCall[]> {
     .gte('started_at', sinceIso)
     .order('started_at', { ascending: false })
     .limit(100);
-  const rows = calls ?? [];
+  const allRows = calls ?? [];
+  if (allRows.length === 0) return [];
+
+  // Definitive ghost-call filter: cross-reference each call's owning
+  // member against `member_presence`. A call whose agent stopped
+  // sending presence pings (browser crashed, navigated away, network
+  // dropped) is no longer real, regardless of whether the call row has
+  // been closed. Inbound calls with no member are kept — the SWML side
+  // owns their lifecycle.
+  //
+  // We treat the call as "live" only when presence.last_event_at is
+  // within the same STALE_MS window the rest of presence uses, so the
+  // floor matches what the sidebar Live Team widget reports.
+  const memberIdsAll = Array.from(
+    new Set(allRows.map((r) => r.member_id).filter((x): x is string => !!x)),
+  );
+  const presenceFresh = new Set<string>();
+  if (memberIdsAll.length > 0) {
+    const PRESENCE_STALE_MS = 3 * 60 * 1000;
+    const presenceCutoff = Date.now() - PRESENCE_STALE_MS;
+    const { data: presenceRows } = await supabase
+      .from('member_presence')
+      .select('member_id, last_event_at')
+      .eq('brand_id', brandId)
+      .in('member_id', memberIdsAll);
+    for (const p of presenceRows ?? []) {
+      if (!p.last_event_at) continue;
+      if (new Date(p.last_event_at).getTime() >= presenceCutoff) {
+        presenceFresh.add(p.member_id);
+      }
+    }
+  }
+  const rows = allRows.filter((r) => !r.member_id || presenceFresh.has(r.member_id));
   if (rows.length === 0) return [];
 
   const leadIds = Array.from(new Set(rows.map((r) => r.lead_id).filter((x): x is string => !!x)));

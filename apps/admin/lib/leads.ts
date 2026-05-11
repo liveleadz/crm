@@ -223,59 +223,16 @@ export async function loadKanban(
   role?: MemberRole | null,
 ) {
   const supabase = await createServerClient();
-  let leadsQuery = supabase
-    .from('leads')
-    .select(
-      'id, first_name, last_name, phone, email, source, stage_id, updated_at, do_not_call, do_not_email, custom',
-    )
+
+  // Stages first so closer-only roles can apply the stage scope at the DB
+  // level — otherwise the count(exact) below would diverge from the rows.
+  const { data: stagesData } = await supabase
+    .from('stages')
+    .select('id, name, color, position, is_won, is_lost, is_appointment_set, is_no_show')
     .eq('brand_id', brandId)
-    .order('updated_at', { ascending: false });
-  if (filter.listId) leadsQuery = leadsQuery.eq('list_id', filter.listId);
-  if (filter.source)
-    leadsQuery = leadsQuery.eq(
-      'source',
-      filter.source as 'manual' | 'form' | 'csv' | 'api' | 'workflow',
-    );
-  if (filter.excludeDnc) leadsQuery = leadsQuery.eq('do_not_call', false);
-  if (filter.excludeDne) leadsQuery = leadsQuery.eq('do_not_email', false);
+    .order('position');
 
-  // Free-text search across name/phone/email.
-  const search = filter.search?.trim();
-  if (search) {
-    const esc = search.replace(/[%,]/g, ' ');
-    const pattern = `%${esc}%`;
-    leadsQuery = leadsQuery.or(
-      `first_name.ilike.${pattern},last_name.ilike.${pattern},phone.ilike.${pattern},email.ilike.${pattern}`,
-    );
-  }
-
-  // Tag filter requires a join. We pre-query lead_tags to find matching ids,
-  // then add an .in() clause. Empty result short-circuits to no leads.
-  let tagFilteredIds: string[] | null = null;
-  if (filter.tagIds && filter.tagIds.length > 0) {
-    const { data: ltRows } = await supabase
-      .from('lead_tags')
-      .select('lead_id')
-      .in('tag_id', filter.tagIds);
-    tagFilteredIds = Array.from(new Set((ltRows ?? []).map((r) => r.lead_id)));
-    if (tagFilteredIds.length === 0) {
-      // Force empty leads result while still loading stages for the kanban shell.
-      leadsQuery = leadsQuery.eq('id', '00000000-0000-0000-0000-000000000000');
-    } else {
-      leadsQuery = leadsQuery.in('id', tagFilteredIds);
-    }
-  }
-
-  const [stagesRes, leadsRes] = await Promise.all([
-    supabase
-      .from('stages')
-      .select('id, name, color, position, is_won, is_lost, is_appointment_set, is_no_show')
-      .eq('brand_id', brandId)
-      .order('position'),
-    leadsQuery,
-  ]);
-
-  const allStages: LeadStage[] = (stagesRes.data ?? []).map((s) => ({
+  const allStages: LeadStage[] = (stagesData ?? []).map((s) => ({
     id: s.id,
     name: s.name,
     color: s.color,
@@ -286,15 +243,87 @@ export async function loadKanban(
     isNoShow: s.is_no_show,
   }));
   const stages = filterStagesForRole(allStages, role);
-  // Closer-only roles also have their leads list scoped to the visible
-  // stages, so manager / admin / owner don't see early-stage leads in
-  // the flat list either. Keeps the row count consistent with the kanban.
-  const visibleStageIds = isCloserOnly(role) ? new Set(stages.map((s) => s.id)) : null;
+  const visibleStageIds = isCloserOnly(role) ? stages.map((s) => s.id) : null;
 
-  const rawRows = leadsRes.data ?? [];
-  const rows = visibleStageIds
-    ? rawRows.filter((l) => l.stage_id && visibleStageIds.has(l.stage_id))
-    : rawRows;
+  // Tag filter requires a join. Pre-query lead_tags for matching ids.
+  let tagFilteredIds: string[] | null = null;
+  if (filter.tagIds && filter.tagIds.length > 0) {
+    const { data: ltRows } = await supabase
+      .from('lead_tags')
+      .select('lead_id')
+      .in('tag_id', filter.tagIds);
+    tagFilteredIds = Array.from(new Set((ltRows ?? []).map((r) => r.lead_id)));
+  }
+
+  const search = filter.search?.trim();
+  let searchOr: string | null = null;
+  if (search) {
+    const esc = search.replace(/[%,]/g, ' ');
+    const pattern = `%${esc}%`;
+    searchOr = `first_name.ilike.${pattern},last_name.ilike.${pattern},phone.ilike.${pattern},email.ilike.${pattern}`;
+  }
+
+  // Sentinel UUID forces an empty result when the filter implies no possible
+  // matches (closer with no visible stages, or tag filter with no leads).
+  const EMPTY = '00000000-0000-0000-0000-000000000000';
+  const forceEmpty =
+    (visibleStageIds !== null && visibleStageIds.length === 0) ||
+    (tagFilteredIds !== null && tagFilteredIds.length === 0);
+
+  // Build leads (rows) and count(exact, head) queries with identical filters
+  // so the subtitle total matches the actual list size, independent of
+  // PostgREST's implicit 1000-row cap on the rows query.
+  let leadsQuery = supabase
+    .from('leads')
+    .select(
+      'id, first_name, last_name, phone, email, source, stage_id, updated_at, do_not_call, do_not_email, custom',
+    )
+    .eq('brand_id', brandId)
+    .order('updated_at', { ascending: false });
+  let countQuery = supabase
+    .from('leads')
+    .select('id', { count: 'exact', head: true })
+    .eq('brand_id', brandId);
+
+  if (forceEmpty) {
+    leadsQuery = leadsQuery.eq('id', EMPTY);
+    countQuery = countQuery.eq('id', EMPTY);
+  } else {
+    if (filter.listId) {
+      leadsQuery = leadsQuery.eq('list_id', filter.listId);
+      countQuery = countQuery.eq('list_id', filter.listId);
+    }
+    if (filter.source) {
+      const src = filter.source as 'manual' | 'form' | 'csv' | 'api' | 'workflow';
+      leadsQuery = leadsQuery.eq('source', src);
+      countQuery = countQuery.eq('source', src);
+    }
+    if (filter.excludeDnc) {
+      leadsQuery = leadsQuery.eq('do_not_call', false);
+      countQuery = countQuery.eq('do_not_call', false);
+    }
+    if (filter.excludeDne) {
+      leadsQuery = leadsQuery.eq('do_not_email', false);
+      countQuery = countQuery.eq('do_not_email', false);
+    }
+    if (searchOr) {
+      leadsQuery = leadsQuery.or(searchOr);
+      countQuery = countQuery.or(searchOr);
+    }
+    if (tagFilteredIds && tagFilteredIds.length > 0) {
+      leadsQuery = leadsQuery.in('id', tagFilteredIds);
+      countQuery = countQuery.in('id', tagFilteredIds);
+    }
+    if (visibleStageIds && visibleStageIds.length > 0) {
+      leadsQuery = leadsQuery.in('stage_id', visibleStageIds);
+      countQuery = countQuery.in('stage_id', visibleStageIds);
+    }
+  }
+
+  const [leadsRes, countRes] = await Promise.all([leadsQuery, countQuery]);
+
+  const rows = leadsRes.data ?? [];
+  const total = countRes.count ?? rows.length;
   const tagMap = await loadTagsForLeads(rows.map((l) => l.id));
   const leads: LeadCard[] = rows.map((l) => ({
     id: l.id,
@@ -311,5 +340,5 @@ export async function loadKanban(
     tags: tagMap.get(l.id) ?? [],
   }));
 
-  return { stages, leads };
+  return { stages, leads, total };
 }

@@ -3,6 +3,7 @@ import { createServerClient } from '@leadpilot/db/server';
 import { PageHeader } from '@/components/page-header';
 import { RangeFilter } from '@/components/team/range-filter';
 import { TeamLeaderboard } from '@/components/team/team-leaderboard';
+import { TeamDispositionMix } from '@/components/team/team-disposition-mix';
 import { TeamManager } from '@/components/team/team-manager';
 import { TeamAlertsCard } from '@/components/team/team-alerts-card';
 import { getActiveBrand } from '@/lib/active-brand';
@@ -59,6 +60,7 @@ export default async function TeamPage({ searchParams }: { searchParams: SearchP
         />
         <TeamAlertsCard data={alerts} />
         <TeamLeaderboard data={leaderboard} />
+        <TeamDispositionMix data={leaderboard} />
         <TeamManager initialTeam={team} currentMemberId={user.id} />
       </div>
     </>

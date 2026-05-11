@@ -54,7 +54,7 @@ export default async function PipelinesPage({
   // they aren't materialized so don't scope leads by list_id.
   const materializedListId = activeList && activeList.source !== 'filter' ? activeList.id : null;
 
-  const { stages, leads } = await loadKanban(
+  const { stages, leads, total } = await loadKanban(
     active.id,
     {
       listId: materializedListId,
@@ -69,8 +69,8 @@ export default async function PipelinesPage({
   const filtersActive =
     !!search || !!source || tagIds.length > 0 || excludeDnc || excludeDne;
   const subtitle = activeList
-    ? `${leads.length.toLocaleString()} in ${activeList.name}${filtersActive ? ' · filtered' : ''} · drag cards to move stages`
-    : `${leads.length.toLocaleString()}${filtersActive ? ' filtered' : ' total'} · drag cards to move stages`;
+    ? `${total.toLocaleString()} in ${activeList.name}${filtersActive ? ' · filtered' : ''} · drag cards to move stages`
+    : `${total.toLocaleString()}${filtersActive ? ' filtered' : ' total'} · drag cards to move stages`;
 
   return (
     <>
