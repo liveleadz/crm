@@ -90,6 +90,13 @@ export function PowerDialer({
   brandTimezone?: string;
 }) {
   const [index, setIndex] = useState(0);
+  // The lead whose call is *actually in flight* (connecting / in-call /
+  // wrap-up). Set the moment dialIndex picks up a row, cleared when we
+  // leave the call lifecycle. Decoupled from queue[index] so the
+  // headline + context panel can't drift onto the upcoming lead during
+  // the 600ms auto-advance debounce — the rep was seeing the next
+  // contact on screen while still dialing the previous one.
+  const [dialingLead, setDialingLead] = useState<QueuedLead | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const { setOnCall } = usePresence();
 
@@ -115,6 +122,9 @@ export function PowerDialer({
   );
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const [muted, setMuted] = useState(false);
+  // Most-recently sent DTMF digit. Shown as a brief visual ack on the
+  // keypad so the rep knows the tone went through to the IVR.
+  const [lastDigit, setLastDigit] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   const [elapsed, setElapsed] = useState(0);
   const [bookingOpen, setBookingOpen] = useState(false);
@@ -215,6 +225,18 @@ export function PowerDialer({
   }, [status.kind, storageKey]);
 
   const current = queue[index] ?? null;
+  // While a call is connecting / in-progress / wrapping up, anything
+  // showing "the contact the agent is on a call with" must read from
+  // `dialingLead` so it can't diverge from the SignalWire dial token.
+  // Outside of those states the agent is staging the next pull, so the
+  // queue head (current) is the right thing to surface.
+  const isActiveCall =
+    status.kind === 'connecting' ||
+    status.kind === 'in_call' ||
+    status.kind === 'wrap_up';
+  const displayLead: QueuedLead | null = isActiveCall
+    ? (dialingLead ?? current)
+    : current;
   const remaining = Math.max(0, queue.length - index);
   const completed = outcomes.length;
 
@@ -302,6 +324,12 @@ export function PowerDialer({
       setStatus({ kind: 'error', message: 'No outbound number assigned to this brand.' });
       return;
     }
+    // Pin the lead being dialed BEFORE any awaits. Everything downstream
+    // (headline, context panel, disposition picker) reads from this
+    // ref'd state so the on-screen contact stays in lockstep with the
+    // SignalWire dial token issued below.
+    setDialingLead(lead);
+    setIndex(i);
     setStatus({ kind: 'connecting' });
     // Reset the finish latch for this fresh call so the destroy listener
     // can fire exactly once during this dial's lifecycle.
@@ -398,21 +426,33 @@ export function PowerDialer({
   }
 
   function advance(disposition: string | null) {
-    if (current) {
+    // Record the just-completed call against `dialingLead` (the lead we
+    // actually rang), not `current` — these can disagree if the queue
+    // index was rolled forward mid-call. Falls back to `current` only
+    // for the no-prepareCall edge case where the dial never started.
+    const completed = dialingLead ?? current;
+    if (completed) {
       const callId = lastCallIdRef.current;
       lastCallIdRef.current = null;
-      setOutcomes((cur) => [...cur, { leadId: current.id, callId, disposition }]);
+      setOutcomes((cur) => [...cur, { leadId: completed.id, callId, disposition }]);
     }
     const nextIndex = index + 1;
-    setIndex(nextIndex);
     if (nextIndex >= queue.length) {
+      setIndex(nextIndex);
+      setDialingLead(null);
       setStatus({ kind: 'done' });
       return;
     }
     if (autoAdvanceRef.current) {
-      // Tiny debounce so the agent sees the "Saved" flash before next dial.
+      // Hold `dialingLead` on the just-completed contact through the
+      // debounce so the headline keeps showing who we just rang. The
+      // call to dialIndex(nextIndex) below will overwrite both
+      // `dialingLead` and `index` atomically the moment the new dial
+      // starts — no flash of the upcoming contact in between.
       window.setTimeout(() => void dialIndex(nextIndex), 600);
     } else {
+      setIndex(nextIndex);
+      setDialingLead(null);
       setStatus({ kind: 'paused' });
     }
   }
@@ -490,6 +530,24 @@ export function PowerDialer({
     }
   }
 
+  // Send a single DTMF digit to the remote leg so the agent can drive
+  // IVR menus ("press 1 for sales") mid-call. The SignalWire Fabric
+  // session exposes sendDigits() and accepts the keypad alphabet of
+  // 0-9, *, #. Best-effort: silently ignored if no live session.
+  async function sendDigit(digit: string) {
+    const s = sessionRef.current as
+      | (FabricRoomSession & { sendDigits?: (s: string) => Promise<unknown> })
+      | null;
+    if (!s?.sendDigits) return;
+    setLastDigit(digit);
+    window.setTimeout(() => setLastDigit((d) => (d === digit ? null : d)), 800);
+    try {
+      await s.sendDigits(digit);
+    } catch {
+      /* ignore — IVR navigation is best-effort */
+    }
+  }
+
   // Keyboard shortcuts. Suspended while the disposition note/textarea
   // is focused so typing notes doesn't accidentally hang up the call.
   useEffect(() => {
@@ -513,6 +571,15 @@ export function PowerDialer({
         return;
       }
       if (status.kind !== 'in_call') return;
+      // DTMF — number keys + * + # play through the keypad while
+      // on a live call so the rep can navigate IVR menus from the
+      // physical keyboard. Captured before the mute / hangup
+      // shortcuts so they don't collide with letter shortcuts.
+      if (/^[0-9*#]$/.test(e.key)) {
+        e.preventDefault();
+        void sendDigit(e.key);
+        return;
+      }
       const k = e.key.toLowerCase();
       if (k === 'm') {
         e.preventDefault();
@@ -540,21 +607,21 @@ export function PowerDialer({
   // I/O) so we can also retick on the elapsed counter to refresh the
   // displayed local clock minute-by-minute during a long wrap-up.
   const tcpaCheck = useMemo(() => {
-    if (!tcpaPolicy?.enabled || !current) return null;
+    if (!tcpaPolicy?.enabled || !displayLead) return null;
     return dialWindowCheck({
-      leadState: current.state ?? null,
+      leadState: displayLead.state ?? null,
       brandTimezone,
       policy: tcpaPolicy,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tcpaPolicy, current?.id, current?.state, brandTimezone, status.kind]);
+  }, [tcpaPolicy, displayLead?.id, displayLead?.state, brandTimezone, status.kind]);
 
   const headline = useMemo(() => {
     if (queue.length === 0) return 'No leads queued';
     if (status.kind === 'done') return 'Queue complete';
-    if (!current) return 'Queue complete';
-    return leadDisplay(current);
-  }, [queue.length, status.kind, current]);
+    if (!displayLead) return 'Queue complete';
+    return leadDisplay(displayLead);
+  }, [queue.length, status.kind, displayLead]);
 
   return (
     <div className={`mx-auto w-full ${script ? 'max-w-6xl' : 'max-w-3xl'}`}>
@@ -634,19 +701,19 @@ export function PowerDialer({
                 <div className="mt-1 truncate text-[16px] font-semibold text-txt-1">
                   {headline}
                 </div>
-                {current && leadSubline(current) && (
+                {displayLead && leadSubline(displayLead) && (
                   <div className="mt-0.5 truncate text-[12.5px] text-txt-2">
-                    {leadSubline(current)}
+                    {leadSubline(displayLead)}
                   </div>
                 )}
-                {current && (
+                {displayLead && (
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-txt-3">
-                    <span className="font-mono text-[12px] text-txt-2">{current.phone}</span>
-                    {current.email && (
-                      <span className="truncate">{current.email}</span>
+                    <span className="font-mono text-[12px] text-txt-2">{displayLead.phone}</span>
+                    {displayLead.email && (
+                      <span className="truncate">{displayLead.email}</span>
                     )}
-                    {leadLocation(current) && (
-                      <span>{leadLocation(current)}</span>
+                    {leadLocation(displayLead) && (
+                      <span>{leadLocation(displayLead)}</span>
                     )}
                   </div>
                 )}
@@ -654,6 +721,31 @@ export function PowerDialer({
                   <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-teal/15 px-2.5 py-1 font-mono text-[11.5px] text-teal">
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" />
                     {formatDur(elapsed)}
+                  </div>
+                )}
+                {status.kind === 'in_call' && (
+                  /* DTMF keypad — drives IVR menus on the active call.
+                     Buttons call sendDigit() which forwards to the
+                     SignalWire Fabric session's sendDigits(). The
+                     physical keyboard 0-9 / * / # also routes here via
+                     the keydown handler above, so reps don't have to
+                     mouse-click to press 1-for-sales. */
+                  <div className="mt-3 inline-grid grid-cols-3 gap-1 rounded-xl border border-line bg-surface p-1.5">
+                    {['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'].map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => void sendDigit(d)}
+                        aria-label={`Send DTMF ${d}`}
+                        className={`h-8 w-10 rounded-lg font-mono text-[13px] font-semibold transition-colors ${
+                          lastDigit === d
+                            ? 'bg-teal/20 text-teal'
+                            : 'bg-canvas text-txt-1 hover:bg-canvas/70 active:bg-teal/10'
+                        }`}
+                      >
+                        {d}
+                      </button>
+                    ))}
                   </div>
                 )}
                 {tcpaCheck && (
@@ -675,7 +767,7 @@ export function PowerDialer({
                   </div>
                 )}
                 {campaignId &&
-                  current &&
+                  displayLead &&
                   (status.kind === 'in_call' || status.kind === 'wrap_up') && (
                     <button
                       type="button"
@@ -691,11 +783,11 @@ export function PowerDialer({
                   )}
               </div>
 
-              {current &&
+              {displayLead &&
                 (status.kind === 'in_call' ||
                   status.kind === 'wrap_up' ||
                   status.kind === 'connecting') && (
-                  <LeadContextPanel leadId={current.id} />
+                  <LeadContextPanel leadId={displayLead.id} />
                 )}
 
               {status.kind === 'wrap_up' ? (
@@ -805,22 +897,22 @@ export function PowerDialer({
           )}
         </div>
       </div>
-      {bookingOpen && campaignId && current && (
+      {bookingOpen && campaignId && displayLead && (
         <BookAppointmentModal
           campaignId={campaignId}
           callId={callIdRef.current ?? lastCallIdRef.current ?? ''}
-          leadId={current.id}
-          leadName={leadDisplay(current)}
+          leadId={displayLead.id}
+          leadName={leadDisplay(displayLead)}
           onClose={() => setBookingOpen(false)}
         />
       )}
       {(status.kind === 'connecting' ||
         status.kind === 'in_call' ||
         status.kind === 'wrap_up') &&
-        current && (
+        displayLead && (
           <FloatingCallWidget
             status={status}
-            lead={current}
+            lead={displayLead}
             elapsed={elapsed}
             muted={muted}
             onMute={toggleMute}

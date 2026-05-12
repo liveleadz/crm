@@ -43,6 +43,7 @@ export function IncomingCallPopup() {
           <PreAnswer
             from={pending.fromNumber}
             leadName={pending.leadName}
+            companyName={pending.companyName}
             connecting={status.kind === 'connecting'}
             error={status.kind === 'error' ? status.message : null}
             onAnswer={answer}
@@ -53,6 +54,7 @@ export function IncomingCallPopup() {
             startedAt={status.startedAt}
             muted={muted}
             leadName={pending?.leadName ?? null}
+            companyName={pending?.companyName ?? null}
             fromNumber={pending?.fromNumber ?? null}
             onHangup={hangup}
             onToggleMute={toggleMute}
@@ -90,6 +92,7 @@ export function IncomingCallPopup() {
 function PreAnswer({
   from,
   leadName,
+  companyName,
   connecting,
   error,
   onAnswer,
@@ -97,13 +100,24 @@ function PreAnswer({
 }: {
   from: string;
   leadName: string | null;
+  companyName: string | null;
   connecting: boolean;
   error: string | null;
   onAnswer: () => void;
   onReject: () => void;
 }) {
-  const headline = leadName || formatPhone(from);
-  const subline = leadName ? formatPhone(from) : null;
+  // Headline priority: person name > company name > raw number. The
+  // company name fills in the common case where Victor's contacts are
+  // imported as businesses (no first/last) so the IVR popup still
+  // identifies who's calling instead of just an E.164.
+  const headline = leadName || companyName || formatPhone(from);
+  const subline = leadName
+    ? companyName
+      ? `${companyName} · ${formatPhone(from)}`
+      : formatPhone(from)
+    : companyName
+      ? formatPhone(from)
+      : null;
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -159,6 +173,7 @@ function InCall({
   startedAt,
   muted,
   leadName,
+  companyName,
   fromNumber,
   onHangup,
   onToggleMute,
@@ -168,6 +183,7 @@ function InCall({
   startedAt: number;
   muted: boolean;
   leadName: string | null;
+  companyName: string | null;
   fromNumber: string | null;
   onHangup: () => void;
   onToggleMute: () => Promise<void>;

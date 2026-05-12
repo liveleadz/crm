@@ -7,6 +7,7 @@ import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
 import { loadLeadDetail } from './leads';
 import { loadTasks, type TaskRow } from './tasks';
+import { pickCompanyFromCustom } from './company-name';
 
 export type ContextCall = {
   id: string;
@@ -41,6 +42,15 @@ export type ContextTag = {
 
 export type LeadCallContext = {
   leadId: string;
+  // Editable contact fields. Surfaced to the in-call panel so the
+  // rep can correct names / phone / email / company without leaving
+  // the dialer. companyName resolves from leads.custom and writes
+  // back through updateLeadFields.
+  firstName: string | null;
+  lastName: string | null;
+  companyName: string | null;
+  phone: string | null;
+  email: string | null;
   notes: string | null;
   city: string | null;
   state: string | null;
@@ -132,8 +142,22 @@ export async function loadLeadCallContext(
     .map((r) => (Array.isArray(r.tags) ? r.tags[0] : r.tags))
     .filter((t): t is { id: string; name: string; color: string | null } => !!t);
 
+  // loadLeadDetail doesn't pull leads.custom; one extra read gets us
+  // the canonical company name without changing that loader's shape.
+  const { data: customRow } = await supabase
+    .from('leads')
+    .select('custom')
+    .eq('id', leadId)
+    .maybeSingle();
+  const companyName = customRow ? pickCompanyFromCustom(customRow.custom) : null;
+
   return {
     leadId,
+    firstName: detail.lead.firstName,
+    lastName: detail.lead.lastName,
+    companyName,
+    phone: detail.lead.phone,
+    email: detail.lead.email,
     notes: detail.lead.notes,
     city: detail.lead.city,
     state: detail.lead.state,

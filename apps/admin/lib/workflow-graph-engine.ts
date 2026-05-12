@@ -658,12 +658,13 @@ async function buildActionVars(ctx: GraphRunContext): Promise<TemplateVars> {
     email?: string | null;
     phone?: string | null;
     stage_id?: string | null;
+    custom?: unknown;
   } | null = null;
   let stageName: string | null = null;
   if (ctx.leadId) {
     const { data } = await supabase
       .from('leads')
-      .select('first_name, last_name, email, phone, stage_id')
+      .select('first_name, last_name, email, phone, stage_id, custom')
       .eq('id', ctx.leadId)
       .maybeSingle();
     lead = data;
@@ -682,11 +683,24 @@ async function buildActionVars(ctx: GraphRunContext): Promise<TemplateVars> {
     .eq('id', ctx.brandId)
     .maybeSingle();
 
+  // Resolve the business name from leads.custom — imports use any of
+  // a few key spellings. Mirrors pickCompanyFromCustom in the dialer
+  // so the template sees the same value reps see on the queue card.
+  const customObj = (lead?.custom ?? {}) as Record<string, unknown>;
+  const companyName =
+    (typeof customObj.company === 'string' && customObj.company.trim()) ||
+    (typeof customObj.company_name === 'string' && customObj.company_name.trim()) ||
+    (typeof customObj.Company === 'string' && customObj.Company.trim()) ||
+    (typeof customObj['Company Name'] === 'string' &&
+      (customObj['Company Name'] as string).trim()) ||
+    null;
+
   return buildVars({
     lead: {
       first_name: lead?.first_name ?? null,
       last_name: lead?.last_name ?? null,
       full_name: [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || null,
+      company_name: companyName,
       email: lead?.email ?? null,
       phone: lead?.phone ?? null,
       stage: stageName,

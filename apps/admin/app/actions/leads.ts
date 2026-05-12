@@ -221,6 +221,11 @@ export async function updateLeadFields(input: {
   leadId: string;
   firstName?: string | null;
   lastName?: string | null;
+  // Company name lives in leads.custom JSONB (the import-time payload).
+  // When the rep edits it from the dialer we merge `company` into the
+  // existing custom blob — never replace — so other custom fields
+  // (per-brand attributes, import metadata) survive.
+  companyName?: string | null;
   phone?: string | null;
   email?: string | null;
   city?: string | null;
@@ -238,6 +243,7 @@ export async function updateLeadFields(input: {
     city?: string | null;
     state?: string | null;
     zip?: string | null;
+    custom?: Record<string, unknown>;
   };
   const patch: LeadPatch = { updated_at: new Date().toISOString() };
   const norm = (v: string | null | undefined) =>
@@ -249,12 +255,45 @@ export async function updateLeadFields(input: {
   if (input.city !== undefined) patch.city = norm(input.city);
   if (input.state !== undefined) patch.state = norm(input.state);
   if (input.zip !== undefined) patch.zip = norm(input.zip);
-  if (Object.keys(patch).length === 1) return { ok: true as const };
 
   const supabase = await createServerClient();
+
+  // Company name: merge into existing leads.custom. Read-modify-write
+  // is fine because the dialer is one rep editing one contact at a
+  // time; concurrent custom-field edits are not realistic.
+  if (input.companyName !== undefined) {
+    const next = norm(input.companyName);
+    const { data: row } = await supabase
+      .from('leads')
+      .select('custom')
+      .eq('id', input.leadId)
+      .eq('brand_id', active.id)
+      .maybeSingle();
+    const customObj: Record<string, unknown> = {
+      ...((row?.custom ?? {}) as Record<string, unknown>),
+    };
+    // Canonicalise to the `company` key so future reads via
+    // pickCompanyFromCustom hit on the first lookup, and clear the
+    // legacy variants so they don't drift out of sync.
+    if (next === null) delete customObj.company;
+    else customObj.company = next;
+    delete customObj.company_name;
+    delete customObj.Company;
+    delete customObj['Company Name'];
+    patch.custom = customObj;
+  }
+
+  if (Object.keys(patch).length === 1) return { ok: true as const };
+
+  // The generated row type narrows `custom` to the recursive `Json`
+  // union which doesn't accept our string-keyed Record, even though
+  // the values are JSON-safe. Cast at the call site rather than
+  // weakening the LeadPatch type — the supabase-js `update` method
+  // accepts any JSON-serialisable shape at runtime.
   const { error } = await supabase
     .from('leads')
-    .update(patch)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update(patch as any)
     .eq('id', input.leadId)
     .eq('brand_id', active.id);
   if (error) return { ok: false as const, error: error.message };

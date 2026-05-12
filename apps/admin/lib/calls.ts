@@ -1,5 +1,6 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
+import { pickCompanyFromCustom } from './company-name';
 
 export type CallRow = {
   id: string;
@@ -12,6 +13,11 @@ export type CallRow = {
   leadId: string | null;
   leadFirstName: string | null;
   leadLastName: string | null;
+  // Resolved from leads.custom (Company / company_name / Company Name).
+  // The call log falls back to this when a contact has no person name
+  // — typical for B2B imports where only the business is on file — so
+  // the row never reads as "—" when there's a real name available.
+  leadCompanyName: string | null;
   leadPhone: string | null;
   hasRecording: boolean;
   recordingDurationSec: number | null;
@@ -33,7 +39,7 @@ export async function loadCalls(brandId: string, limit = 5000): Promise<CallRow[
   const { data } = await supabase
     .from('calls')
     .select(
-      'id, started_at, direction, disposition, duration_sec, from_number, to_number, lead_id, recording_url, recording_duration_sec, transcript, transcript_status, needs_disposition, note, callback_at, is_voicemail, leads(first_name, last_name, phone)',
+      'id, started_at, direction, disposition, duration_sec, from_number, to_number, lead_id, recording_url, recording_duration_sec, transcript, transcript_status, needs_disposition, note, callback_at, is_voicemail, leads(first_name, last_name, phone, custom)',
     )
     .eq('brand_id', brandId)
     .order('started_at', { ascending: false })
@@ -42,7 +48,12 @@ export async function loadCalls(brandId: string, limit = 5000): Promise<CallRow[
   if (!data) return [];
   return data.map((c) => {
     const lead = c.leads as
-      | { first_name: string | null; last_name: string | null; phone: string | null }
+      | {
+          first_name: string | null;
+          last_name: string | null;
+          phone: string | null;
+          custom: unknown;
+        }
       | null;
     return {
       id: c.id,
@@ -55,6 +66,7 @@ export async function loadCalls(brandId: string, limit = 5000): Promise<CallRow[
       leadId: c.lead_id,
       leadFirstName: lead?.first_name ?? null,
       leadLastName: lead?.last_name ?? null,
+      leadCompanyName: lead ? pickCompanyFromCustom(lead.custom) : null,
       leadPhone: lead?.phone ?? null,
       hasRecording: Boolean(c.recording_url),
       recordingDurationSec: c.recording_duration_sec ?? null,

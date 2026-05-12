@@ -11,6 +11,10 @@ export type LeadVars = {
   first_name?: string | null;
   last_name?: string | null;
   full_name?: string | null;
+  // Resolved from leads.custom (Company / company_name / Company Name).
+  // Surfaced so seeded automations like the Callback task can fall back
+  // to the business name when no person name is on file.
+  company_name?: string | null;
   email?: string | null;
   phone?: string | null;
   stage?: string | null;
@@ -44,6 +48,20 @@ export function buildVars(input: {
       full_name:
         input.lead.full_name ??
         [input.lead.first_name, input.lead.last_name].filter(Boolean).join(' ').trim(),
+      company_name: input.lead.company_name ?? '',
+      // Best-available display name. Lets seeded templates ship a single
+      // `{{lead.display_name}}` token and have it gracefully degrade
+      // through full name → company → phone without needing chained
+      // OR-fallback syntax (which renderTemplate doesn't support).
+      display_name:
+        input.lead.full_name?.trim() ||
+        ([input.lead.first_name, input.lead.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim()) ||
+        input.lead.company_name?.trim() ||
+        input.lead.phone ||
+        '',
       email: input.lead.email ?? '',
       phone: input.lead.phone ?? '',
       stage: input.lead.stage ?? '',

@@ -231,6 +231,56 @@ export async function prepareCall(input: {
 // member. Used by the IncomingCallPopup to map an SDK invite back to our
 // internal call row so disposition/note can be saved against the right
 // call when the agent hangs up.
+// Pre-answer caller resolution. The ringing popup only gets the
+// carrier's CNAM (often empty or just the city), so on every inbound
+// invite the client calls this with the From number and we look the
+// contact up against the brand's leads table. Returns whatever we
+// know — full name OR company name from leads.custom — so the rep can
+// see who's actually calling before they pick up.
+export async function lookupCallerByPhone(
+  phone: string,
+): Promise<{
+  ok: true;
+  leadId: string | null;
+  fullName: string | null;
+  companyName: string | null;
+} | { ok: false }> {
+  const trimmed = (phone ?? '').trim();
+  if (!trimmed) return { ok: false };
+  const active = await getActiveBrand();
+  if (!active) return { ok: false };
+  const supabase = await createServerClient();
+  // Try the number as-is first, then with/without the US country
+  // prefix so carrier-formatted CNIDs that drop the leading "+1"
+  // still match leads imported in strict E.164.
+  const candidates = new Set<string>([trimmed]);
+  if (trimmed.startsWith('+1')) candidates.add(trimmed.slice(2));
+  else if (/^\d{10}$/.test(trimmed)) candidates.add(`+1${trimmed}`);
+  const { data: row } = await supabase
+    .from('leads')
+    .select('id, first_name, last_name, custom')
+    .eq('brand_id', active.id)
+    .in('phone', Array.from(candidates))
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!row) {
+    return { ok: true, leadId: null, fullName: null, companyName: null };
+  }
+  const fullName =
+    [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || null;
+  // Mirror the dialer queue's company resolver so the popup matches
+  // what the agent sees on the kanban / leads list.
+  const c = (row.custom ?? {}) as Record<string, unknown>;
+  const companyName =
+    (typeof c.company === 'string' && c.company.trim()) ||
+    (typeof c.company_name === 'string' && c.company_name.trim()) ||
+    (typeof c.Company === 'string' && c.Company.trim()) ||
+    (typeof c['Company Name'] === 'string' && (c['Company Name'] as string).trim()) ||
+    null;
+  return { ok: true, leadId: row.id, fullName, companyName };
+}
+
 export async function claimRecentInboundCall(): Promise<
   | {
       ok: true;

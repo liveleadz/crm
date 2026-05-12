@@ -51,8 +51,12 @@ function formatWhen(iso: string) {
 }
 
 function leadName(c: CallRow) {
-  const n = [c.leadFirstName, c.leadLastName].filter(Boolean).join(' ').trim();
-  return n || '—';
+  // Person name first, then business name from leads.custom. Both
+  // null → em-dash so the row still aligns visually. Without the
+  // company fallback, B2B imports without first/last names rendered
+  // as "—" even though we knew the business name.
+  const personName = [c.leadFirstName, c.leadLastName].filter(Boolean).join(' ').trim();
+  return personName || c.leadCompanyName || '—';
 }
 
 function rangeMs(r: RangeFilter): number | null {

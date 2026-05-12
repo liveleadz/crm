@@ -16,6 +16,7 @@ import { SignalWire, type SignalWireClient } from '@signalwire/js';
 import {
   attachSignalwireCallId,
   claimRecentInboundCall,
+  lookupCallerByPhone,
   transferCall,
 } from '@/app/actions/dialer';
 import type { DispositionChoice } from '@/components/dialer/disposition-picker';
@@ -24,6 +25,11 @@ export type IncomingCall = {
   fromNumber: string;
   toNumber: string;
   leadName: string | null;
+  // Resolved against the brand's contacts (leads.custom company keys)
+  // — used as the headline on the ringing popup when no person name is
+  // attached to the number so the rep at least sees the business that
+  // is calling.
+  companyName: string | null;
   receivedAt: number;
 };
 
@@ -191,13 +197,36 @@ export function IncomingCallProvider({
               window.setTimeout(() => {
                 if (inviteRef.current === inv) onCancelled();
               }, 60_000);
+              const initialFrom =
+                cleanPhone(details.caller_id_number) ??
+                cleanPhone(details.from) ??
+                'Unknown';
               setPending({
-                fromNumber:
-                  cleanPhone(details.caller_id_number) ?? cleanPhone(details.from) ?? 'Unknown',
+                fromNumber: initialFrom,
                 toNumber: cleanPhone(details.callee_id_number) ?? cleanPhone(details.to) ?? '',
                 leadName: cleanName(details.caller_id_name),
+                companyName: null,
                 receivedAt,
               });
+              // Resolve the caller against the brand's leads while the
+              // phone is still ringing so the agent sees who's calling
+              // (or which business) before they pick up. Fire-and-forget
+              // — if the lookup fails or returns nothing, the popup
+              // falls back to the carrier CNAM and raw number.
+              if (initialFrom && initialFrom !== 'Unknown') {
+                void lookupCallerByPhone(initialFrom).then((res) => {
+                  if (!res.ok) return;
+                  setPending((prev) =>
+                    prev && prev.receivedAt === receivedAt
+                      ? {
+                          ...prev,
+                          leadName: res.fullName ?? prev.leadName,
+                          companyName: res.companyName ?? prev.companyName,
+                        }
+                      : prev,
+                  );
+                });
+              }
             }) as never,
           },
         });

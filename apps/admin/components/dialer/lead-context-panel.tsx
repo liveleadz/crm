@@ -7,9 +7,28 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import { loadDialerContext } from '@/app/actions/dialer-context';
+import { updateLeadFields } from '@/app/actions/leads';
 import type { LeadCallContext } from '@/lib/lead-context';
 
 type Tab = 'calls' | 'tasks' | 'upcoming';
+
+type EditDraft = {
+  firstName: string;
+  lastName: string;
+  companyName: string;
+  phone: string;
+  email: string;
+};
+
+function draftFromCtx(c: LeadCallContext | null): EditDraft {
+  return {
+    firstName: c?.firstName ?? '',
+    lastName: c?.lastName ?? '',
+    companyName: c?.companyName ?? '',
+    phone: c?.phone ?? '',
+    email: c?.email ?? '',
+  };
+}
 
 export function LeadContextPanel({ leadId }: { leadId: string }) {
   const [ctx, setCtx] = useState<LeadCallContext | null>(null);
@@ -17,10 +36,22 @@ export function LeadContextPanel({ leadId }: { leadId: string }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  // Inline edit mode for the contact's identity. Off by default so
+  // the panel still reads like a quick-look context card; clicking
+  // Edit swaps the read-only header for a five-field form.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<EditDraft>(draftFromCtx(null));
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setCtx(null);
     setError(null);
+    // Switching leads while editing is a mistake-prone state — drop
+    // the in-flight draft so we don't accidentally save the previous
+    // contact's edits against this lead.
+    setEditing(false);
+    setSaveError(null);
     startTransition(async () => {
       const res = await loadDialerContext(leadId);
       if (!res.ok) {
@@ -28,8 +59,46 @@ export function LeadContextPanel({ leadId }: { leadId: string }) {
         return;
       }
       setCtx(res.context);
+      setDraft(draftFromCtx(res.context));
     });
   }, [leadId]);
+
+  async function saveDraft() {
+    setSaving(true);
+    setSaveError(null);
+    const norm = (v: string) => {
+      const t = v.trim();
+      return t === '' ? null : t;
+    };
+    const res = await updateLeadFields({
+      leadId,
+      firstName: norm(draft.firstName),
+      lastName: norm(draft.lastName),
+      companyName: norm(draft.companyName),
+      phone: norm(draft.phone),
+      email: norm(draft.email),
+    });
+    setSaving(false);
+    if (!res.ok) {
+      setSaveError(res.error);
+      return;
+    }
+    // Optimistically reflect the edits in the panel header without
+    // refetching the whole context payload.
+    setCtx((cur) =>
+      cur
+        ? {
+            ...cur,
+            firstName: norm(draft.firstName),
+            lastName: norm(draft.lastName),
+            companyName: norm(draft.companyName),
+            phone: norm(draft.phone),
+            email: norm(draft.email),
+          }
+        : cur,
+    );
+    setEditing(false);
+  }
 
   if (collapsed) {
     return (
@@ -88,6 +157,100 @@ export function LeadContextPanel({ leadId }: { leadId: string }) {
           </button>
         </div>
       </div>
+
+      {ctx && (
+        <div className="border-b border-line px-3 py-2 text-[11.5px]">
+          {editing ? (
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-2 gap-1.5">
+                <FieldInput
+                  label="First name"
+                  value={draft.firstName}
+                  onChange={(v) => setDraft((d) => ({ ...d, firstName: v }))}
+                />
+                <FieldInput
+                  label="Last name"
+                  value={draft.lastName}
+                  onChange={(v) => setDraft((d) => ({ ...d, lastName: v }))}
+                />
+              </div>
+              <FieldInput
+                label="Company"
+                value={draft.companyName}
+                onChange={(v) => setDraft((d) => ({ ...d, companyName: v }))}
+              />
+              <div className="grid grid-cols-2 gap-1.5">
+                <FieldInput
+                  label="Phone"
+                  value={draft.phone}
+                  onChange={(v) => setDraft((d) => ({ ...d, phone: v }))}
+                />
+                <FieldInput
+                  label="Email"
+                  type="email"
+                  value={draft.email}
+                  onChange={(v) => setDraft((d) => ({ ...d, email: v }))}
+                />
+              </div>
+              {saveError && <p className="mt-1 text-[10.5px] text-hp">{saveError}</p>}
+              <div className="mt-1 flex justify-end gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditing(false);
+                    setDraft(draftFromCtx(ctx));
+                    setSaveError(null);
+                  }}
+                  disabled={saving}
+                  className="rounded px-2 py-1 text-[10.5px] text-txt-3 hover:text-txt-1 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveDraft()}
+                  disabled={saving}
+                  className="rounded bg-teal/15 px-2.5 py-1 text-[10.5px] font-semibold text-teal hover:bg-teal/25 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12px] font-semibold text-txt-1">
+                  {[ctx.firstName, ctx.lastName].filter(Boolean).join(' ').trim() ||
+                    ctx.companyName ||
+                    '—'}
+                </div>
+                {ctx.companyName &&
+                  ([ctx.firstName, ctx.lastName].filter(Boolean).join(' ').trim() !== '') && (
+                    <div className="truncate text-[10.5px] text-txt-3">
+                      {ctx.companyName}
+                    </div>
+                  )}
+                {(ctx.phone || ctx.email) && (
+                  <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[10.5px] text-txt-3">
+                    {ctx.phone && <span className="font-mono">{ctx.phone}</span>}
+                    {ctx.email && <span className="truncate">{ctx.email}</span>}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft(draftFromCtx(ctx));
+                  setEditing(true);
+                }}
+                className="shrink-0 rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] font-medium text-txt-3 hover:text-teal"
+              >
+                Edit
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {ctx && (ctx.stage || ctx.tags.length > 0 || ctx.notes) && (
         <div className="border-b border-line px-3 py-2">
@@ -190,6 +353,36 @@ function ApptsList({ appts }: { appts: LeadCallContext['upcomingAppointments'] }
 
 function Empty({ label }: { label: string }) {
   return <p className="text-[11.5px] text-txt-3">{label}</p>;
+}
+
+// Tight single-line input used for the in-panel edit form. Label is
+// rendered above the input as a tiny gray caption; the input itself
+// stays at the same row height as the surrounding context tiles so
+// the panel doesn't reflow when toggling Edit mode.
+function FieldInput({
+  label,
+  value,
+  type = 'text',
+  onChange,
+}: {
+  label: string;
+  value: string;
+  type?: 'text' | 'email';
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-0.5">
+      <span className="text-[9.5px] font-medium uppercase tracking-wider text-txt-3">
+        {label}
+      </span>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded border border-line bg-surface px-1.5 py-1 text-[11.5px] text-txt-1 outline-none focus:border-teal/60 focus:ring-1 focus:ring-teal/20"
+      />
+    </label>
+  );
 }
 
 function formatDur(s: number | null): string {

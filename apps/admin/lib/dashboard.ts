@@ -1,6 +1,7 @@
 import 'server-only';
 import { createServerClient } from '@leadpilot/db/server';
 import { loadDispositions, type Disposition } from './dispositions';
+import { pickCompanyFromCustom } from './company-name';
 import type { MemberRole } from './team';
 
 export type Kpis = {
@@ -162,7 +163,7 @@ export async function loadDashboard(
     scopeCalls(
       supabase
         .from('calls')
-        .select('id, started_at, duration_sec, direction, disposition, recording_url, leads(first_name, last_name)')
+        .select('id, started_at, duration_sec, direction, disposition, recording_url, leads(first_name, last_name, custom)')
         .eq('brand_id', brandId)
         .order('started_at', { ascending: false })
         .limit(5),
@@ -170,7 +171,7 @@ export async function loadDashboard(
     scopeAppts(
       supabase
         .from('appointments')
-        .select('id, starts_at, ends_at, title, status, location, leads(first_name, last_name)')
+        .select('id, starts_at, ends_at, title, status, location, leads(first_name, last_name, custom)')
         .eq('brand_id', brandId)
         .gte('starts_at', todayStart)
         .lt('starts_at', tomorrowStart)
@@ -258,21 +259,31 @@ export async function loadDashboard(
 
   const recentCalls: RecentCall[] = (recentCallsRes.data ?? []).map((c) => {
     const lead = Array.isArray(c.leads) ? c.leads[0] : c.leads;
-    const name = lead ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() : null;
+    // Person name → business name (from leads.custom) → null. Without
+    // the company fallback, the dashboard's recent-calls feed read as
+    // "Unknown lead" for every B2B import that ships only a company.
+    const personName = lead
+      ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim()
+      : '';
+    const companyName = lead ? pickCompanyFromCustom(lead.custom) : null;
     return {
       id: c.id,
       startedAt: c.started_at,
       durationSec: c.duration_sec,
       direction: c.direction,
       disposition: c.disposition,
-      leadName: name || null,
+      leadName: personName || companyName || null,
       hasRecording: Boolean(c.recording_url),
     };
   });
 
   const todayAppointments: TodayAppointment[] = (todayApptsListRes.data ?? []).map((a) => {
     const lead = Array.isArray(a.leads) ? a.leads[0] : a.leads;
-    const name = lead ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() : null;
+    const personName = lead
+      ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim()
+      : '';
+    const companyName = lead ? pickCompanyFromCustom(lead.custom) : null;
+    const name = personName || companyName || null;
     return {
       id: a.id,
       startsAt: a.starts_at,
