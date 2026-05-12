@@ -15,11 +15,14 @@ export type LeadStage = {
   isNoShow: boolean;
 };
 
-// Above-agent roles only see the closing handoff: Appointment Set / No Show /
-// Won. Agents keep the full pipeline. Pure view scoping — RLS is unchanged so
-// direct lead URLs and imports keep working for above-agent roles.
+// Manager role is the closer-only view: they only see the closing handoff
+// (Appointment Set / No Show / Won) — agents pass appointments up to them
+// and they update the outcome. Owners and admins keep full pipeline
+// visibility for oversight; agents keep the full pipeline for their own
+// work. Pure view scoping — RLS is unchanged so direct lead URLs and
+// imports keep working for everyone.
 function isCloserOnly(role: MemberRole | null | undefined): boolean {
-  return role === 'manager' || role === 'admin' || role === 'owner';
+  return role === 'manager';
 }
 
 function filterStagesForRole(

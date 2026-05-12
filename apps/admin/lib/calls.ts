@@ -23,7 +23,12 @@ export type CallRow = {
   isVoicemail: boolean;
 };
 
-export async function loadCalls(brandId: string, limit = 200): Promise<CallRow[]> {
+// Default cap of 5000 rows. PostgREST silently truncates .limit() at the
+// project's max-rows setting (1000 by default), so we use .range() — that
+// bypasses the soft cap and reflects the actual brand history in the
+// call log. For brands with more than 5k calls the client-side filter
+// will still operate on the most recent 5k; pagination is a follow-up.
+export async function loadCalls(brandId: string, limit = 5000): Promise<CallRow[]> {
   const supabase = await createServerClient();
   const { data } = await supabase
     .from('calls')
@@ -32,7 +37,7 @@ export async function loadCalls(brandId: string, limit = 200): Promise<CallRow[]
     )
     .eq('brand_id', brandId)
     .order('started_at', { ascending: false })
-    .limit(limit);
+    .range(0, Math.max(0, limit - 1));
 
   if (!data) return [];
   return data.map((c) => {

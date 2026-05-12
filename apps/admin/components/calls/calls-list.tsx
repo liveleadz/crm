@@ -26,7 +26,10 @@ const DISPOSITION_LABEL: Record<string, string> = {
 };
 
 type DirectionFilter = 'all' | 'outbound' | 'inbound';
-type DispositionFilter = 'all' | 'needs' | keyof typeof DISPOSITION_LABEL;
+// Disposition filter values are 'all', 'needs', or any disposition code
+// from the brand's live disposition set. The legacy static map only
+// covers a fixed subset, so the type must allow arbitrary strings.
+type DispositionFilter = 'all' | 'needs' | string;
 type RangeFilter = 'all' | '24h' | '7d' | '30d';
 
 function formatDuration(sec: number | null) {
@@ -199,9 +202,14 @@ export function CallsList({
           >
             <option value="all">All dispositions</option>
             <option value="needs">Needs disposition</option>
-            {Object.entries(DISPOSITION_LABEL).map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
+            {/* Pull options from the brand's live disposition set so
+                user-added codes like Appointment Set / No Show show up
+                here, not just the legacy static list. labelByCode below
+                handles label fallback if a historical call references a
+                code that's since been removed from the brand. */}
+            {dispositions.map((d) => (
+              <option key={d.code} value={d.code}>
+                {d.label}
               </option>
             ))}
           </select>
