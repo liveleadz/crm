@@ -48,6 +48,7 @@ type Props = {
 
 const ACTION_KINDS: { kind: AutomationAction['kind']; label: string }[] = [
   { kind: 'move_stage', label: 'Move lead to stage' },
+  { kind: 'clear_stage', label: 'Remove from pipeline' },
   { kind: 'mark_dnc', label: 'Mark Do Not Call' },
   { kind: 'add_tag', label: 'Add tag to lead' },
   { kind: 'create_task', label: 'Create task' },
@@ -123,6 +124,9 @@ export function AutomationForm({
     switch (kind) {
       case 'move_stage':
         next = { kind: 'move_stage', stage_id: stages[0]?.id ?? '' };
+        break;
+      case 'clear_stage':
+        next = { kind: 'clear_stage' };
         break;
       case 'mark_dnc':
         next = { kind: 'mark_dnc' };
@@ -811,6 +815,8 @@ function labelFor(kind: AutomationAction['kind']): string {
   switch (kind) {
     case 'move_stage':
       return 'Move lead to stage';
+    case 'clear_stage':
+      return 'Remove from pipeline';
     case 'mark_dnc':
       return 'Mark Do Not Call';
     case 'add_tag':

@@ -675,6 +675,9 @@ function ActionEditor({
       case 'move_stage':
         next = { kind: 'move_stage', stage_id: ctx.stages[0]?.id ?? '' };
         break;
+      case 'clear_stage':
+        next = { kind: 'clear_stage' };
+        break;
       case 'mark_dnc':
         next = { kind: 'mark_dnc' };
         break;
@@ -729,6 +732,7 @@ function ActionEditor({
           </optgroup>
           <optgroup label="Lead actions">
             <option value="move_stage">Move lead to stage</option>
+            <option value="clear_stage">Remove from pipeline</option>
             <option value="add_tag">Add tag</option>
             <option value="mark_dnc">Mark Do Not Call</option>
             <option value="create_task">Create task</option>

@@ -229,6 +229,8 @@ function titleForAction(kind: AutomationAction['kind']): string {
   switch (kind) {
     case 'move_stage':
       return 'Move stage';
+    case 'clear_stage':
+      return 'Remove from pipeline';
     case 'mark_dnc':
       return 'Mark DNC';
     case 'add_tag':

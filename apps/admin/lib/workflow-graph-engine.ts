@@ -362,6 +362,7 @@ export async function executeAction(action: AutomationAction, ctx: GraphRunConte
   // send_notification with role broadcast, http_request — fall through.
   const leadBound = new Set([
     'move_stage',
+    'clear_stage',
     'mark_dnc',
     'add_tag',
     'create_task',
@@ -393,6 +394,30 @@ export async function executeAction(action: AutomationAction, ctx: GraphRunConte
           },
         });
       }
+      return;
+    }
+    case 'clear_stage': {
+      // Pull the prior stage so the timeline event records the
+      // transition. Skip the update entirely if the lead is already
+      // unstaged — avoids a no-op DB write and a spam stage_change
+      // event on every reapply of the Wrong Number / DNC ladder.
+      const { data: prior } = await supabase
+        .from('leads')
+        .select('stage_id')
+        .eq('id', ctx.leadId!)
+        .maybeSingle();
+      if (prior?.stage_id == null) return;
+      await supabase.from('leads').update({ stage_id: null }).eq('id', ctx.leadId!);
+      await supabase.from('lead_events').insert({
+        brand_id: ctx.brandId,
+        lead_id: ctx.leadId!,
+        type: 'stage_change',
+        payload: {
+          from_stage_id: prior.stage_id,
+          to_stage_id: null,
+          via: 'automation_clear_stage',
+        },
+      });
       return;
     }
     case 'mark_dnc': {

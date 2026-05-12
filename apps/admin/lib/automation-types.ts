@@ -16,6 +16,11 @@ export type HttpMethod = 'POST' | 'GET' | 'PUT' | 'PATCH' | 'DELETE';
 
 export type AutomationAction =
   | { kind: 'move_stage'; stage_id: string }
+  // Drops the lead off the kanban without deleting it. Used by the
+  // Wrong Number / DNC system automations so a bad-number or
+  // do-not-call lead no longer occupies a pipeline column. The lead
+  // row + history are preserved; only stage_id is cleared.
+  | { kind: 'clear_stage' }
   | { kind: 'mark_dnc' }
   | { kind: 'add_tag'; tag_id: string }
   | {
