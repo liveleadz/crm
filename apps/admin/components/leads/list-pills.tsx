@@ -225,11 +225,14 @@ export function ListPills({
                     </svg>
                   )}
                   {l.name}
-                  {l.source !== 'filter' && (
-                    <span className={`text-[10.5px] ${isActive ? 'text-teal/70' : 'text-txt-3'}`}>
-                      {l.count}
-                    </span>
-                  )}
+                  {/* Show the live count for every list (smart-filter
+                      lists included). Counts come from per-list
+                      head:true queries in loadLists, so the badge is
+                      always the true total even past PostgREST's
+                      1000-row select cap. */}
+                  <span className={`text-[10.5px] ${isActive ? 'text-teal/70' : 'text-txt-3'}`}>
+                    {l.count}
+                  </span>
                 </Link>
                 <button
                   type="button"
