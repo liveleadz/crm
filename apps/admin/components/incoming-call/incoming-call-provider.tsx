@@ -303,6 +303,7 @@ export function IncomingCallProvider({
                 fromNumber: claimRes.fromNumber || prev.fromNumber,
                 toNumber: claimRes.toNumber || prev.toNumber,
                 leadName: claimRes.leadName || prev.leadName,
+                companyName: claimRes.companyName || prev.companyName,
               }
             : prev,
         );

@@ -33,6 +33,7 @@ import { dialWindowCheck } from '@/lib/tcpa';
 import { memberCanBookCalendar } from '@/lib/calendars';
 import { pushAppointment } from '@/lib/calendar/sync';
 import { createServerClient } from '@leadpilot/db/server';
+import { pickCompanyFromCustom } from '@/lib/company-name';
 
 type PrepareCallResult =
   | {
@@ -269,15 +270,11 @@ export async function lookupCallerByPhone(
   }
   const fullName =
     [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || null;
-  // Mirror the dialer queue's company resolver so the popup matches
-  // what the agent sees on the kanban / leads list.
-  const c = (row.custom ?? {}) as Record<string, unknown>;
-  const companyName =
-    (typeof c.company === 'string' && c.company.trim()) ||
-    (typeof c.company_name === 'string' && c.company_name.trim()) ||
-    (typeof c.Company === 'string' && c.Company.trim()) ||
-    (typeof c['Company Name'] === 'string' && (c['Company Name'] as string).trim()) ||
-    null;
+  // Use the shared company-name resolver so the popup picks up
+  // imports that use 'business_name' / 'organization' etc. (the
+  // inline duplicate previously only checked four keys and missed
+  // 'business_name', which is what bulk lead imports actually use).
+  const companyName = pickCompanyFromCustom(row.custom);
   return { ok: true, leadId: row.id, fullName, companyName };
 }
 
@@ -289,6 +286,7 @@ export async function claimRecentInboundCall(): Promise<
       toNumber: string;
       leadId: string | null;
       leadName: string | null;
+      companyName: string | null;
     }
   | { ok: false; error: string }
 > {
@@ -298,9 +296,14 @@ export async function claimRecentInboundCall(): Promise<
   if (!profile) return { ok: false, error: 'Not authenticated.' };
   const supabase = await createServerClient();
   const since = new Date(Date.now() - 120_000).toISOString();
+  // Pull custom too so we can resolve a business name when the lead has
+  // no first/last (the common case for B2B imports). Without this the
+  // post-answer pending object loses the company name that the pre-ring
+  // lookup had populated, since the answer callback unconditionally
+  // overwrites leadName but used to drop companyName entirely.
   const { data: call } = await supabase
     .from('calls')
-    .select('id, from_number, to_number, lead_id, leads(first_name, last_name)')
+    .select('id, from_number, to_number, lead_id, leads(first_name, last_name, custom)')
     .eq('brand_id', active.id)
     .eq('direction', 'inbound')
     .gte('started_at', since)
@@ -320,10 +323,15 @@ export async function claimRecentInboundCall(): Promise<
     .eq('brand_id', active.id)
     .eq('kind', 'inbound_call')
     .contains('data', { call_id: call.id });
-  const lead = call.leads as { first_name: string | null; last_name: string | null } | null;
+  const lead = call.leads as {
+    first_name: string | null;
+    last_name: string | null;
+    custom: unknown;
+  } | null;
   const leadName = lead
     ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null
     : null;
+  const companyName = lead ? pickCompanyFromCustom(lead.custom) : null;
   return {
     ok: true,
     callId: call.id,
@@ -331,6 +339,7 @@ export async function claimRecentInboundCall(): Promise<
     toNumber: call.to_number,
     leadId: call.lead_id,
     leadName,
+    companyName,
   };
 }
 
