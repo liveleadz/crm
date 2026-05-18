@@ -366,8 +366,14 @@ type EscalationConfigRow = {
 
 // Walk calls newest-first for this (lead, campaign) pair and count
 // leading rows whose disposition matches. matchCodes is the set of
-// disposition codes that "continue" the streak. Stops at the first
-// non-match.
+// disposition codes that "continue" the streak. NULL dispositions
+// (calls where the agent never saved one — browser closed, network
+// drop, etc.) are SKIPPED rather than terminating the streak. Without
+// that, a single dropped call mid-session would silently reset the
+// no_answer ladder and stick the lead in No Answer 1 forever even
+// after many failed attempts. A non-null, non-matching disposition
+// (e.g., "connected", "callback") still breaks the streak — that's
+// the meaningful signal.
 async function computeStreak(input: {
   leadId: string;
   campaignId: string | null;
@@ -386,7 +392,8 @@ async function computeStreak(input: {
   if (!calls?.length) return 0;
   let streak = 0;
   for (const c of calls) {
-    if (c.disposition && input.matchCodes.has(c.disposition)) streak += 1;
+    if (!c.disposition) continue;
+    if (input.matchCodes.has(c.disposition)) streak += 1;
     else break;
   }
   return streak;
